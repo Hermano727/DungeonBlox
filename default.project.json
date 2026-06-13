@@ -4,21 +4,27 @@
     "$className": "DataModel",
 
     "ReplicatedStorage": {
-      "Shared": {
-        "$path": "src/shared"
-      }
+      "$path": "src/shared"
     },
 
     "ServerScriptService": {
-      "Server": {
-        "$path": "src/server"
-      }
+      "$path": "src/server",
+      "GetPlayerState":        { "$className": "BindableFunction" },
+      "CanPlayerAct":          { "$className": "BindableFunction" },
+      "TransitionPlayerState": { "$className": "BindableFunction" }
     },
 
     "StarterPlayer": {
-      "StarterPlayerScripts": {
-        "$path": "src/client"
-      }
+      "StarterPlayerScripts":    { "$path": "src/client" },
+      "StarterCharacterScripts": { "$path": "src/characterscripts" }
+    },
+
+    "StarterPack": {
+      "$path": "src/starterpack",
+      "Mace":           { "$className": "Tool" },
+      "Low_tier_sword": { "$className": "Tool" },
+      "Wood Sword":     { "$className": "Tool" },
+      "Building Tools": { "$className": "Tool" }
     },
 
     "Workspace": {
@@ -29,38 +35,24 @@
         "$className": "Part",
         "$properties": {
           "Anchored": true,
-          "Color": [
-            0.38823,
-            0.37254,
-            0.38823
-          ],
+          "Color": [0.38823, 0.37254, 0.38823],
           "Locked": true,
-          "Position": [
-            0,
-            -10,
-            0
-          ],
-          "Size": [
-            512,
-            20,
-            512
-          ]
+          "Position": [0, -10, 0],
+          "Size": [512, 20, 512]
         }
       }
     },
+
     "Lighting": {
       "$properties": {
-        "Ambient": [
-          0,
-          0,
-          0
-        ],
+        "Ambient": [0, 0, 0],
         "Brightness": 2,
         "GlobalShadows": true,
         "Outlines": false,
         "Technology": "Voxel"
       }
     },
+
     "SoundService": {
       "$properties": {
         "RespectFilteringEnabled": true

@@ -62,7 +62,7 @@ end
 -- Cooldown state  (os.time()-based, synced from profile snapshots)
 -- ─────────────────────────────────────────────────────────────────────────────
 local cooldownUntil  = 0
-local activeLocation = "cyren"
+local activeLocation = "oakhaven"
 
 local function formatCountdown(secs)
     secs = math.max(0, math.floor(secs))
@@ -150,6 +150,24 @@ end
 pickerDim.Activated:Connect(closePicker)
 pickerCancelBtn.Activated:Connect(closePicker)
 
+local function mergeWithSeeds(unlockedIds)
+    local merged = {}
+    local seen   = {}
+    for _, seed in ipairs(HearthstoneConfig.SEED_LOCATIONS) do
+        if not seen[seed.id] then
+            seen[seed.id] = true
+            table.insert(merged, seed.id)
+        end
+    end
+    for _, id in ipairs(unlockedIds or {}) do
+        if not seen[id] then
+            seen[id] = true
+            table.insert(merged, id)
+        end
+    end
+    return merged
+end
+
 local function rebuildPickerGrid(unlockedIds)
     for _, child in ipairs(pickerGrid:GetChildren()) do
         if child:IsA("TextButton") or child:IsA("Frame") then child:Destroy() end
@@ -172,6 +190,18 @@ local function rebuildPickerGrid(unlockedIds)
             local sk = Instance.new("UIStroke", card)
             sk.Color     = Color3.fromRGB(200, 158, 58)
             sk.Thickness = 1.5
+        end
+
+        local iconId = locationCatalog[locId] and locationCatalog[locId].icon or ""
+        if iconId ~= "" then
+            local iconImg = Instance.new("ImageLabel", card)
+            iconImg.BackgroundTransparency = 1
+            iconImg.Size      = UDim2.new(1, 0, 1, 0)
+            iconImg.Position  = UDim2.new(0, 0, 0, 0)
+            iconImg.Image     = iconId
+            iconImg.ScaleType = Enum.ScaleType.Crop
+            iconImg.ZIndex    = 4
+            Instance.new("UICorner", iconImg).CornerRadius = UDim.new(0, 6)
         end
 
         local lbl = Instance.new("TextLabel", card)
@@ -398,11 +428,9 @@ local function rebuildShop(unlockedIds, coinBalance)
                     return rfPurchase:InvokeServer(capturedId)
                 end)
                 if ok and newCoins == true then
-                    -- newCoins is actually the second return from PurchaseLocation
                     setShopStatus("Unlocked: " .. capturedName, false)
                     row:Destroy()
                 elseif ok and type(newCoins) == "boolean" and not newCoins then
-                    -- newCoins is false (failed), _err is the error string
                     setShopStatus(tostring(_err) or "Purchase failed.", true)
                     buyBtn.Active          = true
                     buyBtn.BackgroundColor3 = Color3.fromRGB(48, 98, 58)
@@ -433,7 +461,7 @@ local function openShop()
         local profile = snap and snap.profile
         local hs      = profile and profile.hearthstone
         rebuildShop(
-            hs and hs.unlocked or { "cyren" },
+            hs and hs.unlocked or { "oakhaven" },
             profile and profile.currencies and profile.currencies.Coins or 0
         )
         shopGui.Enabled = true
@@ -478,7 +506,7 @@ function HearthstoneClient.init(refs)
     local hs      = profile and profile.hearthstone
     if hs then
         cooldownUntil  = hs.cooldownUntil or 0
-        activeLocation = hs.active or "cyren"
+        activeLocation = hs.active or "oakhaven"
     end
     if refs.locationLabel then
         refs.locationLabel.Text = getLocationName(activeLocation)
@@ -512,7 +540,7 @@ function HearthstoneClient.init(refs)
         local s       = DungeonMenuNet.getLastSnapshot()
         local prof    = s and s.profile
         local hsData  = prof and prof.hearthstone
-        rebuildPickerGrid(hsData and hsData.unlocked or { "cyren" })
+        rebuildPickerGrid(mergeWithSeeds(hsData and hsData.unlocked or {}))
         pickerGui.Enabled = true
     end)
 
@@ -522,7 +550,7 @@ function HearthstoneClient.init(refs)
         local hs2   = prof2 and prof2.hearthstone
         if not hs2 then return end
         cooldownUntil  = hs2.cooldownUntil or 0
-        activeLocation = hs2.active or "cyren"
+        activeLocation = hs2.active or "oakhaven"
         if refs.locationLabel then
             refs.locationLabel.Text = getLocationName(activeLocation)
         end

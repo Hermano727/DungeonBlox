@@ -6,3 +6,9 @@
 /*.rbxl.lock
 
 sourcemap.json
+
+# Wally packages (added when wally install is run for React Lua phase)
+Packages/
+
+# aftman binary cache
+.aftman/
