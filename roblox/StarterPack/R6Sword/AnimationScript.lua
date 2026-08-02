@@ -1,2 +1,0 @@
--- Animations disabled: CombatClient handles all swing animations for registered weapons.
--- R6Sword is in WeaponData so CombatClient plays SwingAnimation on left-click.

@@ -1,9 +1,0 @@
-return {
-	MAX_PRICE         = 999999,
-	MAX_DURATION_DAYS = 7,
-	PAGE_SIZE         = 24,
-	HISTORY_PAGE_SIZE = 12,
-	MAX_ACTIVE_PER_PLAYER = 20,
-	DATASTORE_NAME    = "AuctionHouse_v1",
-	ARMOR_ICON_ID     = "rbxassetid://91334970387049",
-}
