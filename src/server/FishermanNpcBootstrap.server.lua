@@ -7,16 +7,17 @@
 local CollectionService = game:GetService("CollectionService")
 local workspace = game:GetService("Workspace")
 
-local function findFishermanModel()
-	local direct = workspace:FindFirstChild("Fisherman")
-	if direct and direct:IsA("Model") then
-		return direct
+-- Wires every Model named "Fisherman" anywhere in Workspace, not just the first one found.
+-- Sorted by full path so id assignment (fisherman_01, fisherman_02, ...) stays stable across restarts.
+local function findAllFishermanModels()
+	local found = {}
+	for _, inst in ipairs(workspace:GetDescendants()) do
+		if inst.Name == "Fisherman" and inst:IsA("Model") then
+			table.insert(found, inst)
+		end
 	end
-	local deep = workspace:FindFirstChild("Fisherman", true)
-	if deep and deep:IsA("Model") then
-		return deep
-	end
-	return nil
+	table.sort(found, function(a, b) return a:GetFullName() < b:GetFullName() end)
+	return found
 end
 
 local function setupNpcModel(model, npcName)
@@ -100,13 +101,8 @@ local function setupNpcModel(model, npcName)
 	end
 end
 
-local function ensureFisherman()
-	local model = findFishermanModel()
-	if not model then
-		return
-	end
-
-	model:SetAttribute("NpcId", "fisherman_01")
+local function ensureFisherman(model, npcId)
+	model:SetAttribute("NpcId", npcId)
 	model:SetAttribute("NpcType", "Fisherman")
 	model:SetAttribute("NpcName", "Fisherman")
 	model:SetAttribute("MaxActivationDistance", 14)
@@ -133,13 +129,25 @@ local function ensureFisherman()
 	end
 end
 
+local function tryBootstrapAll()
+	for i, model in ipairs(findAllFishermanModels()) do
+		local npcId = (i == 1) and "fisherman_01" or string.format("fisherman_%02d", i)
+		local ok, err = pcall(ensureFisherman, model, npcId)
+		if ok then
+			print("[FishermanNpcBootstrap] wired:", model:GetFullName(), "as", npcId)
+		else
+			warn("[FishermanNpcBootstrap] bootstrap failed:", err)
+		end
+	end
+end
+
 for i = 1, 5 do
-	task.delay(0.25 * (i - 1), ensureFisherman)
+	task.delay(0.25 * (i - 1), tryBootstrapAll)
 end
 
 workspace.DescendantAdded:Connect(function(inst)
 	if inst.Name == "Fisherman" and inst:IsA("Model") then
-		task.defer(ensureFisherman)
+		task.defer(tryBootstrapAll)
 	end
 end)
 

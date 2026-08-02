@@ -59,12 +59,33 @@ local function snapshotIsStale(incoming)
 	return inc < cur
 end
 
+local function normalizeHotbarTable(hotbar)
+	local hb = {}
+	if type(hotbar) ~= "table" then
+		return hb
+	end
+	for i = 1, 9 do
+		local sk = tostring(i)
+		local v = hotbar[sk]
+		if type(v) ~= "string" or v == "" then
+			v = hotbar[i]
+		end
+		if type(v) == "string" and v ~= "" then
+			hb[i] = v
+		end
+	end
+	return hb
+end
+
 local function applySnapshotPayload(incoming)
 	if type(incoming) ~= "table" or incoming.profile == nil then
 		return false
 	end
 	if snapshotIsStale(incoming) then
 		return false
+	end
+	if type(incoming.profile.hotbar) == "table" then
+		incoming.profile.hotbar = normalizeHotbarTable(incoming.profile.hotbar)
 	end
 	lastSnapshot = incoming
 	fireSnapshotListeners(incoming)

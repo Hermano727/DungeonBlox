@@ -35,8 +35,19 @@ function CursorUtils.release()
     refCount -= 1
     if refCount > 0  then return end
     pcall(function() RunService:UnbindFromRenderStep(BIND_NAME) end)
-    UserInputService.MouseBehavior    = savedBehavior
-    UserInputService.MouseIconEnabled = savedIconEnabled
+    local restoreBehavior = savedBehavior
+    local restoreIcon = savedIconEnabled
+    UserInputService.MouseBehavior    = restoreBehavior
+    UserInputService.MouseIconEnabled = restoreIcon
+    -- First-person camera only rotates while LockCenter is active; re-assert next
+    -- frame so a stale Default from the free-cursor bind cannot stick after close.
+    if restoreBehavior == Enum.MouseBehavior.LockCenter then
+        task.defer(function()
+            if refCount == 0 then
+                UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+            end
+        end)
+    end
 end
 
 return CursorUtils

@@ -7,20 +7,21 @@
 local CollectionService = game:GetService("CollectionService")
 local workspace = game:GetService("Workspace")
 
-local NPC_ID = "animal_trainer_01"
-local NPC_TYPE = "AnimalTrainer"
-local NPC_NAME = "Animal Trainer"
+local NPC_ID_BASE = "animal_trainer_01"
+local NPC_TYPE    = "AnimalTrainer"
+local NPC_NAME    = "Animal Trainer"
 
-local function findAnimalTrainerModel()
-	local direct = workspace:FindFirstChild("Animal Trainer")
-	if direct and direct:IsA("Model") then
-		return direct
+-- Wires every Model named "Animal Trainer" anywhere in Workspace, not just the first one found.
+-- Sorted by full path so id assignment (animal_trainer_01, animal_trainer_02, ...) stays stable across restarts.
+local function findAllAnimalTrainerModels()
+	local found = {}
+	for _, inst in ipairs(workspace:GetDescendants()) do
+		if inst.Name == "Animal Trainer" and inst:IsA("Model") then
+			table.insert(found, inst)
+		end
 	end
-	local deep = workspace:FindFirstChild("Animal Trainer", true)
-	if deep and deep:IsA("Model") then
-		return deep
-	end
-	return nil
+	table.sort(found, function(a, b) return a:GetFullName() < b:GetFullName() end)
+	return found
 end
 
 local function ensureHeadGui(head, displayName)
@@ -105,19 +106,19 @@ local function setupProximity(root)
 	end
 end
 
-local function bootstrap(model)
+local function bootstrap(model, npcId)
 	if not model or not model:IsA("Model") then
 		return
 	end
 
-	model:SetAttribute("NpcId", NPC_ID)
+	model:SetAttribute("NpcId", npcId)
 	model:SetAttribute("NpcType", NPC_TYPE)
 	model:SetAttribute("NpcName", NPC_NAME)
 	model:SetAttribute("MaxActivationDistance", math.max(tonumber(model:GetAttribute("MaxActivationDistance")) or 0, 12))
 
 	local root = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Torso")
 	if not (root and root:IsA("BasePart")) then
-		warn("[AnimalTrainerBootstrap] missing HumanoidRootPart/Torso on Animal Trainer")
+		warn("[AnimalTrainerBootstrap] missing HumanoidRootPart/Torso on", model:GetFullName())
 		return
 	end
 	model.PrimaryPart = root
@@ -141,22 +142,22 @@ local function bootstrap(model)
 			warn("[AnimalTrainerBootstrap] Head.gui setup failed:", errGui)
 		end
 	else
-		warn("[AnimalTrainerBootstrap] missing Head on Animal Trainer")
+		warn("[AnimalTrainerBootstrap] missing Head on", model:GetFullName())
 	end
 end
 
 local function tryBootstrap()
-	local m = findAnimalTrainerModel()
-	if not m then
-		return
-	end
-	local ok, err = pcall(function()
-		bootstrap(m)
-	end)
-	if ok then
-		print("[AnimalTrainerBootstrap] wired:", m:GetFullName())
-	else
-		warn("[AnimalTrainerBootstrap] bootstrap failed:", err)
+	local models = findAllAnimalTrainerModels()
+	for i, m in ipairs(models) do
+		local npcId = (i == 1) and NPC_ID_BASE or string.format("animal_trainer_%02d", i)
+		local ok, err = pcall(function()
+			bootstrap(m, npcId)
+		end)
+		if ok then
+			print("[AnimalTrainerBootstrap] wired:", m:GetFullName(), "as", npcId)
+		else
+			warn("[AnimalTrainerBootstrap] bootstrap failed:", err)
+		end
 	end
 end
 

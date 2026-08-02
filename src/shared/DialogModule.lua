@@ -1,3 +1,4 @@
+local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindConfig"))
 -- DialogModule.lua
 local DialogModule = {}
 DialogModule.__index = DialogModule
@@ -37,6 +38,24 @@ local function applyNpcBillboardTypography(billboard)
 	end
 	for _, childName in ipairs({ "name", "arrow", "dialog" }) do
 		applyTypographyToTextLabel(billboard:FindFirstChild(childName))
+	end
+end
+
+-- Some older/hand-placed NPC Head.gui billboards were built before bootstrap scripts
+-- started adding UIStroke to name/arrow/dialog labels. DialogModule indexes .UIStroke
+-- directly (not FindFirstChild) in several places, so a missing stroke throws
+-- "UIStroke is not a valid member of TextLabel" and DialogModule.new fails outright.
+local function ensureNpcBillboardStrokes(billboard)
+	if typeof(billboard) ~= "Instance" or not billboard:IsA("BillboardGui") then
+		return
+	end
+	for _, childName in ipairs({ "name", "arrow", "dialog" }) do
+		local label = billboard:FindFirstChild(childName)
+		if label and label:IsA("GuiObject") and not label:FindFirstChildOfClass("UIStroke") then
+			local stroke = Instance.new("UIStroke")
+			stroke.Color = Color3.fromRGB(0, 0, 0)
+			stroke.Parent = label
+		end
 	end
 end
 
@@ -325,6 +344,7 @@ function DialogModule.new(npcName, npc, prompt, animation)
 	self.dialogOption = 1
 	self.npcGui = self.npc:WaitForChild("Head"):WaitForChild("gui")
 	ensureDialogBackdrop(self.npcGui)
+	ensureNpcBillboardStrokes(self.npcGui)
 	applyNpcBillboardTypography(self.npcGui)
 	self._inConversation = false
 	self._savedHumanoidLoco = nil
@@ -335,7 +355,7 @@ function DialogModule.new(npcName, npc, prompt, animation)
 	self._dialogTextConn = nil
 	self.prompt = prompt
 	self._onDialogLinePrinted = nil -- optional function(self, player, dialogNum) after a dialog line finishes typing
-
+	
 	local template = DIALOG_RESPONSES_UI:FindFirstChild("template")
 	if template then
 		for i = 1,9 do
@@ -346,11 +366,11 @@ function DialogModule.new(npcName, npc, prompt, animation)
 		end
 		template:Destroy()
 	end
-
+	
 	local eventSignal = Instance.new("BindableEvent")
 	self.responded = eventSignal.Event -- Expose the event to connect to
 	self.fireResponded = eventSignal -- Keep a reference to the BindableEvent
-
+		
 	-- tween variables
 	self.animNameText = tweenService:Create(self.npcGui.name, TweenInfo.new(.3),{TextTransparency = 1})
 	self.animNameStroke = tweenService:Create(self.npcGui.name.UIStroke, TweenInfo.new(.3),{Transparency = 1})
@@ -358,7 +378,7 @@ function DialogModule.new(npcName, npc, prompt, animation)
 	self.animArrowStroke = tweenService:Create(self.npcGui.arrow.UIStroke, TweenInfo.new(.3),{Transparency = 1})
 	self.animDialogText = tweenService:Create(self.npcGui.dialog, TweenInfo.new(.3),{TextTransparency = 1})
 	self.animDialogStroke = tweenService:Create(self.npcGui.dialog.UIStroke, TweenInfo.new(.3),{Transparency = 1})
-
+	
 	-- animate
 	if animation ~= nil then
 		local newAnimation = Instance.new("Animation")
@@ -366,7 +386,7 @@ function DialogModule.new(npcName, npc, prompt, animation)
 		local newAnimLoaded = npc:WaitForChild("Humanoid"):LoadAnimation(newAnimation)
 		newAnimLoaded:Play()
 	end
-
+	
 	-- Connections
 	local frameCount = 0
 	local heartbeatConnection = runService.Heartbeat:Connect(function()
@@ -375,6 +395,19 @@ function DialogModule.new(npcName, npc, prompt, animation)
 			self.npcGui.StudsOffset = Vector3.new(0,1.6,0)
 		else
 			self.npcGui.StudsOffset = Vector3.new(0,math.sin(frameCount/25)/6 + 1.55,0)
+		end
+		if self._inConversation and not self.talking then
+			local localPlayer = Players.LocalPlayer
+			local char = localPlayer and localPlayer.Character
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
+			local npcRoot = self.npc and (self.npc:FindFirstChild("HumanoidRootPart") or self.npc:FindFirstChild("Torso") or self.npc.PrimaryPart)
+			local charRoot = char and (char.PrimaryPart or char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
+			local shouldClose = not char or not hum or hum.Health <= 0
+				or (npcRoot and charRoot and (charRoot.Position - npcRoot.Position).Magnitude > 30)
+			if shouldClose then
+				self._inConversation = false
+				self:hideGui()
+			end
 		end
 	end)
 	local shownConnection = prompt.PromptShown:Connect(function()
@@ -396,7 +429,7 @@ function DialogModule.new(npcName, npc, prompt, animation)
 		end
 	end)
 	self.connections = {heartbeatConnection}--,shownConnection,hiddenConnection}
-
+	
 	return self
 end
 
@@ -424,9 +457,9 @@ function DialogModule:triggerDialog(player, questionNumber)
 
 	local dialogNum = questionNumber or self.dialogOption
 	local dialog = self.dialogs[dialogNum] -- Show the first dialog (can be updated for other logic)
-
+	
 	tweenService:Create(game.Workspace.CurrentCamera, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {FieldOfView = 65}):Play()
-
+	
 	task.spawn(function()
 		task.wait(0.05)
 		self.talking = true
@@ -456,15 +489,7 @@ function DialogModule:triggerDialog(player, questionNumber)
 
 		-- inputs
 		local keyboardInputs = {
-			Enum.KeyCode.One,
-			Enum.KeyCode.Two,
-			Enum.KeyCode.Three,
-			Enum.KeyCode.Four,
-			Enum.KeyCode.Five,
-			Enum.KeyCode.Six,
-			Enum.KeyCode.Seven,
-			Enum.KeyCode.Eight,
-			Enum.KeyCode.Nine,
+			table.unpack(Keys.DialogChoice),
 		}
 
 		-- Show responses
@@ -483,12 +508,12 @@ function DialogModule:triggerDialog(player, questionNumber)
 				:gsub(">", "&gt;")
 				:gsub("'", "&apos;")
 			option.text.Text = "<font color='rgb(255,220,127)'>" .. i .. ".)</font> [''" .. esc .. "'']"
-
+			
 			-- calculate x size
 			local plaintext = i..".) [''"..response:gsub("%b<>", "").."'']"
-
+			
 			option.Size = UDim2.fromScale(option.Size.X.Scale,.4)
-
+			
 			option.text.Position = UDim2.new(0.02,0,0.5,0)
 			option.Visible = true
 			tweenService:Create(option,TweenInfo.new(0.1,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),{Size = UDim2.new(option.Size.X.Scale,0,0.35,0)}):Play()
@@ -511,7 +536,7 @@ function DialogModule:triggerDialog(player, questionNumber)
 				self.fireResponded:Fire(i, dialogNum)
 				TICK_SOUND:Play()
 			end)
-
+			
 			local numberpressCon = userInputService.InputBegan:Connect(function(input, gameprocessed)
 				if gameprocessed then return end
 				if input.UserInputType == Enum.UserInputType.Keyboard then
@@ -549,13 +574,12 @@ function DialogModule:triggerDialog(player, questionNumber)
 
 		self.active = true
 
-		local range = (self.prompt and self.prompt.MaxActivationDistance) or 10
 		while self.active do
 			local npcRoot = self.npc:FindFirstChild("HumanoidRootPart") or self.npc:FindFirstChild("Torso") or self.npc.PrimaryPart
 			local char = player.Character
 			local charRoot = char and (char.PrimaryPart or char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso"))
 			local distance = (npcRoot and charRoot) and (charRoot.Position - npcRoot.Position).Magnitude or 0
-			if distance > range then
+			if distance > 30 then
 				self:hideGui()
 				responseNum = 0
 				break
@@ -579,7 +603,7 @@ function DialogModule:showGui()
 		bbDialog.Visible = false
 	end
 	setSpeechMirrorVisible(self, true)
-
+	
 	self.animNameText:Play()
 	self.animNameStroke:Play()
 	self.animArrowText:Play()
@@ -587,13 +611,13 @@ function DialogModule:showGui()
 
 	self.animDialogText:Cancel()
 	self.animDialogStroke:Cancel()
-
+	
 	self.npcGui.dialog.TextTransparency = 0
 	self.npcGui.dialog.UIStroke.Transparency = 0
-
+	
 	coroutine.wrap(function()
 		task.wait(0.3)
-
+		
 		if self.npcGui.name.TextTransparency ~= 1 then return end -- check if already chose an opiton
 		self.npcGui.name.Visible = false
 		self.npcGui.arrow.Visible = false
@@ -622,14 +646,14 @@ function DialogModule:hideGui(exitQuip, notActuallyAnExitQuip)
 	else
 		tweenService:Create(game.Workspace.CurrentCamera, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {FieldOfView = 70}):Play()
 	end
-
+	
 	-- hide player response options
 	local playerReponseOptions = DIALOG_RESPONSES_UI
 	for i, option in playerReponseOptions:GetChildren() do
 		if not option:IsA("GuiButton") then continue end
 		option.Visible = false
 	end
-
+	
 	local dialogObject = self.npcGui.dialog
 	if exitQuip then
 		self._speechMirrorWanted = true
@@ -656,7 +680,7 @@ function DialogModule:hideGui(exitQuip, notActuallyAnExitQuip)
 			TICK_SOUND:Play()
 			task.wait(0.02)
 		end
-
+			
 		dialogObject.Text = exitQuip
 		if notActuallyAnExitQuip then
 			endSpeechMirror(self)
@@ -668,7 +692,7 @@ function DialogModule:hideGui(exitQuip, notActuallyAnExitQuip)
 			return
 		end
 	end
-
+	
 	task.spawn(function()
 		if exitQuip then
 			wait(2)

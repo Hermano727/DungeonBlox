@@ -94,25 +94,15 @@ local function damageRollFromEquippedWeapon(player, weaponId)
 		return nil
 	end
 
+	-- Weapons have no equip-panel slot (Minecraft-style hotbar model): the held Tool's
+	-- DungeonItemUuid attribute is the only source of truth for "currently wielded weapon".
 	local uuid = getHeldWeaponInventoryUuid(player)
 	local it = nil
 	if uuid then
 		local cand = profile.inventory[uuid]
 		if type(cand) == "table" and cand.type == "Weapon" then
 			it = cand
-		else
-			uuid = nil
 		end
-	end
-	if not it then
-		if type(profile.equipped) ~= "table" then
-			return nil
-		end
-		uuid = profile.equipped.Weapon
-		if type(uuid) ~= "string" or uuid == "" then
-			return nil
-		end
-		it = profile.inventory[uuid]
 	end
 	if type(it) ~= "table" or it.type ~= "Weapon" then
 		return nil

@@ -1,3 +1,4 @@
+local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindConfig"))
 --[[
 	AuctionHouseClient
 	All Auction House UI: Browse, My Auctions, My Listing, Create Listing.
@@ -274,7 +275,7 @@ end
 dim.Activated:Connect(closeAll)
 UserInputService.InputBegan:Connect(function(input, proc)
 	if proc then return end
-	if input.KeyCode == Enum.KeyCode.Escape and gui.Enabled then closeAll() end
+	if input.KeyCode == Keys.CloseMenu and gui.Enabled then closeAll() end
 end)
 
 -- ---------------------------------------------------------------------------

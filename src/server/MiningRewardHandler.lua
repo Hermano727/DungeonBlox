@@ -9,26 +9,31 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local DungeonProfile = require(ServerScriptService:WaitForChild("DungeonProfileService"))
 local QuestProgress = require(ServerScriptService:WaitForChild("QuestProgressService"))
+local PartyService = require(ServerScriptService:WaitForChild("PartyService"))
+local MiningExcavationConfig = require(ReplicatedStorage:WaitForChild("MiningExcavationConfig"))
+
+local GRID_SIZE = MiningExcavationConfig.GRID_SIZE
 
 local DROP_CHANCE = 1
 local COOLDOWN = 0.55
 local MINE_RANGE = 20
-local XP_PER_COAL = 5
 local PICKUP_EXPIRE_SEC = 120
 local COLLECT_MAX_DISTANCE = 22
 local DEBRIS_PIECES = 8
 local DEBRIS_LIFETIME = 2
--- Must match StarterPack.WoodenPickaxe.MiningScript ORE_RESPAWN_TIME.
-local ORE_RESPAWN_TIME = 10
 
 local lastMine = {}
-local pendingCoal = {} -- [nonce] = { userId, position, expires }
+local pendingCoal = {} -- [nonce] = { userId, position, expires, amount, grantItemId }
+local excavationSessions = {} -- [userId] = session
 
 local ev = ReplicatedStorage:WaitForChild("MiningRewardRequest")
 local MiningDebrisRequest = ReplicatedStorage:WaitForChild("MiningDebrisRequest")
 local MiningXPEvent = ReplicatedStorage:WaitForChild("MiningXPEvent")
 local MiningCoalDrop = ReplicatedStorage:WaitForChild("MiningCoalDrop")
 local MiningCoalCollect = ReplicatedStorage:WaitForChild("MiningCoalCollect")
+local MiningExcavationStart = ReplicatedStorage:WaitForChild("MiningExcavationStart")
+local MiningExcavationDig = ReplicatedStorage:WaitForChild("MiningExcavationDig")
+local MiningExcavationCancel = ReplicatedStorage:WaitForChild("MiningExcavationCancel")
 
 local function toolIsMiningPickaxe(t)
 	if not t or not t:IsA("Tool") then
@@ -67,10 +72,18 @@ local function ownsPickaxe(player)
 	return false
 end
 
+local function getOreTierFromModel(oreModel)
+	return MiningExcavationConfig.getTierForOreModel(oreModel)
+end
+
 local function isCoalOre(inst)
+	local tier, tierCfg = getOreTierFromModel(inst)
+	if not tier then
+		return nil
+	end
 	local cur = inst
 	while cur do
-		if string.find(cur.Name, "Coal", 1, true) then
+		if tierCfg.matchName and string.find(cur.Name, tierCfg.matchName, 1, true) then
 			return cur
 		end
 		cur = cur.Parent
@@ -194,6 +207,206 @@ local function beginCoalOreRespawnCycle(oreModel, respawnSeconds)
 	end)
 end
 
+local function playerNearOre(player, oreModel)
+	local root = hrp(player)
+	if not root then
+		return false
+	end
+	for _, d in ipairs(oreModel:GetDescendants()) do
+		if d:IsA("BasePart") then
+			if (d.Position - root.Position).Magnitude <= MINE_RANGE then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function validateOrePart(player, orePart)
+	if typeof(player) ~= "Instance" or not player:IsA("Player") then
+		return nil, nil, nil, nil
+	end
+	if not ownsPickaxe(player) then
+		return nil, nil, nil, nil
+	end
+	if typeof(orePart) ~= "Instance" or not orePart:IsA("BasePart") then
+		return nil, nil, nil, nil
+	end
+	if not orePart:IsDescendantOf(Workspace) then
+		return nil, nil, nil, nil
+	end
+	local oreModel = isCoalOre(orePart)
+	if not oreModel or not oreModel:IsDescendantOf(Workspace) then
+		return nil, nil, nil, nil
+	end
+	local oreTier, tierCfg = getOreTierFromModel(oreModel)
+	if not oreTier or not tierCfg then
+		return nil, nil, nil, nil
+	end
+	if not oreStillMineable(oreModel) then
+		return nil, nil, nil, nil
+	end
+	if not playerNearOre(player, oreModel) then
+		return nil, nil, nil, nil
+	end
+	return oreModel, orePart, oreTier, tierCfg
+end
+
+local function clearExcavationSession(userId)
+	excavationSessions[userId] = nil
+end
+
+local function generateExcavationGrid(tierCfg)
+	local grid = table.create(GRID_SIZE, 0)
+	local oreTileCount = math.random(tierCfg.minOreTiles, tierCfg.maxOreTiles)
+	local indices = {}
+	for i = 1, GRID_SIZE do indices[i] = i end
+	for i = GRID_SIZE, 2, -1 do
+		local j = math.random(1, i)
+		indices[i], indices[j] = indices[j], indices[i]
+	end
+	for n = 1, oreTileCount do
+		grid[indices[n]] = MiningExcavationConfig.rollTileOreAmount(tierCfg)
+	end
+	return grid
+end
+
+local function grantCoalDrop(player, orePart, coalAmount, tierCfg)
+	coalAmount = math.max(0, math.floor(tonumber(coalAmount) or 0))
+	if coalAmount <= 0 then return end
+	local grantItemId = tierCfg and tierCfg.grantItemId or "Coal"
+	local xpPerUnit = tierCfg and tierCfg.xpPerUnit or 5
+	local basePos = orePart.Position + Vector3.new(0, 2, 0)
+	for _ = 1, coalAmount do
+		local nonce = HttpService:GenerateGUID(false)
+		local spread = Vector3.new(
+			(math.random() - 0.5) * 4,
+			0,
+			(math.random() - 0.5) * 4
+		)
+		local dropPos = basePos + spread
+		pendingCoal[nonce] = {
+			userId = player.UserId,
+			position = dropPos,
+			expires = os.clock() + PICKUP_EXPIRE_SEC,
+			amount = 1,
+			grantItemId = grantItemId,
+		}
+		MiningCoalDrop:FireClient(player, { position = dropPos, nonce = nonce, amount = 1, grantItemId = grantItemId })
+	end
+	local xpGain = math.max(1, math.floor(xpPerUnit * coalAmount))
+	DungeonProfile.AddSkillXP(player, "mining", xpGain)
+	MiningXPEvent:FireClient(player, xpGain)
+end
+
+local function completeExcavation(player, session)
+	if session.completed then return end
+	session.completed = true
+	local oreModel = session.oreModel
+	local orePart = session.orePart
+	local totalOre = session.totalOreWon or 0
+	local tierCfg = session.tierCfg
+	clearExcavationSession(player.UserId)
+	beginCoalOreRespawnCycle(oreModel, tierCfg.respawnSeconds)
+	local dropChance = tierCfg.dropChance or DROP_CHANCE
+	if totalOre > 0 and math.random() < dropChance then
+		grantCoalDrop(player, orePart, totalOre, tierCfg)
+	end
+end
+
+MiningExcavationStart.OnServerInvoke = function(player, orePart)
+	local uid = player.UserId
+	local now = os.clock()
+	if (lastMine[uid] or 0) + COOLDOWN > now then
+		return { ok = false, reason = "cooldown" }
+	end
+	if excavationSessions[uid] then
+		return { ok = false, reason = "busy" }
+	end
+	local oreModel, validatedPart, oreTier, tierCfg = validateOrePart(player, orePart)
+	if not oreModel then
+		return { ok = false, reason = "bad_ore" }
+	end
+	lastMine[uid] = now
+	local grid = generateExcavationGrid(tierCfg)
+	local maxAttempts = tierCfg.maxDigAttempts
+	excavationSessions[uid] = {
+		oreModel = oreModel,
+		orePart = validatedPart,
+		grid = grid,
+		dug = {},
+		attemptsLeft = maxAttempts,
+		totalOreWon = 0,
+		completed = false,
+		oreTier = oreTier,
+		tierCfg = tierCfg,
+	}
+	spawnStoneDebris(validatedPart.Position)
+	return {
+		ok = true,
+		rows = MiningExcavationConfig.GRID_ROWS,
+		cols = MiningExcavationConfig.GRID_COLS,
+		attemptsLeft = maxAttempts,
+		maxAttempts = maxAttempts,
+		totalOreWon = 0,
+		oreTier = oreTier,
+		oreId = tierCfg.oreId,
+		displayNameTitle = tierCfg.displayNameTitle,
+		displayName = tierCfg.displayName,
+		iconImage = MiningExcavationConfig.getIconImage(tierCfg),
+	}
+end
+
+MiningExcavationDig.OnServerInvoke = function(player, tileIndex)
+	local session = excavationSessions[player.UserId]
+	if not session or session.completed then
+		return { ok = false, reason = "no_session" }
+	end
+	if not ownsPickaxe(player) then
+		clearExcavationSession(player.UserId)
+		return { ok = false, reason = "no_pickaxe" }
+	end
+	if not playerNearOre(player, session.oreModel) then
+		clearExcavationSession(player.UserId)
+		return { ok = false, reason = "too_far" }
+	end
+	if type(tileIndex) ~= "number" then
+		return { ok = false, reason = "bad_tile" }
+	end
+	tileIndex = math.floor(tileIndex)
+	if tileIndex < 1 or tileIndex > GRID_SIZE then
+		return { ok = false, reason = "bad_tile" }
+	end
+	if session.dug[tileIndex] then
+		return { ok = false, reason = "already_dug" }
+	end
+	if session.attemptsLeft <= 0 then
+		return { ok = false, reason = "no_attempts" }
+	end
+	session.dug[tileIndex] = true
+	session.attemptsLeft = session.attemptsLeft - 1
+	local oreAmount = session.grid[tileIndex] or 0
+	if oreAmount > 0 then
+		session.totalOreWon = session.totalOreWon + oreAmount
+	end
+	local completed = session.attemptsLeft <= 0
+	if completed then
+		completeExcavation(player, session)
+	end
+	return {
+		ok = true,
+		revealed = true,
+		oreAmount = oreAmount,
+		attemptsLeft = session.attemptsLeft,
+		totalOreWon = session.totalOreWon,
+		completed = completed,
+	}
+end
+
+MiningExcavationCancel.OnServerEvent:Connect(function(player)
+	clearExcavationSession(player.UserId)
+end)
+
 ev.OnServerEvent:Connect(function(player, orePart)
 	if typeof(player) ~= "Instance" or not player:IsA("Player") then
 		return
@@ -203,55 +416,15 @@ ev.OnServerEvent:Connect(function(player, orePart)
 	if (lastMine[uid] or 0) + COOLDOWN > now then
 		return
 	end
-	if not ownsPickaxe(player) then
+	local oreModel, validatedPart, oreTier, tierCfg = validateOrePart(player, orePart)
+	if not oreModel then
 		return
 	end
-	local root = hrp(player)
-	if not root then
-		return
-	end
-	if typeof(orePart) ~= "Instance" or not orePart:IsA("BasePart") then
-		return
-	end
-	if not orePart:IsDescendantOf(Workspace) then
-		return
-	end
-	local oreModel = isCoalOre(orePart)
-	if not oreModel or not oreModel:IsDescendantOf(Workspace) then
-		return
-	end
-	if not oreStillMineable(oreModel) then
-		return
-	end
-
-	local distOk = false
-	for _, d in ipairs(oreModel:GetDescendants()) do
-		if d:IsA("BasePart") then
-			if (d.Position - root.Position).Magnitude <= MINE_RANGE then
-				distOk = true
-				break
-			end
-		end
-	end
-	if not distOk then
-		return
-	end
-
 	lastMine[uid] = now
-
-	beginCoalOreRespawnCycle(oreModel, ORE_RESPAWN_TIME)
-
-	if math.random() < DROP_CHANCE then
-		local nonce = HttpService:GenerateGUID(false)
-		local basePos = orePart.Position + Vector3.new(0, 2, 0)
-		pendingCoal[nonce] = {
-			userId = uid,
-			position = basePos,
-			expires = os.clock() + PICKUP_EXPIRE_SEC,
-		}
-		MiningCoalDrop:FireClient(player, { position = basePos, nonce = nonce })
-		DungeonProfile.AddSkillXP(player, "mining", XP_PER_COAL)
-		MiningXPEvent:FireClient(player, XP_PER_COAL)
+	beginCoalOreRespawnCycle(oreModel, tierCfg.respawnSeconds)
+	local dropChance = tierCfg.dropChance or DROP_CHANCE
+	if math.random() < dropChance then
+		grantCoalDrop(player, validatedPart, 1, tierCfg)
 	end
 end)
 
@@ -313,16 +486,21 @@ MiningCoalCollect.OnServerEvent:Connect(function(player, nonce)
 	end
 
 	pendingCoal[nonce] = nil
-	local ok = select(1, DungeonProfile.GrantItemId(player, "Coal", 1))
+	local amount = math.max(1, math.floor(tonumber(data.amount) or 1))
+	local grantItemId = data.grantItemId or "Coal"
+	local ok = select(1, DungeonProfile.GrantItemId(player, grantItemId, amount))
 	if not ok then
-		warn("[MiningReward] GrantItemId failed for coal collect", player.Name)
+		warn("[MiningReward] GrantItemId failed for collect", player.Name, grantItemId)
 		return
 	end
-	QuestProgress.OnCoalCollected(player, 1)
+	if grantItemId == "Coal" then
+		QuestProgress.OnCoalCollected(player, amount)
+	end
 end)
 
 Players.PlayerRemoving:Connect(function(player)
 	lastMine[player.UserId] = nil
+	clearExcavationSession(player.UserId)
 	for n, d in pairs(pendingCoal) do
 		if d.userId == player.UserId then
 			pendingCoal[n] = nil

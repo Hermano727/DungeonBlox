@@ -5,6 +5,7 @@ local SSS=game:GetService("ServerScriptService")
 local Config=require(RS:WaitForChild("EnergyConfig"))
 local EnergyData=require(SSS:WaitForChild("EnergyData"))
 local HungerData=require(SSS:WaitForChild("HungerData"))
+local ZoneService=require(SSS:WaitForChild("ZoneService"))
 local BuffService=require(SSS:WaitForChild("BuffService"))
 local States=require(RS:WaitForChild("PlayerStateEnum"))
 local EE=RS:WaitForChild("EnergyEvents")
@@ -79,7 +80,9 @@ end)
 RunService.Heartbeat:Connect(function(dt)
     local now=tick()
     for _,p in ipairs(Players:GetPlayers()) do
-        HungerData.applyTick(p, dt)
+        if not ZoneService.IsPlayerInSafeZone(p) then
+            HungerData.applyTick(p, dt)
+        end
         HungerData.enforceSprintGate(p)
         local d=EnergyData.get(p) if not d then continue end
         EnergyData.applyTick(p,dt)

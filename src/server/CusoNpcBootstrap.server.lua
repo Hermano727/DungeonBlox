@@ -7,16 +7,17 @@
 local CollectionService = game:GetService("CollectionService")
 local workspace = game:GetService("Workspace")
 
-local function findCusoModel()
-	local direct = workspace:FindFirstChild("Cuso")
-	if direct and direct:IsA("Model") then
-		return direct
+-- Wires every Model named "Cuso" anywhere in Workspace, not just the first one found.
+-- Sorted by full path so id assignment (cuso_01, cuso_02, ...) stays stable across restarts.
+local function findAllCusoModels()
+	local found = {}
+	for _, inst in ipairs(workspace:GetDescendants()) do
+		if inst.Name == "Cuso" and inst:IsA("Model") then
+			table.insert(found, inst)
+		end
 	end
-	local deep = workspace:FindFirstChild("Cuso", true)
-	if deep and deep:IsA("Model") then
-		return deep
-	end
-	return nil
+	table.sort(found, function(a, b) return a:GetFullName() < b:GetFullName() end)
+	return found
 end
 
 local function setupNpcModel(model, npcName)
@@ -101,13 +102,8 @@ local function setupNpcModel(model, npcName)
 	end
 end
 
-local function ensureCuso()
-	local model = findCusoModel()
-	if not model then
-		return
-	end
-
-	model:SetAttribute("NpcId", "cuso_01")
+local function ensureCuso(model, npcId)
+	model:SetAttribute("NpcId", npcId)
 	model:SetAttribute("NpcType", "QuestGiver")
 	model:SetAttribute("NpcName", "Cuso")
 	model:SetAttribute("MaxActivationDistance", 14)
@@ -134,14 +130,26 @@ local function ensureCuso()
 	end
 end
 
+local function tryBootstrapAll()
+	for i, model in ipairs(findAllCusoModels()) do
+		local npcId = (i == 1) and "cuso_01" or string.format("cuso_%02d", i)
+		local ok, err = pcall(ensureCuso, model, npcId)
+		if ok then
+			print("[CusoNpcBootstrap] wired:", model:GetFullName(), "as", npcId)
+		else
+			warn("[CusoNpcBootstrap] bootstrap failed:", err)
+		end
+	end
+end
+
 -- Run a few times to beat streaming/replication ordering in Play Solo.
 for i = 1, 5 do
-	task.delay(0.25 * (i - 1), ensureCuso)
+	task.delay(0.25 * (i - 1), tryBootstrapAll)
 end
 
 workspace.DescendantAdded:Connect(function(inst)
 	if inst.Name == "Cuso" and inst:IsA("Model") then
-		task.defer(ensureCuso)
+		task.defer(tryBootstrapAll)
 	end
 end)
 

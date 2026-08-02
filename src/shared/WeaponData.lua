@@ -1,3 +1,32 @@
+--  WeaponData
+--  Combat stats keyed by WeaponId (referenced from ItemDefinitions.WeaponId).
+--  NAMING CONVENTION (see .claude/CLAUDE.md "Asset & naming conventions")
+--  The game is 5-tier. Names must encode tier, never vague adjectives.
+--    New ids:  T1_Sword, T2_Helm, T1_Bow   (PascalCase after the tier prefix)
+--    Never as a code-facing id: "Low tier", "Basic", "Starter" -- those are
+--    display words. DisplayName is the only place human phrasing belongs.
+--    No snake_case or spaces. Low_tier_sword / "Wood Sword" / "Gravity Coil"
+--    are legacy: leave them, do not imitate them.
+--
+--  Legacy ids are FROZEN. Keys here are itemIds persisted in PlayerProfile_v1;
+--  renaming one orphans every saved item using it. Convention applies to new
+--  entries only. Renaming an existing id needs an alias map applied on profile
+--  load.
+--
+--  SINGLE AUTHORITY: WeaponData.Weapons
+--  Every consumer reads this flat table via WeaponData.GetStats(weaponId)
+--  (CombatClient, MobCombat, BowServer, DungeonProfileService,
+--  StarterCharacterScripts/LocalScript). Add weapons HERE and nowhere else.
+--
+--  Per-weapon child ModuleScripts (WeaponData.<Name>) were an abandoned
+--  refactor: nothing ever required them, their SwingEnergy/SwingCooldown/Range
+--  fields had zero readers, and they disagreed with this table. Deleted
+--  2026-07. Do not reintroduce that shape without also writing a loader and
+--  migrating every call site.
+--
+--  Fields: Damage, MaxRange (studs), AttackType ("Melee" | "Projectile"),
+--          ProjectileSpeed (projectile only).
+
 local WeaponData = {}
 
 WeaponData.Weapons = {
@@ -38,6 +67,11 @@ WeaponData.Weapons = {
 	},
 	Mace = {
 		Damage     = 5,
+		MaxRange   = 12,
+		AttackType = "Melee",
+	},
+	AdminSword = {
+		Damage     = 999,
 		MaxRange   = 12,
 		AttackType = "Melee",
 	},

@@ -1,6 +1,0 @@
-	else
-		inv[uuid] = scrollItem
-		scrollItem.count = 1
-	end
-end
-return EnchantScrollApply

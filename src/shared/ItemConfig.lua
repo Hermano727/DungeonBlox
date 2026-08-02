@@ -24,7 +24,7 @@ ItemConfig.WEAPON_MULTIPLIERS  = { Sword=1.00, Scythe=1.05, Axe=1.10, Mace=1.15,
 ItemConfig.WEAPON_TYPES        = { "Sword", "Scythe", "Axe", "Mace", "Bow" }
 -- Procedural weapon drops clone these StarterPack Tool names from DungeonToolPrefabsArchive.
 ItemConfig.WEAPON_DROP_PREFAB_BY_TYPE = {
-	Sword = "Low_tier_sword",
+	Sword = "TrainingSword",
 	Scythe = "scythe",
 	Axe = "Axe Tool",
 	Mace = "Mace",

@@ -1,3 +1,4 @@
+local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindConfig"))
 --[[
 	DungeonHotbarHud — drives the pre-built StarterGui/GUI/Hotbar Frame.
 
@@ -18,20 +19,25 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 local playerScripts = script.Parent
 local DungeonMenuNet = require(playerScripts:WaitForChild("DungeonMenuNet"))
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Types = require(ReplicatedStorage:WaitForChild("DungeonProfileTypes"))
 
 local HOTBAR_SLOTS = 9
 
-local KEY_TO_SLOT = {
-	[Enum.KeyCode.One]   = 1,
-	[Enum.KeyCode.Two]   = 2,
-	[Enum.KeyCode.Three] = 3,
-	[Enum.KeyCode.Four]  = 4,
-	[Enum.KeyCode.Five]  = 5,
-	[Enum.KeyCode.Six]   = 6,
-	[Enum.KeyCode.Seven] = 7,
-	[Enum.KeyCode.Eight] = 8,
-	[Enum.KeyCode.Nine]  = 9,
-}
+local function hotbarSlotUuid(hb, i)
+	if type(hb) ~= "table" then return nil end
+	i = math.floor(tonumber(i) or -1)
+	if i < 1 or i > 9 then return nil end
+	local v = hb[i]
+	if type(v) == "string" and v ~= "" then return v end
+	v = hb[tostring(i)]
+	if type(v) == "string" and v ~= "" then return v end
+	return nil
+end
+
+
+
+local KEY_TO_SLOT = Keys.HotbarSlot
 
 local function isCharacterMenuOpen()
 	local g = playerGui:FindFirstChild("SkillsPopupUI", true)
@@ -83,7 +89,7 @@ local function equipHotbarSlot(slotIndex)
 	local snap = DungeonMenuNet.getLastSnapshot()
 	local profile = snap and snap.profile
 	if not profile then return end
-	local uuid = (profile.hotbar or {})[slotIndex]
+	local uuid = Types.HotbarSlotUuid(profile.hotbar or {}, slotIndex)
 	if type(uuid) == "string" and uuid ~= "" then
 		equipToolForUuid(uuid)
 	else
@@ -234,7 +240,7 @@ local function refreshHud(_snap)
 	for i = 1, HOTBAR_SLOTS do
 		local il = itemLabels[i]
 		if not il then continue end
-		local uuid = hb[i]
+		local uuid = Types.HotbarSlotUuid(hb, i)
 		local it = (type(uuid) == "string" and uuid ~= "") and inv[uuid] or nil
 		if it then
 			local nm = itemDisplayName(it)

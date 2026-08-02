@@ -1,0 +1,11 @@
+# Toolchain managed by Rokit - https://github.com/rojo-rbx/rokit
+#
+# Replaces aftman.toml. Aftman's maintainer has moved away from Roblox;
+# Rokit is the successor, maintained under the Rojo org, and installs faster.
+# Rokit can still read aftman.toml, but this file is the source of truth.
+
+[tools]
+# 7.7.0 final (2026-07-01) is the first FULL release of syncback.
+# 7.7.0-rc.1 predates several syncback fixes - do not pin back to it.
+rojo = "rojo-rbx/rojo@7.7.0"
+wally = "UpliftGames/wally@0.3.2"

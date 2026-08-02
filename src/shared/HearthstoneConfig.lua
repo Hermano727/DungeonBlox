@@ -12,7 +12,7 @@ HearthstoneConfig.DATASTORE_KEY = "HearthstoneLocations_v1"
 -- Replace with your Roblox UserId for admin access to the dev panel.
 HearthstoneConfig.ADMIN_IDS = { 706604079 }
 
-local HearthstoneIcons = require(script.Parent:WaitForChild("Assets"):WaitForChild("HearthstoneIcons"))
+local HearthstoneIcons = require(script.Parent.Assets.Icons.Hearthstones.HearthstoneIcons)
 
 -- Seed locations always available; DataStore overlays dynamic additions.
 HearthstoneConfig.SEED_LOCATIONS = {
@@ -20,7 +20,7 @@ HearthstoneConfig.SEED_LOCATIONS = {
         id       = "oakhaven",
         name     = "Oakhaven",
         cost     = 0,
-        position = Vector3.new(-1224, 19, -9),
+		position = Vector3.new(-1194.067, 8.39, 31.421),
         icon     = HearthstoneIcons.oakhaven,
     },
 }

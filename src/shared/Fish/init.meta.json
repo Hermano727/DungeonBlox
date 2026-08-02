@@ -1,0 +1,9 @@
+{
+  "properties": {
+    "ToolTip": "Fish (x1)"
+  },
+  "attributes": {
+    "StackCount": 1.0
+  },
+  "className": "Tool"
+}

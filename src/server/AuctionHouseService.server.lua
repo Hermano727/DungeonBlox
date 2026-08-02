@@ -135,6 +135,7 @@ local function grantItemDirect(player, item)
 	for k, v in pairs(item) do copy[k] = v end
 	copy.uuid = newUuid
 	profile.inventory[newUuid] = copy
+	DPS.PlaceItemInFirstEmptySlot(profile, newUuid)
 	return true
 end
 

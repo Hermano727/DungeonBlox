@@ -17,6 +17,7 @@ local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"
 local EnchantScrollApply = require(ReplicatedStorage:WaitForChild("EnchantScrollApply"))
 local ProtectionScrollApply = require(ReplicatedStorage:WaitForChild("ProtectionScrollApply"))
 local CraftingOrbApply = require(ReplicatedStorage:WaitForChild("CraftingOrbApply"))
+local AltarUpgrade = require(ServerScriptService:WaitForChild("AltarUpgrade"))
 
 local DungeonProfileService = {}
 
@@ -107,9 +108,21 @@ end
 
 -- Forward declaration so Load can reference it before the body is defined below.
 local ensureSkillStats
-local getEquippedWeaponUuid
-local syncWeaponHotbarMirror
 local dedupeHotbarInPlace
+local placeItemInFirstEmptySlot
+local placeItemInFirstEmptyBagSlot
+
+local function hotbarSlotUuid(hb, i)
+	if type(hb) ~= "table" then return nil end
+	i = math.floor(tonumber(i) or -1)
+	if i < 1 or i > 9 then return nil end
+	local v = hb[i]
+	if type(v) == "string" and v ~= "" then return v end
+	v = hb[tostring(i)]
+	if type(v) == "string" and v ~= "" then return v end
+	return nil
+end
+
 
 
 local function ensureHotbar(profile)
@@ -118,32 +131,14 @@ local function ensureHotbar(profile)
 	else
 		local hb = {}
 		for i = 1, 9 do
-			hb[i] = profile.hotbar[i]
+			hb[i] = hotbarSlotUuid(profile.hotbar, i)
 		end
 		profile.hotbar = hb
-	end
-end
-
-getEquippedWeaponUuid = function(profile)
-	if type(profile.equipped) ~= "table" then
-		return nil
-	end
-	local w = profile.equipped.Weapon
-	if type(w) == "string" and w ~= "" then
-		return w
-	end
-	return nil
-end
-
-syncWeaponHotbarMirror = function(profile)
-	ensureHotbar(profile)
-	local weaponUuid = getEquippedWeaponUuid(profile)
-	-- Slot 1 is only a mirror of equipped.Weapon. When the equipped weapon changes, we do
-	-- not auto-shuffle the previous mirror into 2-9 (secondary weapons use AssignFirstEmptyHotbar).
-	if weaponUuid then
-		profile.hotbar[1] = weaponUuid
-	else
-		profile.hotbar[1] = nil
+		for k in pairs(profile.hotbar) do
+			if type(k) ~= "number" then
+				profile.hotbar[k] = nil
+			end
+		end
 	end
 end
 
@@ -155,8 +150,50 @@ local function clearItemUuidFromAllHotbar(profile, itemUuid)
 	end
 	ensureHotbar(profile)
 	for i = 1, 9 do
-		if profile.hotbar[i] == itemUuid then
+		if hotbarSlotUuid(profile.hotbar, i) == itemUuid then
 			profile.hotbar[i] = nil
+			profile.hotbar[tostring(i)] = nil
+		end
+	end
+end
+
+local function bagSlotUuid(bs, i)
+	if type(bs) ~= "table" then return nil end
+	i = math.floor(tonumber(i) or -1)
+	if i < 1 or i > Types.BAG_SLOT_COUNT then return nil end
+	local v = bs[i]
+	if type(v) == "string" and v ~= "" then return v end
+	v = bs[tostring(i)]
+	if type(v) == "string" and v ~= "" then return v end
+	return nil
+end
+
+local function ensureBagSlots(profile)
+	if type(profile.bagSlots) ~= "table" then
+		profile.bagSlots = {}
+		for i = 1, Types.BAG_SLOT_COUNT do
+			profile.bagSlots[i] = nil
+		end
+	else
+		local bs = {}
+		for i = 1, Types.BAG_SLOT_COUNT do
+			bs[i] = bagSlotUuid(profile.bagSlots, i)
+		end
+		profile.bagSlots = bs
+	end
+end
+
+-- Mirrors clearItemUuidFromAllHotbar: an item leaving the bag (equipped, hotbarred,
+-- chested, consumed, or destroyed) must not leave a stale bagSlots reference behind.
+local function clearUuidFromBagSlots(profile, itemUuid)
+	if type(itemUuid) ~= "string" or itemUuid == "" then
+		return
+	end
+	ensureBagSlots(profile)
+	for i = 1, Types.BAG_SLOT_COUNT do
+		if bagSlotUuid(profile.bagSlots, i) == itemUuid then
+			profile.bagSlots[i] = nil
+			profile.bagSlots[tostring(i)] = nil
 		end
 	end
 end
@@ -179,30 +216,48 @@ dedupeHotbarInPlace = function(profile)
 	ensureHotbar(profile)
 	local seen = {}
 	for i = 1, 9 do
-		local u = profile.hotbar[i]
+		local u = hotbarSlotUuid(profile.hotbar, i)
 		if type(u) == "string" and u ~= "" then
 			if seen[u] then
 				profile.hotbar[i] = nil
+			profile.hotbar[tostring(i)] = nil
 			else
 				seen[u] = true
 			end
 		end
 	end
 end
+
+local function dedupeBagSlotsInPlace(profile)
+	ensureBagSlots(profile)
+	local seen = {}
+	for i = 1, Types.BAG_SLOT_COUNT do
+		local u = bagSlotUuid(profile.bagSlots, i)
+		if type(u) == "string" and u ~= "" then
+			if seen[u] then
+				profile.bagSlots[i] = nil
+			profile.bagSlots[tostring(i)] = nil
+			else
+				seen[u] = true
+			end
+		end
+	end
+end
+
 function DungeonProfileService.Load(player)
 	local existing = sessions[player.UserId]
 	if existing then
 		-- Reconcile in case new fields were added after the profile was first created
 		Types.Reconcile(existing)
 		ensureSkillStats(existing)
-		syncWeaponHotbarMirror(existing)
 		dedupeHotbarInPlace(existing)
+		dedupeBagSlotsInPlace(existing)
 		return existing
 	end
 	local fresh = Types.DefaultProfile()
 	ensureSkillStats(fresh)
-	syncWeaponHotbarMirror(fresh)
 	dedupeHotbarInPlace(fresh)
+	dedupeBagSlotsInPlace(fresh)
 	sessions[player.UserId] = fresh
 	return fresh
 end
@@ -284,6 +339,7 @@ local function mergeStackableIntoInventory(player, profile, itemId, count)
 				toolPrefabName = def.ToolPrefabName,
 			}
 			profile.inventory[uuid] = it
+			placeItemInFirstEmptySlot(profile, uuid)
 			remaining = remaining - take
 		end
 	end
@@ -375,6 +431,7 @@ function DungeonProfileService.GrantItem(player, template, count)
 				item.count = 1
 			end
 			profile.inventory[uuid] = item
+			placeItemInFirstEmptySlot(profile, uuid)
 		end
 	end
 
@@ -418,39 +475,51 @@ local function itemAllowsHotbar(item)
 	return legacyItemAllowsHotbar(item)
 end
 
-local function isMeleeHotbarItem(item)
-	if type(item) ~= "table" then
-		return false
-	end
-	if type(item.itemId) == "string" and item.itemId ~= "" then
-		return ItemDefinitions.IsMeleeWeapon(item.itemId)
-	end
-	if item.type ~= "Weapon" then
-		return false
-	end
-	local n = string.lower(tostring(item.name or ""))
-	local wt = string.lower(tostring(item.weaponType or ""))
-	if string.find(n, "bow", 1, true) or string.find(wt, "bow", 1, true) then
-		return false
-	end
-	return true
-end
-
-local function clearOtherMeleeHotbar(profile, keepUuid)
-	if type(profile.hotbar) ~= "table" then
+-- Bag-only placement: first empty bagSlots index. Used when an item is displaced from the
+-- hotbar/equip panel back into general inventory (unequip, clear-hotbar) -- it should land
+-- in the bag, never silently re-fill another hotbar slot.
+placeItemInFirstEmptyBagSlot = function(profile, uuid)
+	if type(uuid) ~= "string" or uuid == "" then
 		return
 	end
-	for i = 1, 9 do
-		if i ~= 1 then
-			local u = profile.hotbar[i]
-			if type(u) == "string" and u ~= "" and u ~= keepUuid then
-				local it = profile.inventory[u]
-				if isMeleeHotbarItem(it) then
-					profile.hotbar[i] = nil
-				end
+	ensureBagSlots(profile)
+	for i = 1, Types.BAG_SLOT_COUNT do
+		if bagSlotUuid(profile.bagSlots, i) == nil then
+			profile.bagSlots[i] = uuid
+			return
+		end
+	end
+	-- Bag full: item stays owned in profile.inventory but unplaced (same as today's
+	-- de-facto bag-overflow behavior; not a regression).
+end
+
+-- Hotbar-priority placement for newly-acquired items (grants, chest withdrawals): hotbar[1..9]
+-- is filled first, then the bag, matching "fill the first empty slot" pickup behavior.
+placeItemInFirstEmptySlot = function(profile, uuid)
+	if type(uuid) ~= "string" or uuid == "" then
+		return
+	end
+	local item = profile.inventory[uuid]
+	if type(item) ~= "table" then
+		return
+	end
+	if itemAllowsHotbar(item) then
+		ensureHotbar(profile)
+		for i = 1, 9 do
+			if hotbarSlotUuid(profile.hotbar, i) == nil then
+				profile.hotbar[i] = uuid
+				return
 			end
 		end
 	end
+	placeItemInFirstEmptyBagSlot(profile, uuid)
+end
+
+-- Public wrapper for callers outside this module that mint inventory entries directly
+-- (e.g. AuctionHouseService returning/claiming a listing's item) instead of through
+-- GrantItem/GrantItemId. Keeps "fill the first empty hotbar/bag slot" universal.
+function DungeonProfileService.PlaceItemInFirstEmptySlot(profile, uuid)
+	placeItemInFirstEmptySlot(profile, uuid)
 end
 
 function DungeonProfileService.GrantItemId(player, itemId, count)
@@ -460,7 +529,15 @@ function DungeonProfileService.GrantItemId(player, itemId, count)
 	if not def then
 		return false, "unknown_item"
 	end
-	local n = clampCount(count)
+	local n
+	if ItemDefinitions.IsStackable(itemId) then
+		n = math.max(0, math.floor(tonumber(count) or 0))
+		if n <= 0 then
+			return true, nil
+		end
+	else
+		n = clampCount(count)
+	end
 
 	local function raidSalvageRarity(r)
 		return r == "Common" or r == "Uncommon"
@@ -503,6 +580,7 @@ function DungeonProfileService.GrantItemId(player, itemId, count)
 				it.subStats = { dmgMin = d, dmgMax = d }
 			end
 			profile.inventory[uuid] = it
+			placeItemInFirstEmptySlot(profile, uuid)
 		end
 	end
 
@@ -512,17 +590,34 @@ function DungeonProfileService.GrantItemId(player, itemId, count)
 	return true, nil
 end
 
-function DungeonProfileService.SetHotbarSlot(player, slotIndex, itemUuid)
+
+function DungeonProfileService.ClearHotbarSlot(player, slotIndex)
 	local profile = DungeonProfileService.Load(player)
-	if type(slotIndex) ~= "number" or slotIndex < 1 or slotIndex > 9 then
+	slotIndex = math.floor(tonumber(slotIndex) or -1)
+	if slotIndex ~= slotIndex or slotIndex < 1 or slotIndex > 9 then
 		return false, "bad_slot"
 	end
-	if slotIndex == 1 then
-		return false, "weapon_slot_reserved"
+	ensureHotbar(profile)
+	local clearedUuid = hotbarSlotUuid(profile.hotbar, slotIndex)
+	profile.hotbar[slotIndex] = nil
+	profile.hotbar[tostring(slotIndex)] = nil
+	-- Cleared item leaves the hotbar entirely -- it must land in the bag, not vanish.
+	placeItemInFirstEmptyBagSlot(profile, clearedUuid)
+	StatsService.RecomputeRuntimeHp(profile)
+	DungeonProfileService.PushProfile(player)
+	Hotbar.syncFromProfile(player, profile)
+	return true, DungeonProfileService.BuildSnapshotPayload(player)
+end
+
+function DungeonProfileService.SetHotbarSlot(player, slotIndex, itemUuid)
+	local profile = DungeonProfileService.Load(player)
+	slotIndex = math.floor(tonumber(slotIndex) or -1)
+	if slotIndex ~= slotIndex or slotIndex < 1 or slotIndex > 9 then
+		return false, "bad_slot"
 	end
 	ensureHotbar(profile)
 	if type(itemUuid) ~= "string" or itemUuid == "" then
-		profile.hotbar[slotIndex] = nil
+		return DungeonProfileService.ClearHotbarSlot(player, slotIndex)
 	else
 		if not profile.inventory[itemUuid] then
 			return false, "not_owned"
@@ -531,45 +626,21 @@ function DungeonProfileService.SetHotbarSlot(player, slotIndex, itemUuid)
 			return false, "not_hotbar_item"
 		end
 		clearItemUuidFromAllEquipped(profile, itemUuid)
+		clearUuidFromBagSlots(profile, itemUuid)
 		for i = 1, 9 do
-			if profile.hotbar[i] == itemUuid then
+			if hotbarSlotUuid(profile.hotbar, i) == itemUuid then
 				profile.hotbar[i] = nil
+			profile.hotbar[tostring(i)] = nil
 			end
 		end
 		profile.hotbar[slotIndex] = itemUuid
+		profile.hotbar[tostring(slotIndex)] = nil
 	end
-	syncWeaponHotbarMirror(profile)
 	dedupeHotbarInPlace(profile)
 	StatsService.RecomputeRuntimeHp(profile)
 	DungeonProfileService.PushProfile(player)
 	Hotbar.syncFromProfile(player, profile)
-	return true, nil
-end
-
-function DungeonProfileService.AssignFirstEmptyHotbar(player, itemUuid)
-	local profile = DungeonProfileService.Load(player)
-	if type(itemUuid) ~= "string" or itemUuid == "" then
-		return false, "bad_uuid"
-	end
-	ensureHotbar(profile)
-	local item = profile.inventory[itemUuid]
-	if not item then
-		return false, "not_owned"
-	end
-	if not itemAllowsHotbar(item) then
-		return false, "not_hotbar_item"
-	end
-	for i = 1, 9 do
-		if profile.hotbar[i] == itemUuid then
-			return true, nil
-		end
-	end
-	for i = 2, 9 do
-		if profile.hotbar[i] == nil then
-			return DungeonProfileService.SetHotbarSlot(player, i, itemUuid)
-		end
-	end
-	return false, "hotbar_full"
+	return true, DungeonProfileService.BuildSnapshotPayload(player)
 end
 
 function DungeonProfileService.SwapHotbarSlots(player, a, b)
@@ -583,18 +654,18 @@ function DungeonProfileService.SwapHotbarSlots(player, a, b)
 	if a < 1 or a > 9 or b < 1 or b > 9 then
 		return false, "bad_slot"
 	end
-	if a == 1 or b == 1 then
-		return false, "weapon_slot_reserved"
-	end
 	if a == b then
-		return true, nil
+		return true, DungeonProfileService.BuildSnapshotPayload(player)
 	end
 	ensureHotbar(profile)
-	profile.hotbar[a], profile.hotbar[b] = profile.hotbar[b], profile.hotbar[a]
+	local ua = hotbarSlotUuid(profile.hotbar, a); local ub = hotbarSlotUuid(profile.hotbar, b)
+	profile.hotbar[a], profile.hotbar[b] = ub, ua
+	profile.hotbar[tostring(a)] = nil
+	profile.hotbar[tostring(b)] = nil
 	dedupeHotbarInPlace(profile)
 	DungeonProfileService.PushProfile(player)
 	Hotbar.syncFromProfile(player, profile)
-	return true, nil
+	return true, DungeonProfileService.BuildSnapshotPayload(player)
 end
 
 local function readChestSlotRaw(slots, i)
@@ -680,8 +751,9 @@ end
 local function clearUuidFromHotbar(profile, uuid)
 	ensureHotbar(profile)
 	for i = 1, 9 do
-		if profile.hotbar[i] == uuid then
+		if hotbarSlotUuid(profile.hotbar, i) == uuid then
 			profile.hotbar[i] = nil
+			profile.hotbar[tostring(i)] = nil
 		end
 	end
 end
@@ -737,6 +809,7 @@ function DungeonProfileService.ChestDepositToSlot(player, uuid, slotIndex)
 	end
 
 	clearUuidFromHotbar(profile, uuid)
+	clearUuidFromBagSlots(profile, uuid)
 
 	local targetSlot = nil
 	if chestSlotIsEmpty(profile.chestSlots[slotIndex]) then
@@ -782,6 +855,8 @@ function DungeonProfileService.ChestWithdrawSlot(player, slotIndex)
 	profile.chestSlots[slotIndex] = nil
 	profile.chestInventory[uuid] = nil
 	profile.inventory[uuid] = item
+	-- Item re-enters the bag/hotbar positional system when pulled from the chest.
+	placeItemInFirstEmptySlot(profile, uuid)
 
 	StatsService.RecomputeRuntimeHp(profile)
 	DungeonProfileService.PushProfile(player)
@@ -790,8 +865,68 @@ function DungeonProfileService.ChestWithdrawSlot(player, slotIndex)
 	return true, nil
 end
 
+--[[
+  RemoteFunction action: SetBagSlot(player, slotIndex, itemUuid) -- explicit placement into a
+  bag slot (click-to-place destination). No hotbar-eligibility restriction: anything ownable
+  can sit in the bag. Modeled directly on SetHotbarSlot/ClearHotbarSlot.
+]]
+function DungeonProfileService.SetBagSlot(player, slotIndex, itemUuid)
+	local profile = DungeonProfileService.Load(player)
+	slotIndex = math.floor(tonumber(slotIndex) or -1)
+	if slotIndex ~= slotIndex or slotIndex < 1 or slotIndex > Types.BAG_SLOT_COUNT then
+		return false, "bad_slot"
+	end
+	ensureBagSlots(profile)
+	if type(itemUuid) ~= "string" or itemUuid == "" then
+		return false, "bad_uuid"
+	end
+	if not profile.inventory[itemUuid] then
+		return false, "not_owned"
+	end
+	clearItemUuidFromAllHotbar(profile, itemUuid)
+	clearItemUuidFromAllEquipped(profile, itemUuid)
+	clearUuidFromBagSlots(profile, itemUuid)
+	profile.bagSlots[slotIndex] = itemUuid
+	profile.bagSlots[tostring(slotIndex)] = nil
+	dedupeBagSlotsInPlace(profile)
+	dedupeHotbarInPlace(profile)
+	StatsService.RecomputeRuntimeHp(profile)
+	DungeonProfileService.PushProfile(player)
+	Hotbar.syncFromProfile(player, profile)
+	return true, DungeonProfileService.BuildSnapshotPayload(player)
+end
+
+--[[
+  RemoteFunction action: SwapBagSlot(player, a, b) -- bag-to-bag swap by index. Replaces the
+  old client-only cosmetic bag reordering with a server-authoritative swap.
+]]
+function DungeonProfileService.SwapBagSlot(player, a, b)
+	local profile = DungeonProfileService.Load(player)
+	if type(a) ~= "number" or type(b) ~= "number" then
+		return false, "bad_arg"
+	end
+	if a ~= math.floor(a) or b ~= math.floor(b) then
+		return false, "bad_arg"
+	end
+	if a < 1 or a > Types.BAG_SLOT_COUNT or b < 1 or b > Types.BAG_SLOT_COUNT then
+		return false, "bad_slot"
+	end
+	if a == b then
+		return true, DungeonProfileService.BuildSnapshotPayload(player)
+	end
+	ensureBagSlots(profile)
+	local ua = bagSlotUuid(profile.bagSlots, a); local ub = bagSlotUuid(profile.bagSlots, b)
+	profile.bagSlots[a], profile.bagSlots[b] = ub, ua
+	profile.bagSlots[tostring(a)] = nil
+	profile.bagSlots[tostring(b)] = nil
+	dedupeBagSlotsInPlace(profile)
+	DungeonProfileService.PushProfile(player)
+	return true, DungeonProfileService.BuildSnapshotPayload(player)
+end
+
 function DungeonProfileService.UnlockChestRow(player, rowToUnlock)
 	local profile = DungeonProfileService.Load(player)
+	ensureHotbar(profile)
 	ensureChest(profile)
 	if type(rowToUnlock) ~= "number" or rowToUnlock ~= math.floor(rowToUnlock) then
 		return false, "bad_arg"
@@ -869,6 +1004,11 @@ function DungeonProfileService.ApplyEnchantScroll(player, scrollUuid, targetUuid
 	if not okApply then
 		return false, errApply
 	end
+	-- The scroll stack may have been fully consumed (uuid removed from inventory); make sure
+	-- no stale bagSlots reference is left pointing at it.
+	if profile.inventory[scrollUuid] == nil then
+		clearUuidFromBagSlots(profile, scrollUuid)
+	end
 
 	StatsService.RecomputeRuntimeHp(profile)
 	DungeonProfileService.PushProfile(player)
@@ -936,6 +1076,9 @@ function DungeonProfileService.ApplyProtectionScroll(player, scrollUuid, targetU
 	if not okApply then
 		return false, errApply
 	end
+	if profile.inventory[scrollUuid] == nil then
+		clearUuidFromBagSlots(profile, scrollUuid)
+	end
 
 	StatsService.RecomputeRuntimeHp(profile)
 	DungeonProfileService.PushProfile(player)
@@ -986,6 +1129,9 @@ function DungeonProfileService.ApplyCraftingOrb(player, scrollUuid, targetUuid)
 	if not okApply then
 		return false, errApply
 	end
+	if profile.inventory[scrollUuid] == nil then
+		clearUuidFromBagSlots(profile, scrollUuid)
+	end
 
 	StatsService.RecomputeRuntimeHp(profile)
 	DungeonProfileService.PushProfile(player)
@@ -1009,8 +1155,9 @@ function DungeonProfileService.ConsumeItemId(player, itemId, count)
 
 	local function clearUuidRefs(uuid)
 		for i = 1, 9 do
-			if profile.hotbar[i] == uuid then
+			if hotbarSlotUuid(profile.hotbar, i) == uuid then
 				profile.hotbar[i] = nil
+			profile.hotbar[tostring(i)] = nil
 			end
 		end
 		if type(profile.equipped) == "table" then
@@ -1020,6 +1167,7 @@ function DungeonProfileService.ConsumeItemId(player, itemId, count)
 				end
 			end
 		end
+		clearUuidFromBagSlots(profile, uuid)
 	end
 
 	-- Track whether any item UUID was fully removed from inventory.
@@ -1094,8 +1242,8 @@ end
     - Item UUID must exist in inventory (server-owned dictionary).
     - Allowed slot derived from item type/tags/equipSlot hint.
     - If target slot occupied, previous UUID is cleared (item remains in inventory).
-    - equipOpts.weaponBagSecondary: bag/panel path — if another weapon is already equipped, put this
-      weapon on hotbar 2-9 instead of replacing equipped.Weapon (slot 1 stays the primary mirror).
+    - Weapons are never equip-panel items (Minecraft-style hotbar model): a weapon's only
+      "equipped" location is whichever hotbar slot it's placed in via SetHotbar/SwapHotbar.
 ]]
 function DungeonProfileService.EquipItem(player, itemUuid, equipOpts)
 	local profile = DungeonProfileService.Load(player)
@@ -1113,21 +1261,21 @@ function DungeonProfileService.EquipItem(player, itemUuid, equipOpts)
 	if not slot then
 		return false, "not_equippable"
 	end
-
-	if slot == "Weapon" and type(equipOpts) == "table" and equipOpts.weaponBagSecondary == true then
-		local cur = getEquippedWeaponUuid(profile)
-		if type(cur) == "string" and cur ~= "" and cur ~= itemUuid then
-			return DungeonProfileService.AssignFirstEmptyHotbar(player, itemUuid)
-		end
+	if slot == "Weapon" then
+		return false, "weapon_not_equippable_panel"
 	end
 
 	if type(profile.equipped) == "table" and profile.equipped[slot] == itemUuid then
 		return true, nil
 	end
 
+	local prevUuid = type(profile.equipped) == "table" and profile.equipped[slot] or nil
 	profile.equipped[slot] = itemUuid
 	clearItemUuidFromAllHotbar(profile, itemUuid)
-	syncWeaponHotbarMirror(profile)
+	clearUuidFromBagSlots(profile, itemUuid)
+	if type(prevUuid) == "string" and prevUuid ~= "" and prevUuid ~= itemUuid then
+		placeItemInFirstEmptyBagSlot(profile, prevUuid)
+	end
 	dedupeHotbarInPlace(profile)
 	StatsService.RecomputeRuntimeHp(profile)
 	DungeonProfileService.PushProfile(player)
@@ -1143,8 +1291,10 @@ function DungeonProfileService.UnequipItem(player, slot)
 	if type(profile.equipped) ~= "table" or profile.equipped[slot] == nil then
 		return true, nil
 	end
+	local unequippedUuid = profile.equipped[slot]
 	profile.equipped[slot] = nil
-	syncWeaponHotbarMirror(profile)
+	-- Unequipped item leaves the equip panel entirely -- it must land in the bag, not vanish.
+	placeItemInFirstEmptyBagSlot(profile, unequippedUuid)
 	dedupeHotbarInPlace(profile)
 	StatsService.RecomputeRuntimeHp(profile)
 	DungeonProfileService.PushProfile(player)
@@ -1154,13 +1304,29 @@ end
 
 function DungeonProfileService.BuildSnapshotPayload(player)
 	local profile = DungeonProfileService.Load(player)
+	ensureHotbar(profile)
+	ensureBagSlots(profile)
 	ensureChest(profile)
 	local derived = StatsService.BuildSnapshot(profile)
 	local uid = player.UserId
 	local seq = (snapshotGenByUserId[uid] or 0) + 1
 	snapshotGenByUserId[uid] = seq
+	-- Dense string keys survive RemoteEvent serialization (sparse numeric arrays reindex).
+	local hotbarWire = {}
+	for i = 1, 9 do
+		local u = hotbarSlotUuid(profile.hotbar, i)
+		hotbarWire[tostring(i)] = (type(u) == "string" and u ~= "") and u or ""
+	end
+	local bagSlotsWire = {}
+	for i = 1, Types.BAG_SLOT_COUNT do
+		local u = bagSlotUuid(profile.bagSlots, i)
+		bagSlotsWire[tostring(i)] = (type(u) == "string" and u ~= "") and u or ""
+	end
+	local profileWire = table.clone(profile)
+	profileWire.hotbar = hotbarWire
+	profileWire.bagSlots = bagSlotsWire
 	return {
-		profile = profile,
+		profile = profileWire,
 		derived = derived,
 		_seq = seq,
 	}
@@ -1186,6 +1352,9 @@ function DungeonProfileService.PushProfile(player)
 
 	-- Sync per-player energy regen rate
 	EnergyData.setRegenRate(player, payload.derived.combat.energyRegen)
+
+	-- Replicate alignment to all clients via player attribute
+	player:SetAttribute("PlayerAlignment", DungeonProfileService.GetAlignment(player))
 
 	local ok, err = pcall(function()
 		getPushEvent():FireClient(player, payload)
@@ -1374,6 +1543,7 @@ function DungeonProfileService.SalvageGearByUuid(player, itemUuid)
 	ensureHotbar(profile)
 	clearUuidFromHotbar(profile, itemUuid)
 	clearItemUuidFromAllEquipped(profile, itemUuid)
+	clearUuidFromBagSlots(profile, itemUuid)
 
 	profile.inventory[itemUuid] = nil
 
@@ -1392,6 +1562,66 @@ function DungeonProfileService.SalvageGearByUuid(player, itemUuid)
 		grantedQty = scrapQty,
 		wallet = coinsTotal,
 	}
+end
+
+
+local function uuidInChest(profile, uuid)
+	if type(profile.chestSlots) ~= "table" then
+		return false
+	end
+	for i = 1, Types.CHEST_SLOT_COUNT do
+		if profile.chestSlots[i] == uuid then
+			return true
+		end
+	end
+	return false
+end
+
+function DungeonProfileService.ApplyAltarUpgrade(player, altarTier, centerUuid, sacrificeUuids)
+	local profile = DungeonProfileService.Load(player)
+	ensureHotbar(profile)
+	ensureBagSlots(profile)
+	ensureChest(profile)
+
+	if type(centerUuid) ~= "string" or centerUuid == "" then
+		return false, "bad_center"
+	end
+	if type(sacrificeUuids) ~= "table" then
+		return false, "bad_sacrifices"
+	end
+
+	local allUuids = { centerUuid }
+	for _, su in ipairs(sacrificeUuids) do
+		table.insert(allUuids, su)
+	end
+
+	for _, uuid in ipairs(allUuids) do
+		if not profile.inventory[uuid] then
+			return false, "not_owned"
+		end
+		if uuidEquipped(profile, uuid) then
+			return false, "equipped"
+		end
+		if uuidInChest(profile, uuid) then
+			return false, "in_chest"
+		end
+	end
+
+	local okApply, errApply = AltarUpgrade.ApplyUpgrade(profile, altarTier, centerUuid, sacrificeUuids)
+	if not okApply then
+		return false, errApply
+	end
+
+	for _, su in ipairs(sacrificeUuids) do
+		clearUuidFromHotbar(profile, su)
+		clearItemUuidFromAllEquipped(profile, su)
+		clearUuidFromBagSlots(profile, su)
+	end
+
+	StatsService.RecomputeRuntimeHp(profile)
+	DungeonProfileService.PushProfile(player)
+	Hotbar.syncFromProfile(player, profile)
+	return true, nil
 end
 
 DungeonProfileService.SalvageArmorByUuid = DungeonProfileService.SalvageGearByUuid

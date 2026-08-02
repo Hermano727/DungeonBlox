@@ -57,6 +57,7 @@ end
 local evPlace    = makeEvent("DevPlaceSpawner")
 local evDelete   = makeEvent("DevDeleteSpawner")
 local rfList     = makeFunc("DevListSpawners")
+local rfPlaceZone = makeFunc("DevPlaceZone")
 
 local MobDevSpawnStore = require(ServerScriptService:WaitForChild("MobDevSpawnStore"))
 local NpcDevSpawnStore = require(ServerScriptService:WaitForChild("NpcDevSpawnStore"))
@@ -264,6 +265,58 @@ local function makeNpcSpawnerPart(attrs, position, spawnId)
     return part
 end
 
+-------------------------------------------------------------------------
+-- Zone placement helper (shared by RemoteEvent + RemoteFunction)
+-------------------------------------------------------------------------
+
+local function placeZoneFromClientData(data, position)
+	if type(data) ~= "table" then
+		return { ok = false, error = "bad_data" }
+	end
+	if typeof(position) ~= "Vector3" then
+		return { ok = false, error = "bad_position" }
+	end
+	local alignment = data.Alignment
+	if type(alignment) ~= "string" then
+		return { ok = false, error = "bad_alignment" }
+	end
+	local banned = type(data.BannedAlignments) == "table" and data.BannedAlignments or {}
+	local cleanedBanned = {}
+	for _, a in ipairs(banned) do
+		if type(a) == "string" then table.insert(cleanedBanned, a) end
+	end
+	local cleanedPoints = nil
+	if type(data.Points) == "table" then
+		cleanedPoints = {}
+		for _, p in ipairs(data.Points) do
+			if type(p) == "table" then
+				local x = tonumber(p.x)
+				local z = tonumber(p.z)
+				if x and z then
+					table.insert(cleanedPoints, { x = x, z = z })
+				end
+			end
+		end
+		if #cleanedPoints < 3 then
+			cleanedPoints = nil
+		end
+	end
+	local attrs = {
+		name             = type(data.Name) == "string" and data.Name ~= "" and data.Name or nil,
+		alignment        = alignment,
+		bannedAlignments = cleanedBanned,
+		points           = cleanedPoints,
+		radius           = cleanedPoints and nil or (tonumber(data.Radius) or 60),
+		isEliteZone      = data.IsEliteZone == true,
+		eliteMobId       = type(data.EliteMobId) == "string" and data.EliteMobId or "",
+	}
+	local ok, zOrErr = ZoneService.AddZone(attrs, position)
+	if not ok then
+		return { ok = false, error = tostring(zOrErr) }
+	end
+	return { ok = true, zone = zOrErr }
+end
+
 ---------------------------------------------------------------------------
 -- Event handlers
 ---------------------------------------------------------------------------
@@ -328,30 +381,15 @@ evPlace.OnServerEvent:Connect(function(player, data)
         print("[DevService] " .. player.Name .. " placed NPC spawner: " .. npcName .. " (" .. npcType .. ")" .. (spawnId and " (DataStore)" or " (session only)"))
 
     elseif data.SpawnerType == "Zone" then
-        -- Zone placement is owned end-to-end by ZoneService: it persists via
-        -- ZoneDevStore, holds the in-memory registry, and broadcasts the new
-        -- snapshot so every client (including the placer's ZoneDevVisuals)
-        -- renders the cylinder. DevService only validates / forwards.
-        local alignment = data.Alignment
-        if type(alignment) ~= "string" then return end
-        local banned = type(data.BannedAlignments) == "table" and data.BannedAlignments or {}
-        local cleanedBanned = {}
-        for _, a in ipairs(banned) do
-            if type(a) == "string" then table.insert(cleanedBanned, a) end
-        end
-        local attrs = {
-            name             = type(data.Name) == "string" and data.Name ~= "" and data.Name or nil,
-            alignment        = alignment,
-            bannedAlignments = cleanedBanned,
-            radius           = tonumber(data.Radius) or 60,
-        }
-        local ok, zOrErr = ZoneService.AddZone(attrs, position)
-        if not ok then
-            warn("[DevService] Zone add failed: " .. tostring(zOrErr))
+        local result = placeZoneFromClientData(data, position)
+        if not result.ok then
+            warn("[DevService] Zone add failed: " .. tostring(result.error))
             return
         end
-        print(string.format("[DevService] %s placed ZONE %s (%s, r=%d) at %s",
-            player.Name, zOrErr.name, zOrErr.alignment, zOrErr.radius, tostring(position)))
+        local z = result.zone
+        local shapeLabel = z.points and ("poly " .. #z.points .. " pts") or ("r=" .. tostring(z.radius or "?"))
+        print(string.format("[DevService] %s placed ZONE %s (%s, %s) at %s",
+            player.Name, z.name, z.alignment, shapeLabel, tostring(position)))
     end
 end)
 
@@ -425,7 +463,9 @@ rfList.OnServerInvoke = function(player)
     for _, z in ipairs(ZoneService.GetAllZones()) do
         table.insert(out, {
             SpawnerType = "Zone",
-            Label       = string.format("%s [%s r=%d]", z.name, z.alignment, z.radius),
+            Label       = z.points and #z.points >= 3
+                and string.format("%s [%s %d pts%s]", z.name, z.alignment, #z.points, z.isEliteZone and ", elite" or "")
+                or string.format("%s [%s r=%d%s]", z.name, z.alignment, z.radius or 0, z.isEliteZone and ", elite" or ""),
             Position    = z.center,
             Part        = nil,
             SpawnId     = nil,
@@ -499,6 +539,16 @@ rfList.OnServerInvoke = function(player)
     end
 
     return out
+end
+
+rfPlaceZone.OnServerInvoke = function(player, data)
+	if not isDev(player) then
+		return { ok = false, error = "not_dev" }
+	end
+	if type(data) ~= "table" then
+		return { ok = false, error = "bad_data" }
+	end
+	return placeZoneFromClientData(data, data.Position)
 end
 
 task.defer(function()

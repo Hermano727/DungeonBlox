@@ -1,8 +1,10 @@
+local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindConfig"))
 --[[
   BankClient
   Client-side bank GUI + ProximityPrompt interaction.
   Hold E (~0.75s) on the Treasure Chest to open the bank.
-  Deposit / withdraw Coins between wallet and bank.
+  Deposit All moves every Coins item from bags into the spendable wallet.
+  Withdraw opens a center popup and returns wallet coins as inventory items.
   Stash items in chest storage (9×6): unlock extra rows with wallet coins. Inventory strip at the bottom.
 ]]
 
@@ -11,6 +13,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local MenuMouse = require(ReplicatedStorage:WaitForChild("CursorUtils"))
 local UserInputService = game:GetService("UserInputService")
 local Types = require(ReplicatedStorage:WaitForChild("DungeonProfileTypes"))
+local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
 
 local CHEST_SLOT_COUNT = Types.CHEST_SLOT_COUNT
 local CHEST_COLS = Types.CHEST_GRID_COLUMNS
@@ -187,45 +190,19 @@ bankLabel.Font = Enum.Font.GothamMedium
 bankLabel.TextSize = 12
 bankLabel.TextXAlignment = Enum.TextXAlignment.Center
 bankLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
-bankLabel.Text = "Banked: 0 Coins"
+bankLabel.Text = "In bags: 0 Coins"
 bankLabel.ZIndex = 3
 bankLabel.Parent = coinColumn
-
-local amountBox = Instance.new("TextBox")
-amountBox.Name = "AmountInput"
-amountBox.Size = UDim2.new(1, -4, 0, 28)
-amountBox.LayoutOrder = 3
-amountBox.BackgroundColor3 = Color3.fromRGB(18, 14, 14)
-amountBox.BorderSizePixel = 0
-amountBox.Font = Enum.Font.GothamMedium
-amountBox.TextSize = 14
-amountBox.TextColor3 = Color3.new(1, 1, 1)
-amountBox.TextXAlignment = Enum.TextXAlignment.Center
-amountBox.PlaceholderText = "Amount"
-amountBox.PlaceholderColor3 = Color3.fromRGB(120, 100, 100)
-amountBox.Text = ""
-amountBox.ClearTextOnFocus = false
-amountBox.ZIndex = 4
-amountBox.Parent = coinColumn
-
-local amountBoxCorner = Instance.new("UICorner")
-amountBoxCorner.CornerRadius = UDim.new(0, 6)
-amountBoxCorner.Parent = amountBox
-
-local amountBoxStroke = Instance.new("UIStroke")
-amountBoxStroke.Thickness = 1
-amountBoxStroke.Color = Color3.fromRGB(90, 70, 70)
-amountBoxStroke.Parent = amountBox
 
 local depositBtn = Instance.new("TextButton")
 depositBtn.Name = "DepositBtn"
 depositBtn.Size = UDim2.new(1, -4, 0, 30)
-depositBtn.LayoutOrder = 4
+depositBtn.LayoutOrder = 3
 depositBtn.BackgroundColor3 = Color3.fromRGB(40, 80, 40)
 depositBtn.Font = Enum.Font.GothamBold
 depositBtn.TextSize = 13
 depositBtn.TextColor3 = Color3.new(1, 1, 1)
-depositBtn.Text = "Deposit"
+depositBtn.Text = "Deposit All"
 depositBtn.ZIndex = 4
 depositBtn.Parent = coinColumn
 
@@ -236,7 +213,7 @@ depositBtnCorner.Parent = depositBtn
 local withdrawBtn = Instance.new("TextButton")
 withdrawBtn.Name = "WithdrawBtn"
 withdrawBtn.Size = UDim2.new(1, -4, 0, 30)
-withdrawBtn.LayoutOrder = 5
+withdrawBtn.LayoutOrder = 4
 withdrawBtn.BackgroundColor3 = Color3.fromRGB(80, 40, 40)
 withdrawBtn.Font = Enum.Font.GothamBold
 withdrawBtn.TextSize = 13
@@ -249,11 +226,155 @@ local withdrawBtnCorner = Instance.new("UICorner")
 withdrawBtnCorner.CornerRadius = UDim.new(0, 6)
 withdrawBtnCorner.Parent = withdrawBtn
 
+local withdrawOverlay = Instance.new('Frame')
+withdrawOverlay.Name = 'WithdrawOverlay'
+withdrawOverlay.Size = UDim2.fromScale(1, 1)
+withdrawOverlay.BackgroundColor3 = Color3.new(0, 0, 0)
+withdrawOverlay.BackgroundTransparency = 0.45
+withdrawOverlay.BorderSizePixel = 0
+withdrawOverlay.Visible = false
+withdrawOverlay.ZIndex = 30
+withdrawOverlay.Active = true
+withdrawOverlay.Parent = screenGui
+
+local withdrawModal = Instance.new('Frame')
+withdrawModal.Name = 'WithdrawModal'
+withdrawModal.AnchorPoint = Vector2.new(0.5, 0.5)
+withdrawModal.Position = UDim2.fromScale(0.5, 0.5)
+withdrawModal.Size = UDim2.fromOffset(340, 250)
+withdrawModal.BackgroundColor3 = Color3.fromRGB(34, 26, 26)
+withdrawModal.BorderSizePixel = 0
+withdrawModal.ZIndex = 31
+withdrawModal.Parent = withdrawOverlay
+
+local withdrawModalCorner = Instance.new('UICorner')
+withdrawModalCorner.CornerRadius = UDim.new(0, 12)
+withdrawModalCorner.Parent = withdrawModal
+
+local withdrawModalStroke = Instance.new('UIStroke')
+withdrawModalStroke.Thickness = 1
+withdrawModalStroke.Color = Color3.fromRGB(90, 70, 70)
+withdrawModalStroke.Parent = withdrawModal
+
+local withdrawTitle = Instance.new('TextLabel')
+withdrawTitle.BackgroundTransparency = 1
+withdrawTitle.Position = UDim2.new(0, 16, 0, 14)
+withdrawTitle.Size = UDim2.new(1, -32, 0, 28)
+withdrawTitle.Font = Enum.Font.GothamBold
+withdrawTitle.TextSize = 20
+withdrawTitle.TextColor3 = Color3.new(1, 1, 1)
+withdrawTitle.Text = 'Withdraw Coins'
+withdrawTitle.ZIndex = 32
+withdrawTitle.Parent = withdrawModal
+
+local withdrawCoinIcon = Instance.new('ImageLabel')
+withdrawCoinIcon.BackgroundTransparency = 1
+withdrawCoinIcon.Position = UDim2.new(0.5, -28, 0, 52)
+withdrawCoinIcon.Size = UDim2.fromOffset(56, 56)
+withdrawCoinIcon.Image = ItemDefinitions.GetIcon('Coins')
+withdrawCoinIcon.ZIndex = 32
+withdrawCoinIcon.Parent = withdrawModal
+
+local withdrawAmountLabel = Instance.new('TextLabel')
+withdrawAmountLabel.BackgroundTransparency = 1
+withdrawAmountLabel.Position = UDim2.new(0, 16, 0, 108)
+withdrawAmountLabel.Size = UDim2.new(1, -32, 0, 22)
+withdrawAmountLabel.Font = Enum.Font.GothamMedium
+withdrawAmountLabel.TextSize = 14
+withdrawAmountLabel.TextWrapped = true
+withdrawAmountLabel.TextColor3 = Color3.fromRGB(255, 215, 100)
+withdrawAmountLabel.Text = 'Wallet: 0 Coins'
+withdrawAmountLabel.ZIndex = 32
+withdrawAmountLabel.Parent = withdrawModal
+
+local withdrawInputRow = Instance.new('Frame')
+withdrawInputRow.Name = 'WithdrawInputRow'
+withdrawInputRow.BackgroundTransparency = 1
+withdrawInputRow.Position = UDim2.new(0, 16, 0, 136)
+withdrawInputRow.Size = UDim2.new(1, -32, 0, 34)
+withdrawInputRow.ZIndex = 32
+withdrawInputRow.Parent = withdrawModal
+
+local withdrawInputLayout = Instance.new('UIListLayout')
+withdrawInputLayout.FillDirection = Enum.FillDirection.Horizontal
+withdrawInputLayout.SortOrder = Enum.SortOrder.LayoutOrder
+withdrawInputLayout.Padding = UDim.new(0, 8)
+withdrawInputLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+withdrawInputLayout.Parent = withdrawInputRow
+
+local withdrawAmountBox = Instance.new('TextBox')
+withdrawAmountBox.Name = 'WithdrawAmountBox'
+withdrawAmountBox.LayoutOrder = 1
+withdrawAmountBox.Size = UDim2.fromOffset(236, 34)
+withdrawAmountBox.BackgroundColor3 = Color3.fromRGB(18, 14, 14)
+withdrawAmountBox.BorderSizePixel = 0
+withdrawAmountBox.Font = Enum.Font.GothamMedium
+withdrawAmountBox.TextSize = 14
+withdrawAmountBox.TextColor3 = Color3.new(1, 1, 1)
+withdrawAmountBox.PlaceholderText = 'Amount'
+withdrawAmountBox.PlaceholderColor3 = Color3.fromRGB(120, 100, 100)
+withdrawAmountBox.Text = ''
+withdrawAmountBox.ClearTextOnFocus = false
+withdrawAmountBox.ZIndex = 33
+withdrawAmountBox.Parent = withdrawInputRow
+Instance.new('UICorner', withdrawAmountBox).CornerRadius = UDim.new(0, 6)
+local withdrawAmountBoxStroke = Instance.new('UIStroke')
+withdrawAmountBoxStroke.Thickness = 1
+withdrawAmountBoxStroke.Color = Color3.fromRGB(90, 70, 70)
+withdrawAmountBoxStroke.Parent = withdrawAmountBox
+
+local withdrawFillAllBtn = Instance.new('TextButton')
+withdrawFillAllBtn.Name = 'WithdrawFillAllBtn'
+withdrawFillAllBtn.LayoutOrder = 2
+withdrawFillAllBtn.Size = UDim2.fromOffset(64, 34)
+withdrawFillAllBtn.BackgroundColor3 = Color3.fromRGB(55, 70, 95)
+withdrawFillAllBtn.Font = Enum.Font.GothamBold
+withdrawFillAllBtn.TextSize = 13
+withdrawFillAllBtn.TextColor3 = Color3.new(1, 1, 1)
+withdrawFillAllBtn.Text = 'All'
+withdrawFillAllBtn.ZIndex = 33
+withdrawFillAllBtn.Parent = withdrawInputRow
+Instance.new('UICorner', withdrawFillAllBtn).CornerRadius = UDim.new(0, 6)
+
+local withdrawConfirmBtn = Instance.new('TextButton')
+withdrawConfirmBtn.Name = 'ConfirmWithdraw'
+withdrawConfirmBtn.Position = UDim2.new(0, 16, 1, -52)
+withdrawConfirmBtn.Size = UDim2.new(0.5, -20, 0, 36)
+withdrawConfirmBtn.BackgroundColor3 = Color3.fromRGB(80, 40, 40)
+withdrawConfirmBtn.Font = Enum.Font.GothamBold
+withdrawConfirmBtn.TextSize = 14
+withdrawConfirmBtn.TextColor3 = Color3.new(1, 1, 1)
+withdrawConfirmBtn.Text = 'Withdraw'
+withdrawConfirmBtn.ZIndex = 32
+withdrawConfirmBtn.Parent = withdrawModal
+
+local withdrawConfirmCorner = Instance.new('UICorner')
+withdrawConfirmCorner.CornerRadius = UDim.new(0, 8)
+withdrawConfirmCorner.Parent = withdrawConfirmBtn
+
+local withdrawCancelBtn = Instance.new('TextButton')
+withdrawCancelBtn.Name = 'CancelWithdraw'
+withdrawCancelBtn.Position = UDim2.new(0.5, 4, 1, -52)
+withdrawCancelBtn.Size = UDim2.new(0.5, -20, 0, 36)
+withdrawCancelBtn.BackgroundColor3 = Color3.fromRGB(55, 45, 45)
+withdrawCancelBtn.Font = Enum.Font.GothamBold
+withdrawCancelBtn.TextSize = 14
+withdrawCancelBtn.TextColor3 = Color3.fromRGB(220, 200, 200)
+withdrawCancelBtn.Text = 'Cancel'
+withdrawCancelBtn.ZIndex = 32
+withdrawCancelBtn.Parent = withdrawModal
+
+local withdrawCancelCorner = Instance.new('UICorner')
+withdrawCancelCorner.CornerRadius = UDim.new(0, 8)
+withdrawCancelCorner.Parent = withdrawCancelBtn
+
+-- END_WITHDRAW_OVERLAY
+
 local statusLabel = Instance.new("TextLabel")
 statusLabel.Name = "StatusLabel"
 statusLabel.BackgroundTransparency = 1
 statusLabel.Size = UDim2.new(1, 0, 0, 44)
-statusLabel.LayoutOrder = 6
+statusLabel.LayoutOrder = 5
 statusLabel.Font = Enum.Font.GothamMedium
 statusLabel.TextSize = 11
 statusLabel.TextWrapped = true
@@ -561,9 +682,9 @@ hintLabel.Parent = panel
 -- State
 ---------------------------------------------------------------------------
 
-local function updateDisplay(wallet, bank)
+local function updateDisplay(wallet, inventoryCoins)
 	walletLabel.Text = string.format("Wallet: %d Coins", wallet)
-	bankLabel.Text = string.format("Banked: %d Coins", bank)
+	bankLabel.Text = string.format('In bags: %d Coins', inventoryCoins)
 end
 
 local function showStatus(text, isError)
@@ -581,16 +702,34 @@ local function showStatus(text, isError)
 end
 
 local function itemDisplayName(item)
-	if type(item) ~= "table" then
-		return "Item"
+	if type(item) ~= 'table' then
+		return 'Item'
 	end
-	if item.name and item.name ~= "" then
-		return item.name
+	local name = 'Item'
+	if item.name and item.name ~= '' then
+		name = item.name
+	elseif type(item.itemId) == 'string' and item.itemId ~= '' then
+		local def = ItemDefinitions.Get(item.itemId)
+		name = (def and def.DisplayName) or item.itemId
 	end
-	if item.itemId and item.itemId ~= "" then
-		return item.itemId
+	local count = math.floor(tonumber(item.count) or 1)
+	if type(item.itemId) == 'string' and ItemDefinitions.IsStackable(item.itemId) and count > 1 then
+		return string.format('%s (x%d)', name, count)
 	end
-	return "Item"
+	return name
+end
+
+local function countInventoryCoins(profile)
+	local total = 0
+	if type(profile) ~= 'table' or type(profile.inventory) ~= 'table' then
+		return 0
+	end
+	for _, it in pairs(profile.inventory) do
+		if type(it) == 'table' and it.itemId == 'Coins' then
+			total = total + math.max(0, math.floor(tonumber(it.count) or 1))
+		end
+	end
+	return total
 end
 
 local function collectStashCandidates(profile)
@@ -624,7 +763,7 @@ local function syncBalances()
 		return rfBankSync:InvokeServer()
 	end)
 	if ok and type(result) == "table" then
-		updateDisplay(result.wallet or 0, result.bank or 0)
+		updateDisplay(result.wallet or 0, result.inventoryCoins or 0)
 	end
 end
 
@@ -755,12 +894,12 @@ end
 
 local function refreshBagList()
 	for _, ch in ipairs(bagScroll:GetChildren()) do
-		if ch:IsA("TextButton") then
+		if ch:IsA('TextButton') then
 			ch:Destroy()
 		end
 	end
 	local snap = DungeonMenuNet.getLastSnapshot()
-	if not snap or type(snap.profile) ~= "table" then
+	if not snap or type(snap.profile) ~= 'table' then
 		return
 	end
 	local list = collectStashCandidates(snap.profile)
@@ -768,8 +907,8 @@ local function refreshBagList()
 	for _, row in ipairs(list) do
 		local uuid = row.uuid
 		local item = row.item
-		local btn = Instance.new("TextButton")
-		btn.Name = "Bag_" .. uuid
+		local btn = Instance.new('TextButton')
+		btn.Name = 'Bag_' .. uuid
 		btn.Size = UDim2.fromOffset(176, 40)
 		btn.LayoutOrder = lo
 		lo = lo + 1
@@ -781,10 +920,24 @@ local function refreshBagList()
 		btn.Text = itemDisplayName(item)
 		btn.TextColor3 = Types.GetRarityColor(item.rarity)
 		btn.ZIndex = 4
-		local corner = Instance.new("UICorner")
+		local iconId = (type(item.itemId) == 'string') and ItemDefinitions.GetIcon(item.itemId) or nil
+		if type(iconId) == 'string' and iconId ~= '' then
+			btn.TextXAlignment = Enum.TextXAlignment.Left
+			local pad = Instance.new('UIPadding')
+			pad.PaddingLeft = UDim.new(0, 36)
+			pad.Parent = btn
+			local icon = Instance.new('ImageLabel')
+			icon.BackgroundTransparency = 1
+			icon.Size = UDim2.fromOffset(28, 28)
+			icon.Position = UDim2.new(0, 4, 0.5, -14)
+			icon.Image = iconId
+			icon.ZIndex = 5
+			icon.Parent = btn
+		end
+		local corner = Instance.new('UICorner')
 		corner.CornerRadius = UDim.new(0, 6)
 		corner.Parent = btn
-		local stroke = Instance.new("UIStroke")
+		local stroke = Instance.new('UIStroke')
 		stroke.Thickness = (selectedUuid == uuid) and 2 or 1
 		stroke.Color = (selectedUuid == uuid) and Color3.fromRGB(80, 200, 120) or Color3.fromRGB(55, 45, 45)
 		stroke.Parent = btn
@@ -799,9 +952,10 @@ end
 
 local function applyWalletLabelFromSnapshot()
 	local snap = DungeonMenuNet.getLastSnapshot()
-	if snap and snap.profile and snap.profile.currencies then
-		local c = math.floor(tonumber(snap.profile.currencies.Coins) or 0)
-		walletLabel.Text = string.format("Wallet: %d Coins", c)
+	if snap and snap.profile then
+		local c = math.floor(tonumber(snap.profile.currencies and snap.profile.currencies.Coins) or 0)
+		local bags = countInventoryCoins(snap.profile)
+		updateDisplay(c, bags)
 	end
 end
 
@@ -890,13 +1044,13 @@ local function setOpen(v)
 	if v then
 		MenuMouse.acquire()
 		statusLabel.Text = ""
-		amountBox.Text = ""
 		selectedUuid = nil
 		syncBalances()
 		refreshChestBankUi()
 	else
 		MenuMouse.release()
 		selectedUuid = nil
+		withdrawOverlay.Visible = false
 	end
 end
 
@@ -918,7 +1072,6 @@ closeAndReopenBankAfterUnlock = function()
 		screenGui.Enabled = true
 		MenuMouse.acquire()
 		statusLabel.Text = ""
-		amountBox.Text = ""
 		selectedUuid = nil
 		syncBalances()
 		refreshChestBankUi()
@@ -930,63 +1083,91 @@ end
 -- Button handlers
 ---------------------------------------------------------------------------
 
-local function doBankAction(action)
-	local raw = amountBox.Text
-	local amount = tonumber(raw)
-	if not amount or amount <= 0 or math.floor(amount) ~= amount then
-		showStatus("Enter a valid whole number", true)
-		return
-	end
-
+local function doDepositAll()
 	local ok, result = pcall(function()
-		return rfBankRequest:InvokeServer({ action = action, amount = amount })
+		return rfBankRequest:InvokeServer({ action = 'DepositAll' })
 	end)
-
-	if not ok then
-		showStatus("Server error – try again", true)
-		return
-	end
-
-	if type(result) ~= "table" then
-		showStatus("Unexpected response", true)
-		return
-	end
-
+	if not ok then showStatus('Server error - try again', true) return end
+	if type(result) ~= 'table' then showStatus('Unexpected response', true) return end
 	if result.ok then
-		updateDisplay(result.wallet, result.bank)
-		amountBox.Text = ""
-		if action == "Deposit" then
-			showStatus(string.format("Deposited %d Coins", amount), false)
-		else
-			showStatus(string.format("Withdrew %d Coins", amount), false)
-		end
+		updateDisplay(result.wallet or 0, result.inventoryCoins or 0)
+		DungeonMenuNet.requestSync()
+		refreshChestBankUiFromCache()
+		showStatus(string.format('Deposited %d Coins to wallet', result.amount or 0), false)
 	else
-		local err = result.err or "unknown"
-		if err == "insufficient_wallet" then
-			showStatus("Not enough Coins in wallet", true)
-		elseif err == "insufficient_bank" then
-			showStatus("Not enough Coins in bank", true)
-		elseif err == "invalid_amount" then
-			showStatus("Invalid amount", true)
-		elseif err == "throttled" then
-			showStatus("Too fast – wait a moment", true)
-		else
-			showStatus("Error: " .. err, true)
-		end
+		local err = result.err or 'unknown'
+		if err == 'no_coins_in_bags' then showStatus('No coins in your bags', true)
+		elseif err == 'throttled' then showStatus('Too fast - wait a moment', true)
+		else showStatus('Error: ' .. err, true) end
 	end
 end
 
-depositBtn.Activated:Connect(function()
-	doBankAction("Deposit")
-end)
+local function getWalletCoinBalance()
+	local snap = DungeonMenuNet.getLastSnapshot()
+	if snap and snap.profile and snap.profile.currencies then
+		return math.floor(tonumber(snap.profile.currencies.Coins) or 0)
+	end
+	return 0
+end
 
-withdrawBtn.Activated:Connect(function()
-	doBankAction("Withdraw")
-end)
+local function hideWithdrawPopup()
+	withdrawOverlay.Visible = false
+	withdrawAmountBox.Text = ''
+end
 
----------------------------------------------------------------------------
--- Close handlers
----------------------------------------------------------------------------
+local function showWithdrawPopup()
+	local wallet = getWalletCoinBalance()
+	withdrawAmountLabel.Text = string.format('Wallet: %d Coins', wallet)
+	withdrawAmountBox.Text = ''
+	withdrawConfirmBtn.Active = wallet > 0
+	withdrawConfirmBtn.AutoButtonColor = wallet > 0
+	withdrawFillAllBtn.Active = wallet > 0
+	withdrawFillAllBtn.AutoButtonColor = wallet > 0
+	withdrawOverlay.Visible = true
+end
+
+local function applyWithdrawResult(result)
+	updateDisplay(result.wallet or 0, result.inventoryCoins or 0)
+	DungeonMenuNet.requestSync()
+	refreshChestBankUiFromCache()
+	hideWithdrawPopup()
+	showStatus(string.format('Withdrew %d Coins to your bags', result.amount or 0), false)
+end
+
+local function doWithdrawAmount(amount)
+	amount = math.floor(tonumber(amount) or 0)
+	if amount <= 0 then
+		showStatus('Enter a valid whole number', true)
+		return
+	end
+	local ok, result = pcall(function()
+		return rfBankRequest:InvokeServer({ action = 'Withdraw', amount = amount })
+	end)
+	if not ok then showStatus('Server error - try again', true) return end
+	if type(result) ~= 'table' then showStatus('Unexpected response', true) return end
+	if result.ok then
+		applyWithdrawResult(result)
+	else
+		local err = result.err or 'unknown'
+		if err == 'empty_wallet' or err == 'insufficient_wallet' then showStatus('Not enough coins in wallet', true)
+		elseif err == 'invalid_amount' then showStatus('Enter a valid whole number', true)
+		elseif err == 'throttled' then showStatus('Too fast - wait a moment', true)
+		else showStatus('Error: ' .. err, true) end
+	end
+end
+
+depositBtn.Activated:Connect(function() doDepositAll() end)
+withdrawBtn.Activated:Connect(function() showWithdrawPopup() end)
+withdrawCancelBtn.Activated:Connect(function() hideWithdrawPopup() end)
+withdrawFillAllBtn.Activated:Connect(function()
+	local wallet = getWalletCoinBalance()
+	if wallet > 0 then
+		withdrawAmountBox.Text = tostring(wallet)
+	end
+end)
+withdrawConfirmBtn.Activated:Connect(function()
+	doWithdrawAmount(withdrawAmountBox.Text)
+end)
 
 local function clickShouldCloseBankUIAt(screenX, screenY)
 	if not open or not screenGui.Enabled then
@@ -1032,7 +1213,7 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 		return
 	end
 
-	if input.KeyCode == Enum.KeyCode.Escape then
+	if input.KeyCode == Keys.CloseMenu then
 		if UserInputService:GetFocusedTextBox() ~= nil then
 			return
 		end

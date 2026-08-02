@@ -7,7 +7,6 @@ MobClass.__index = MobClass
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerStorage = game:GetService("ServerStorage")
-local PathfindingService = game:GetService("PathfindingService")
 local PhysicsService = game:GetService("PhysicsService")
 local Players = game:GetService("Players")
 
@@ -30,29 +29,27 @@ local function ensureMobCollisionGroup()
 	end)
 end
 
-local MOB_SEPARATION_RADIUS = 5
-local MOB_BOUNCE_STRENGTH = 10
-local KNOCKBACK_BASE_FORCE     = 6    -- horizontal studs/s impulse at KnockbackMultiplier 1.0
-local KNOCKBACK_VERTICAL_FORCE = 1  -- upward studs/s component (slight hop)
-local KNOCKBACK_STUN_DURATION  = 0.3  -- seconds WalkSpeed is suppressed after a hit
--- Light lateral offset so mobs do not walk in a perfectly straight line;
--- kept small so approach paths stay mostly direct.
-local MOVE_STRAFE_MIN_DURATION = 0.9
-local MOVE_STRAFE_MAX_DURATION = 1.8
-local MOVE_STRAFE_MIN = 0.25
-local MOVE_STRAFE_MAX = 1.0
--- Rhythmic hops while walking (only when MobData JumpHeight > 0).
-local MOVE_JUMP_INTERVAL_MIN = 0.32
-local MOVE_JUMP_INTERVAL_MAX = 0.5
-local MOVE_JUMP_FORWARD_SPEED_MIN = 8
-local MOVE_JUMP_FORWARD_SPEED_MAX = 22
--- Humanoid jump capability for engine physics; MobData JumpHeight only gates scripted hops.
-local DEFAULT_HUMANOID_JUMP_HEIGHT = 7.2
+-- Simple v1 AI: direct CFrame stepping each tick (no Humanoid:MoveTo, no
+-- AssemblyLinearVelocity locomotion, no PathfindingService). Every attempt
+-- to drive movement through Humanoid's native walk controller in this
+-- project ran into a different engine quirk (MoveDirection never populating
+-- for AI, MoveTo restarting its controller when reissued, periodic reissue
+-- causing velocity overshoot). Setting position and facing directly via
+-- Model:PivotTo() is the one approach that tested perfectly smooth with zero
+-- jitter, so that is the only movement mechanism here.
+local KNOCKBACK_DISTANCE = 0.6 -- studs, one-time positional nudge away from attacker (~20% of original 3)
+local ATTACK_RANGE_LEEWAY = 1.3 -- multiplier before giving up attack range and resuming walk
+local MOB_COLLISION_RADIUS = 3 -- studs; mobs push apart instead of overlapping
+local LEASH_GRACE_DURATION = 1.0 -- seconds a mob may stay aggro'd past ReturnDistance if still close to the target
+local LEASH_GRACE_PROXIMITY = 12 -- studs; "physically close enough" to ignore the leash during the grace window
+local PLAYER_HIT_KNOCKBACK_HORIZONTAL = 4 -- studs/s impulse added to the player on being hit
+local PLAYER_HIT_KNOCKBACK_VERTICAL = 8 -- studs/s upward impulse -- a small hop, just enough to interrupt movement
 
 ensureMobCollisionGroup()
 
 local MobData = require(ReplicatedStorage:WaitForChild("MobData"))
 local DamageService = require(script.Parent:WaitForChild("DamageService"))
+local MobAnimController = require(script.Parent:WaitForChild("MobAnimController"))
 
 -- Counter for generating unique IDs
 local mobIdCounter = 0
@@ -62,14 +59,16 @@ local HP_BAR_COLOR_FULL = Color3.fromRGB(0, 255, 0)    -- Green at full health
 local HP_BAR_COLOR_MID = Color3.fromRGB(255, 255, 0)     -- Yellow at half health
 local HP_BAR_COLOR_LOW = Color3.fromRGB(255, 0, 0)      -- Red at low health
 
--- Constructor
-function MobClass.new(mobId, spawnPosition, spawnerRef, level)
-    local self = setmetatable({}, MobClass)
-
+-- Constructor. `class` lets a subclass (e.g. HoppingMobClass) reuse all of
+-- this initialization while registering instances under its own metatable,
+-- so self:Move(...) and friends resolve to the subclass's overrides first.
+function MobClass.new(mobId, spawnPosition, spawnerRef, level, class)
+    local self = setmetatable({}, class or MobClass)
+    
     -- Generate unique ID
     mobIdCounter = mobIdCounter + 1
     self.UID = "Mob_" .. tostring(mobIdCounter)
-
+    
     -- Get base mob stats
     local baseStats, tier = MobData.FindMobById(mobId)
     if not baseStats then
@@ -85,7 +84,7 @@ function MobClass.new(mobId, spawnPosition, spawnerRef, level)
 
     self.Stats = statsCopy
     self.Tier = tier
-
+    
     self.MobID = mobId
     self.SpawnPosition = spawnPosition
     self.SpawnerRef = spawnerRef
@@ -97,39 +96,36 @@ function MobClass.new(mobId, spawnPosition, spawnerRef, level)
 
     -- Level scaling
     local levelMultiplier = 1 + (self.Level * 0.1)
-
+    
     -- Health tracking
     self.MaxHealth = math.floor(self.Stats.BaseHP * levelMultiplier)
     self.CurrentHealth = self.MaxHealth
 
     -- Scale outgoing damage
     self.Stats.BaseDamage = math.floor(self.Stats.BaseDamage * levelMultiplier)
-
+    
     -- Damage tracking for loot distribution
     self.DamageTracker = {}
-
-    -- AI state
+    
+    -- AI state: Idle -> Walking -> Attacking, and back to Idle when the
+    -- target is lost/dead/out of leash range. No "Returning" state in v1 --
+    -- losing the target just goes straight back to Idle in place.
     self.AIState = "Idle"
     self.TargetPlayer = nil
     self.LastAttackTime = 0
-    self.AttackStateEnteredAt = 0
-    self.Path = nil
-    self.CurrentWaypointIndex = 1
-    self.LastPathTime = 0
-    self.MovementTimer = 0
-    self.StrafeDirection = math.random() < 0.5 and -1 or 1
-    self.StrafeMagnitude = math.random() * (MOVE_STRAFE_MAX - MOVE_STRAFE_MIN) + MOVE_STRAFE_MIN
-    self.NextStrafeChange = 0
-    self._nextMovementJumpAt = 0
+    self._feetToRootHeight = 0
+    self.IsSpawnStunned = false
+    self.IsInvulnerable = false
 
     -- Clone and setup visual model
     self.Model = self:SpawnModel()
     if not self.Model then
         return nil
     end
-
+    
     -- Create HP bar above mob
     self.HPBar = self:CreateHPBar()
+    MobAnimController.attach(self)
 
     return self
 end
@@ -147,24 +143,71 @@ function MobClass:SpawnModel()
         warn("MobClass: Model not found for MobID: " .. self.MobID)
         return nil
     end
-
+    
     local model = modelTemplate:Clone()
     model.Name = self.UID
     model:SetAttribute("MobUID", self.UID)
     model:SetAttribute("MobID", self.MobID)
     model:SetAttribute("MobLevel", self.Level)
-
-    -- Position the model
+    
+    -- Position the model: raycast down to find the real walkable surface
+    -- below the spawn point and rest the model's own geometry on top of it,
+    -- rather than trusting the spawn marker's raw Y (which is often a flat
+    -- trigger volume sitting at/near ground level, not at character height).
     if model:IsA("Model") then
-        model:PivotTo(CFrame.new(self.SpawnPosition))
+        self._feetToRootHeight = self:GetFeetToRootHeight(model) or 0
+        local groundedPosition = self:ResolveGroundedSpawnPosition(model, self.SpawnPosition)
+        self.SpawnPosition = groundedPosition
+        model:PivotTo(CFrame.new(groundedPosition))
     elseif model:IsA("BasePart") then
         model.Position = self.SpawnPosition
     end
-
+    
     self:ConfigureModel(model)
     model.Parent = workspace
-
+    
     return model
+end
+
+-- Height from the model's true geometric bottom (feet) up to its
+-- PrimaryPart, measured on the model in its current pose (translation does
+-- not affect this, so it is safe to call before or after positioning).
+function MobClass:GetFeetToRootHeight(model)
+    local primaryPart = model.PrimaryPart or model:FindFirstChild("HumanoidRootPart")
+    if not primaryPart then
+        return nil
+    end
+
+    local boxCFrame, boxSize = model:GetBoundingBox()
+    local bottomY = boxCFrame.Position.Y - (boxSize.Y / 2)
+    return primaryPart.Position.Y - bottomY
+end
+
+-- Raycast straight down from above `position` to find the nearest surface,
+-- then return a position with the model's feet resting exactly on it (a
+-- small drop from there is fine -- gravity will settle it the rest of the
+-- way once Humanoid.HipHeight, set in ConfigureModel, is correct).
+-- Falls back to `position` unchanged if nothing is hit (e.g. a void).
+function MobClass:ResolveGroundedSpawnPosition(model, position)
+    local feetToRootHeight = self._feetToRootHeight
+    if not feetToRootHeight then
+        return position
+    end
+
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    rayParams.FilterDescendantsInstances = {model}
+
+    local hit = workspace:Raycast(
+        position + Vector3.new(0, 50, 0),
+        Vector3.new(0, -150, 0),
+        rayParams
+    )
+    if not hit then
+        return position
+    end
+
+    return Vector3.new(hit.Position.X, hit.Position.Y + feetToRootHeight, hit.Position.Z)
 end
 
 function MobClass:ConfigureModel(model)
@@ -183,6 +226,20 @@ function MobClass:ConfigureModel(model)
     end
 
     if humanoid then
+        -- Roblox's own ground-following controller hovers HumanoidRootPart
+        -- at HipHeight above whatever surface it detects. If HipHeight does
+        -- not match this rig's real feet-to-root distance (common after an
+        -- R6->R15 conversion, since the default/imported value is rarely
+        -- right), the engine itself will sink or float the visual mesh
+        -- relative to the ground every physics step, independent of how
+        -- accurately we place it at spawn -- and a mis-grounded Humanoid can
+        -- also fail to settle into the Running state, which is why the walk
+        -- animation stops firing along with the sinking.
+        local feetToRootHeight = rootPart and self:GetFeetToRootHeight(model)
+        if feetToRootHeight then
+            humanoid.HipHeight = feetToRootHeight
+        end
+
         self:SyncHumanoidLocomotionStats(humanoid)
         humanoid.AutoRotate = false
         humanoid.PlatformStand = false
@@ -190,6 +247,10 @@ function MobClass:ConfigureModel(model)
         humanoid.RequiresNeck = false
         humanoid.AutoJumpEnabled = false
         humanoid.BreakJointsOnDeath = false
+        -- Suppress Roblox's built-in floating name/health display -- the
+        -- model is named after self.UID (e.g. "Mob_1"), and without this it
+        -- shows up as a second nametag stacked under our custom HPBar.
+        humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
 
         for _, state in ipairs({
             Enum.HumanoidStateType.FallingDown,
@@ -220,40 +281,122 @@ function MobClass:ConfigureModel(model)
     end
 end
 
-function MobClass:TryOrientModelYawToward(worldPoint)
-    if not self.Model or not worldPoint then
-        return
+-- Raycast straight down from above (x, z) to find the nearest surface.
+-- Falls back to fallbackY (unchanged) if nothing is hit, e.g. a void --
+-- never let a momentary missed raycast yank the mob's height around.
+function MobClass:FindGroundY(x, z, fallbackY)
+    if not self.Model then
+        return fallbackY
     end
 
-    local primaryPart = self.Model.PrimaryPart or self.Model:FindFirstChildWhichIsA("BasePart")
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    rayParams.FilterDescendantsInstances = {self.Model}
+
+    local hit = workspace:Raycast(
+        Vector3.new(x, fallbackY + 10, z),
+        Vector3.new(0, -50, 0),
+        rayParams
+    )
+    if hit then
+        return hit.Position.Y
+    end
+    return fallbackY
+end
+
+-- Rotate in place to face a world point, without moving. Used while
+-- attacking (face the target, do not walk into it).
+function MobClass:FaceToward(worldPoint)
+    if not self.Model then
+        return
+    end
+    local primaryPart = self.Model.PrimaryPart
     if not primaryPart then
         return
     end
 
     local pos = primaryPart.Position
     local flat = Vector3.new(worldPoint.X - pos.X, 0, worldPoint.Z - pos.Z)
-    if flat.Magnitude < 0.2 then
+    if flat.Magnitude < 0.1 then
         return
     end
 
-    local lookAt = Vector3.new(worldPoint.X, pos.Y, worldPoint.Z)
-    local faceCF = CFrame.lookAt(pos, lookAt)
-    local _, yaw, _ = faceCF:ToEulerAnglesYXZ()
-
-    primaryPart.AssemblyAngularVelocity = Vector3.zero
-    self.Model:PivotTo(CFrame.new(pos) * CFrame.Angles(0, yaw, 0))
+    self.Model:PivotTo(CFrame.lookAt(pos, Vector3.new(worldPoint.X, pos.Y, worldPoint.Z)))
 end
 
-function MobClass:UpdateCombatFacing()
-    if self.AIState == "Chasing" or self.AIState == "Attacking" then
-        if self.TargetPlayer and self.TargetPlayer.Character then
-            local hrp = self.TargetPlayer.Character:FindFirstChild("HumanoidRootPart")
-            if hrp then
-                self:TryOrientModelYawToward(hrp.Position)
+-- Simple anti-collision: nudge a desired (x, z) away from any other alive
+-- mob closer than MOB_COLLISION_RADIUS, so mobs converging on the same
+-- target push apart instead of fighting for the same spot every frame.
+-- Reads self._activeMobsRef, set once per tick by UpdateAI.
+function MobClass:ResolveMobSeparation(x, z)
+    local activeMobs = self._activeMobsRef
+    if not activeMobs then
+        return x, z
+    end
+
+    local pushX, pushZ = 0, 0
+    for _, otherMob in pairs(activeMobs) do
+        if otherMob ~= self and otherMob.IsAlive and otherMob:IsAlive() and otherMob.Model then
+            local otherPart = otherMob.Model.PrimaryPart
+            if otherPart then
+                local dx = x - otherPart.Position.X
+                local dz = z - otherPart.Position.Z
+                local dist = math.sqrt(dx * dx + dz * dz)
+                if dist > 0.001 and dist < MOB_COLLISION_RADIUS then
+                    local strength = (MOB_COLLISION_RADIUS - dist) / MOB_COLLISION_RADIUS
+                    pushX += (dx / dist) * strength * MOB_COLLISION_RADIUS * 0.5
+                    pushZ += (dz / dist) * strength * MOB_COLLISION_RADIUS * 0.5
+                end
             end
         end
-    elseif self.AIState == "Returning" then
-        self:TryOrientModelYawToward(self.SpawnPosition)
+    end
+
+    return x + pushX, z + pushZ
+end
+
+-- Override hook for subclasses (e.g. a hopping mob): called by HandleWalking
+-- every tick with the current chase goal. Default behaviour is a smooth walk.
+function MobClass:Move(goalPosition, deltaTime)
+    self:StepToward(goalPosition, deltaTime)
+end
+
+-- Default walk implementation: step the model directly toward goalPosition
+-- by Stats.MoveSpeed * deltaTime, resolve overlap with other mobs,
+-- ground-snap the new spot, and face the direction of travel -- all
+-- combined into one PivotTo so there is exactly one position+rotation
+-- write per tick (no competing systems to fight).
+function MobClass:StepToward(goalPosition, deltaTime)
+    if not self.Model then
+        return
+    end
+    local primaryPart = self.Model.PrimaryPart
+    if not primaryPart then
+        return
+    end
+
+    local pos = primaryPart.Position
+    local flat = Vector3.new(goalPosition.X - pos.X, 0, goalPosition.Z - pos.Z)
+    local dist = flat.Magnitude
+
+    local newX, newZ = pos.X, pos.Z
+    if dist > 0.05 then
+        local moveSpeed = self.Stats.MoveSpeed or 8
+        local step = math.min(moveSpeed * deltaTime, dist)
+        local dir = flat.Unit
+        newX = pos.X + dir.X * step
+        newZ = pos.Z + dir.Z * step
+    end
+
+    newX, newZ = self:ResolveMobSeparation(newX, newZ)
+
+    local groundY = self:FindGroundY(newX, newZ, pos.Y)
+    local newPos = Vector3.new(newX, groundY + (self._feetToRootHeight or 0), newZ)
+
+    if dist > 0.1 then
+        self.Model:PivotTo(CFrame.lookAt(newPos, Vector3.new(goalPosition.X, newPos.Y, goalPosition.Z)))
+    else
+        local _, yaw = primaryPart.CFrame:ToEulerAnglesYXZ()
+        self.Model:PivotTo(CFrame.new(newPos) * CFrame.Angles(0, yaw, 0))
     end
 end
 
@@ -284,267 +427,59 @@ function MobClass:SyncHumanoidHealth(humanoid)
     end)
 end
 
--- MobData JumpHeight: rhythmic hop height only (0 = walk on ground, no scripted jumps).
-function MobClass:GetMovementHopHeight()
-    if not self.Stats then
-        return 0
-    end
-    local hopHeight = self.Stats.JumpHeight
-    if hopHeight == nil then
-        return 0
-    end
-    return math.max(0, hopHeight)
-end
-
 function MobClass:SyncHumanoidLocomotionStats(humanoid)
     if not humanoid then
         return
     end
-
+    -- Informational only -- movement is driven by StepToward, not by
+    -- Humanoid's own walk controller. Kept in sync in case anything else
+    -- (UI, animations) reads it.
     humanoid.WalkSpeed = self.Stats.MoveSpeed or humanoid.WalkSpeed
-    local hopHeight = self:GetMovementHopHeight()
-    if hopHeight > 0 then
-        humanoid.JumpHeight = hopHeight
-    elseif humanoid.JumpHeight <= 0 then
-        humanoid.JumpHeight = DEFAULT_HUMANOID_JUMP_HEIGHT
-    end
 end
 
-function MobClass:GetVariedTargetPosition(originPosition, targetPosition, deltaTime)
-    self.MovementTimer = (self.MovementTimer or 0) + deltaTime
-
-    if self.MovementTimer >= (self.NextStrafeChange or 0) then
-        self.StrafeDirection = math.random() < 0.5 and -1 or 1
-        self.StrafeMagnitude = math.random() * (MOVE_STRAFE_MAX - MOVE_STRAFE_MIN) + MOVE_STRAFE_MIN
-        self.NextStrafeChange = self.MovementTimer
-            + math.random() * (MOVE_STRAFE_MAX_DURATION - MOVE_STRAFE_MIN_DURATION)
-            + MOVE_STRAFE_MIN_DURATION
-    end
-
-    local toTarget = targetPosition - originPosition
-    local horizontal = Vector3.new(toTarget.X, 0, toTarget.Z)
-    if horizontal.Magnitude < 0.1 then
-        return targetPosition
-    end
-
-    local right = horizontal.Unit:Cross(Vector3.yAxis)
-    local wave = math.sin(self.MovementTimer * 1.25 + (self.StrafeDirection * 0.5))
-    local lateralOffset = right * self.StrafeDirection * self.StrafeMagnitude * (0.92 + (0.08 * math.abs(wave)))
-
-    return targetPosition + lateralOffset
-end
-
-function MobClass:ApplyForwardJumpBoost(humanoid, primaryPart, goalPosition)
-    if not humanoid or not primaryPart or not goalPosition then
-        return
-    end
-
-    local fromPos = primaryPart.Position
-    local flat = Vector3.new(goalPosition.X - fromPos.X, 0, goalPosition.Z - fromPos.Z)
-    local dir
-    if flat.Magnitude >= 0.05 then
-        dir = flat.Unit
-    else
-        local md = humanoid.MoveDirection
-        local flatMd = Vector3.new(md.X, 0, md.Z)
-        if flatMd.Magnitude < 0.05 then
-            return
-        end
-        dir = flatMd.Unit
-    end
-
-    local moveSpeed = self.Stats.MoveSpeed or 16
-    local hopHeight = self:GetMovementHopHeight()
-    local boost = math.clamp(
-        moveSpeed * 0.5 + hopHeight * 0.35,
-        MOVE_JUMP_FORWARD_SPEED_MIN,
-        MOVE_JUMP_FORWARD_SPEED_MAX
-    )
-
-    local v = primaryPart.AssemblyLinearVelocity
-    primaryPart.AssemblyLinearVelocity = Vector3.new(
-        v.X + dir.X * boost,
-        v.Y,
-        v.Z + dir.Z * boost
-    )
-end
-
-function MobClass:ApplyWalkLocomotion(humanoid, primaryPart, goalPosition, deltaTime)
-    if not humanoid or not primaryPart or not goalPosition then
-        return
-    end
-
-    local fromPos = primaryPart.Position
-    local flat = Vector3.new(goalPosition.X - fromPos.X, 0, goalPosition.Z - fromPos.Z)
-    if flat.Magnitude < 0.4 then
-        return
-    end
-
-    local dir = flat.Unit
-    local walkSpeed = self.Stats.MoveSpeed or humanoid.WalkSpeed or 16
-    local v = primaryPart.AssemblyLinearVelocity
-    local targetX = dir.X * walkSpeed
-    local targetZ = dir.Z * walkSpeed
-    local dt = deltaTime or (1 / 30)
-    local blend = math.clamp(dt * 10, 0, 1)
-
-    primaryPart.AssemblyLinearVelocity = Vector3.new(
-        v.X + (targetX - v.X) * blend,
-        v.Y,
-        v.Z + (targetZ - v.Z) * blend
-    )
-end
-
-function MobClass:DriveToward(humanoid, primaryPart, goalPosition, deltaTime)
-    if not humanoid or not primaryPart or not goalPosition then
-        return
-    end
-
-    humanoid:MoveTo(goalPosition)
-
-    if self:GetMovementHopHeight() <= 0 then
-        self:ApplyWalkLocomotion(humanoid, primaryPart, goalPosition, deltaTime)
-    else
-        self:TryPeriodicMovementJump(humanoid, primaryPart, goalPosition)
-    end
-end
-
-function MobClass:TryPeriodicMovementJump(humanoid, primaryPart, goalPosition)
-    if not humanoid or not primaryPart or not goalPosition then
-        return
-    end
-
-    if self:GetMovementHopHeight() <= 0 then
-        return
-    end
-
-    local now = tick()
-    self._nextMovementJumpAt = self._nextMovementJumpAt or 0
-    if now < self._nextMovementJumpAt then
-        return
-    end
-
-    local state = humanoid:GetState()
-    if state ~= Enum.HumanoidStateType.Running
-        and state ~= Enum.HumanoidStateType.Landed
-        and state ~= Enum.HumanoidStateType.RunningNoPhysics then
-        return
-    end
-
-    humanoid.Jump = true
-    self:ApplyForwardJumpBoost(humanoid, primaryPart, goalPosition)
-
-    local span = MOVE_JUMP_INTERVAL_MAX - MOVE_JUMP_INTERVAL_MIN
-    self._nextMovementJumpAt = now + MOVE_JUMP_INTERVAL_MIN + (math.random() * span)
-end
-
-function MobClass:ResolveMobOverlap(primaryPart, activeMobs, deltaTime)
-    if not primaryPart or not activeMobs then
-        return
-    end
-
-    local position = primaryPart.Position
-    local push = Vector3.zero
-
-    for _, otherMob in pairs(activeMobs) do
-        if otherMob ~= self and otherMob:IsAlive() and otherMob.Model then
-            local otherPart = otherMob.Model.PrimaryPart or otherMob.Model:FindFirstChildWhichIsA("BasePart")
-            if otherPart then
-                local offset = position - otherPart.Position
-                local horizontal = Vector3.new(offset.X, 0, offset.Z)
-                local distance = horizontal.Magnitude
-
-                if distance > 0 and distance < MOB_SEPARATION_RADIUS then
-                    local strength = (MOB_SEPARATION_RADIUS - distance) / MOB_SEPARATION_RADIUS
-                    push = push + horizontal.Unit * strength * MOB_BOUNCE_STRENGTH
-                end
-            end
-        end
-    end
-
-    if push.Magnitude > 0.05 then
-        local velocity = primaryPart.AssemblyLinearVelocity
-        primaryPart.AssemblyLinearVelocity = Vector3.new(
-            velocity.X + push.X * deltaTime,
-            velocity.Y,
-            velocity.Z + push.Z * deltaTime
-        )
-    end
-end
-
-function MobClass:StabilizeMovement(humanoid, primaryPart)
-    if not humanoid or not primaryPart or self.CurrentHealth <= 0 then
-        return
-    end
-
-    if humanoid.PlatformStand or humanoid.Sit then
-        humanoid.PlatformStand = false
-        humanoid.Sit = false
-    end
-
-    local state = humanoid:GetState()
-    if state == Enum.HumanoidStateType.Physics
-        or state == Enum.HumanoidStateType.FallingDown
-        or state == Enum.HumanoidStateType.Ragdoll then
-        humanoid:ChangeState(Enum.HumanoidStateType.Running)
-        self.LastPathTime = 0
-    end
-
-    if primaryPart.CFrame.UpVector.Y < 0.8 then
-        local position = primaryPart.Position
-        local _, yaw = primaryPart.CFrame:ToEulerAnglesYXZ()
-        primaryPart.AssemblyAngularVelocity = Vector3.zero
-        self.Model:PivotTo(CFrame.new(position) * CFrame.Angles(0, yaw, 0))
-        humanoid:ChangeState(Enum.HumanoidStateType.Running)
-        self.LastPathTime = 0
-    end
-end
-
+-- Small one-time positional nudge away from the attacker. No physics, no
+-- decay loop -- just an immediate, ground-snapped step, consistent with how
+-- every other position change in this file works.
 function MobClass:ApplyKnockback(attackerPosition)
-    if not self.Model or self.CurrentHealth <= 0 then return end
+    if not self.Model or self.CurrentHealth <= 0 then
+        return
+    end
+    local primaryPart = self.Model.PrimaryPart
+    if not primaryPart then
+        return
+    end
 
-    local primaryPart = self.Model.PrimaryPart or self.Model:FindFirstChildWhichIsA("BasePart")
-    local humanoid    = self.Model:FindFirstChildOfClass("Humanoid")
-    if not primaryPart or not humanoid then return end
-
-    -- KnockbackMultiplier: 1.0 = full force, 0 = immune
     local mult = (self.Stats and self.Stats.KnockbackMultiplier ~= nil)
         and self.Stats.KnockbackMultiplier or 1.0
-    if mult <= 0 then return end
+    if mult <= 0 then
+        return
+    end
 
-    -- Push direction: horizontally away from attacker
-    local mobPos     = primaryPart.Position
-    local horizontal = Vector3.new(mobPos.X - attackerPosition.X, 0, mobPos.Z - attackerPosition.Z)
-    local dir        = horizontal.Magnitude > 0.1 and horizontal.Unit or Vector3.new(0, 0, 1)
+    local pos = primaryPart.Position
+    local horizontal = Vector3.new(pos.X - attackerPosition.X, 0, pos.Z - attackerPosition.Z)
+    local dir = horizontal.Magnitude > 0.1 and horizontal.Unit or Vector3.new(0, 0, 1)
 
-    -- Replace velocity for a clean, predictable impulse (not additive to prevent stacking)
-    primaryPart.AssemblyLinearVelocity = Vector3.new(
-        dir.X * KNOCKBACK_BASE_FORCE * mult,
-        KNOCKBACK_VERTICAL_FORCE * mult,
-        dir.Z * KNOCKBACK_BASE_FORCE * mult
-    )
+    local nudge = KNOCKBACK_DISTANCE * mult
+    local newX = pos.X + dir.X * nudge
+    local newZ = pos.Z + dir.Z * nudge
+    local groundY = self:FindGroundY(newX, newZ, pos.Y)
+    local newPos = Vector3.new(newX, groundY + (self._feetToRootHeight or 0), newZ)
 
-    -- Suppress AI locomotion: WalkSpeed = 0 makes MoveTo calls no-ops during stun window
-    humanoid.WalkSpeed = 0
-    local restoreSpeed = self.Stats.MoveSpeed or 8
-    task.delay(KNOCKBACK_STUN_DURATION, function()
-        if self.Model and self.CurrentHealth > 0 then
-            humanoid.WalkSpeed = restoreSpeed
-        end
-    end)
+    local _, yaw = primaryPart.CFrame:ToEulerAnglesYXZ()
+    self.Model:PivotTo(CFrame.new(newPos) * CFrame.Angles(0, yaw, 0))
 end
 
 -- Create HP bar above mob
 function MobClass:CreateHPBar()
     if not self.Model then return nil end
-
+    
     -- Find the head or primary part to attach the HP bar
     local head = self.Model:FindFirstChild("Head")
     if not head then
         head = self.Model.PrimaryPart or self.Model:FindFirstChildWhichIsA("BasePart")
     end
     if not head then return nil end
-
+    
     -- Create BillboardGui for the name/level + HP bar
     local billboardGui = Instance.new("BillboardGui")
     billboardGui.Name = "HPBar"
@@ -569,7 +504,7 @@ function MobClass:CreateHPBar()
     titleLabel.Text = "Level " .. tostring(self.Level) .. " " .. tostring(mobName)
     Instance.new("UIStroke", titleLabel).Color = Color3.fromRGB(80, 60, 20)
     titleLabel.Parent = billboardGui
-
+    
     -- Create background frame (dark background)
     local background = Instance.new("Frame")
     background.Name = "Background"
@@ -579,7 +514,7 @@ function MobClass:CreateHPBar()
     background.BorderSizePixel = 2
     background.BorderColor3 = Color3.fromRGB(20, 20, 20)
     background.Parent = billboardGui
-
+    
     -- Create health bar fill (green by default)
     local healthBar = Instance.new("Frame")
     healthBar.Name = "HealthBar"
@@ -588,35 +523,35 @@ function MobClass:CreateHPBar()
     healthBar.BackgroundColor3 = HP_BAR_COLOR_FULL
     healthBar.BorderSizePixel = 0
     healthBar.Parent = background
-
+    
     -- Create corner radius for rounded look
     local corner = Instance.new("UICorner")
     corner.CornerRadius = UDim.new(0, 4)
     corner.Parent = background
-
+    
     local healthCorner = Instance.new("UICorner")
     healthCorner.CornerRadius = UDim.new(0, 4)
     healthCorner.Parent = healthBar
-
+    
     return billboardGui
 end
 
 -- Update HP bar display
 function MobClass:UpdateHPBar()
     if not self.HPBar then return end
-
+    
     local healthBar = self.HPBar:FindFirstChild("Background", true)
     if healthBar then
         healthBar = healthBar:FindFirstChild("HealthBar")
     end
     if not healthBar then return end
-
+    
     -- Calculate health percentage
     local healthPercent = self.CurrentHealth / self.MaxHealth
-
+    
     -- Update bar size
     healthBar.Size = UDim2.new(healthPercent, 0, 1, 0)
-
+    
     -- Update color based on health percentage
     if healthPercent > 0.5 then
         -- Green to Yellow transition
@@ -635,6 +570,9 @@ function MobClass:TakeDamage(player, amount)
     if self.CurrentHealth <= 0 then
         return false -- Already dead
     end
+    if self.IsInvulnerable then
+        return false
+    end
 
     local armorRating = (self.Stats and self.Stats.Armor) or 0
     local final = DamageService.ComputeFinal(amount, armorRating)
@@ -644,11 +582,11 @@ function MobClass:TakeDamage(player, amount)
     if self.CurrentHealth < 0 then
         self.CurrentHealth = 0
     end
-
+    
     -- Track damage contribution (post-armor so loot reflects actual damage)
     local playerId = player.UserId
     self.DamageTracker[playerId] = (self.DamageTracker[playerId] or 0) + final
-
+    
     -- Update HP bar display
     self:UpdateHPBar()
 
@@ -657,17 +595,20 @@ function MobClass:TakeDamage(player, amount)
         self:SyncHumanoidHealth(humanoid)
     end
 
-    local primaryPart = self.Model and (self.Model.PrimaryPart or self.Model:FindFirstChildWhichIsA("BasePart"))
-    if humanoid and primaryPart then
-        self:StabilizeMovement(humanoid, primaryPart)
+    -- Cancel an in-progress attack swing -- getting hit interrupts the
+    -- animation, but NOT the attack-cooldown timer, so the mob can still
+    -- land its own hit back if the player is already in range (no hit-stun
+    -- lockout on the attempt itself, only a visual flinch).
+    if self._animTracks and self._animTracks.Attack and self._animTracks.Attack.IsPlaying then
+        self._animTracks.Attack:Stop(0.05)
     end
 
-    -- Trigger aggro if idle or returning (re-aggro when attacked)
-    if self.AIState == "Idle" or self.AIState == "Returning" then
-        self.TargetPlayer = player
-        self.AIState = "Chasing"
+    -- Re-aggro on whoever just hit us
+    if self.AIState == "Idle" then
+        self.AIState = "Walking"
     end
-
+    self.TargetPlayer = player
+    
     -- Check for death
     if self.CurrentHealth <= 0 then
         -- Award tier-aware kill credit and XP to the killer before Die()
@@ -687,7 +628,7 @@ function MobClass:Die()
         self.HPBar:Destroy()
         self.HPBar = nil
     end
-
+    
     if self._healthLockConnection then
         self._healthLockConnection:Disconnect()
         self._healthLockConnection = nil
@@ -709,50 +650,51 @@ function MobClass:Die()
         self.Model:Destroy()
         self.Model = nil
     end
-
+    
     -- Notify spawner
     if self.SpawnerRef then
         self.SpawnerRef:OnMobDied(self)
     end
-
+    
     -- Return damage tracker for loot/score calculation
     return self.DamageTracker
 end
 
--- Update AI behavior
+-- Update AI behavior. Simple 3-state machine: Idle -> Walking -> Attacking.
+-- No PathfindingService, no Humanoid velocity -- StepToward/FaceToward
+-- (direct PivotTo) is the only thing that ever moves or rotates the model.
 function MobClass:UpdateAI(deltaTime, players, activeMobs)
     if not self.Model or self.CurrentHealth <= 0 then
         return
     end
+    if self.IsSpawnStunned then
+        MobAnimController.setWalking(self, false)
+        return
+    end
 
-    local primaryPart = self.Model.PrimaryPart or self.Model:FindFirstChildWhichIsA("BasePart")
+    local primaryPart = self.Model.PrimaryPart
     if not primaryPart then
         return
     end
 
+    self._activeMobsRef = activeMobs
+
     local currentPosition = primaryPart.Position
-    local humanoid = self.Model:FindFirstChildOfClass("Humanoid")
-    self:StabilizeMovement(humanoid, primaryPart)
-    self:ResolveMobOverlap(primaryPart, activeMobs, deltaTime)
 
-    -- State machine
     if self.AIState == "Idle" then
-        self:HandleIdleState(players, currentPosition)
-
-    elseif self.AIState == "Chasing" then
-        self:HandleChasingState(deltaTime, currentPosition, humanoid)
-
+        self:HandleIdle(players, currentPosition)
+    elseif self.AIState == "Walking" then
+        self:HandleWalking(deltaTime, players, currentPosition)
     elseif self.AIState == "Attacking" then
-        self:HandleAttackingState(deltaTime, currentPosition, humanoid)
-
-    elseif self.AIState == "Returning" then
-        self:HandleReturningState(deltaTime, currentPosition, humanoid, players)
+        self:HandleAttacking(players, currentPosition)
     end
-
-    self:UpdateCombatFacing()
 end
 
--- Handle Idle state
+-- A player must be both within AggroRange of the mob's current position AND
+-- within ReturnDistance of the mob's spawn (its "home zone") to be
+-- acquired. If the player is already outside the zone, the mob does not
+-- aggro onto them in the first place -- physical proximity alone is not
+-- enough to start a chase, only to continue one (see HandleWalking).
 function MobClass:FindClosestAggroTarget(players, currentPosition)
     local closestPlayer = nil
     local closestDistance = self.Stats.AggroRange
@@ -765,7 +707,8 @@ function MobClass:FindClosestAggroTarget(players, currentPosition)
 
             if hrp and humanoid and humanoid.Health > 0 then
                 local distance = (currentPosition - hrp.Position).Magnitude
-                if distance < closestDistance then
+                local distanceFromSpawn = (hrp.Position - self.SpawnPosition).Magnitude
+                if distance < closestDistance and distanceFromSpawn <= self.Stats.ReturnDistance then
                     closestDistance = distance
                     closestPlayer = player
                 end
@@ -783,169 +726,103 @@ function MobClass:TryAcquireTarget(players, currentPosition)
     end
 
     self.TargetPlayer = closestPlayer
-    self.AIState = "Chasing"
-    self.Path = nil
-    self.CurrentWaypointIndex = 1
-    self.LastPathTime = 0
+    self.AIState = "Walking"
     return true
 end
 
-function MobClass:HandleIdleState(players, currentPosition)
+-- Waiting: watch for a player entering AggroRange.
+function MobClass:HandleIdle(players, currentPosition)
     self:TryAcquireTarget(players, currentPosition)
 end
 
--- Handle Chasing state
-function MobClass:HandleChasingState(deltaTime, currentPosition, humanoid)
+-- Walking toward the player. Drops back to Idle (in place -- no "return to
+-- spawn" walk in v1) if the target is lost or dead. Leaving the home zone
+-- (ReturnDistance from spawn) does not instantly deaggro: physical distance
+-- to the player takes priority. While still within LEASH_GRACE_PROXIMITY of
+-- the player, the leash is ignored entirely. Only once the player is BOTH
+-- outside the zone AND no longer physically close does a LEASH_GRACE_DURATION
+-- countdown start, after which the mob gives up and goes Idle.
+function MobClass:HandleWalking(deltaTime, players, currentPosition)
     if not self.TargetPlayer or not self.TargetPlayer.Character then
-        self.AIState = "Returning"
+        self.TargetPlayer = nil
+        self.AIState = "Idle"
+        self._leashGraceStartedAt = nil
+        MobAnimController.setWalking(self, false)
         return
     end
 
     local targetHRP = self.TargetPlayer.Character:FindFirstChild("HumanoidRootPart")
     local targetHumanoid = self.TargetPlayer.Character:FindFirstChildOfClass("Humanoid")
-
     if not targetHRP or not targetHumanoid or targetHumanoid.Health <= 0 then
         self.TargetPlayer = nil
-        self.AIState = "Returning"
+        self.AIState = "Idle"
+        self._leashGraceStartedAt = nil
+        MobAnimController.setWalking(self, false)
         return
     end
 
     local distanceToTarget = (currentPosition - targetHRP.Position).Magnitude
     local distanceFromSpawn = (currentPosition - self.SpawnPosition).Magnitude
 
-    -- Check if too far from spawn (with buffer to prevent oscillation)
-    -- Only return if significantly past the return distance
-    if distanceFromSpawn > self.Stats.ReturnDistance * 1.2 then
-        self.TargetPlayer = nil
-        self.AIState = "Returning"
-        return
+    if distanceFromSpawn > self.Stats.ReturnDistance then
+        if distanceToTarget <= LEASH_GRACE_PROXIMITY then
+            -- Still right on the player despite being past the zone -- hold off.
+            self._leashGraceStartedAt = nil
+        else
+            local now = tick()
+            self._leashGraceStartedAt = self._leashGraceStartedAt or now
+            if now - self._leashGraceStartedAt >= LEASH_GRACE_DURATION then
+                self.TargetPlayer = nil
+                self.AIState = "Idle"
+                self._leashGraceStartedAt = nil
+                MobAnimController.setWalking(self, false)
+                return
+            end
+        end
+    else
+        self._leashGraceStartedAt = nil
     end
 
-    -- Check if in attack range
     if distanceToTarget <= self.Stats.AttackRange then
         self.AIState = "Attacking"
-        self.AttackStateEnteredAt = tick()
+        MobAnimController.setWalking(self, false)
         return
     end
 
-    -- Pathfind to target
-    self:MoveToTarget(targetHRP.Position, humanoid, deltaTime)
+    MobAnimController.setWalking(self, true)
+    self:Move(targetHRP.Position, deltaTime)
 end
 
--- Handle Attacking state
-function MobClass:HandleAttackingState(deltaTime, currentPosition, humanoid)
-    local now = tick()
-
-    -- Check if target is still valid
+-- In range: stop, face the player, attack on cooldown. Getting hit cancels
+-- the swing animation (see TakeDamage) but never blocks the attempt itself,
+-- so a mob already in range still lands its own hit even mid-flinch.
+function MobClass:HandleAttacking(players, currentPosition)
     if not self.TargetPlayer or not self.TargetPlayer.Character then
-        self.AIState = "Returning"
+        self.TargetPlayer = nil
+        self.AIState = "Idle"
         return
     end
 
     local targetHRP = self.TargetPlayer.Character:FindFirstChild("HumanoidRootPart")
     local targetHumanoid = self.TargetPlayer.Character:FindFirstChildOfClass("Humanoid")
-
     if not targetHRP or not targetHumanoid or targetHumanoid.Health <= 0 then
         self.TargetPlayer = nil
-        self.AIState = "Returning"
+        self.AIState = "Idle"
         return
     end
+
+    self:FaceToward(targetHRP.Position)
 
     local distanceToTarget = (currentPosition - targetHRP.Position).Magnitude
-
-    -- Hold position during the attack window; prevents pathfinding drift that
-    -- would otherwise push the mob out of range and trigger a Chasing re-entry.
-    humanoid:MoveTo(currentPosition)
-
-    -- Larger hysteresis (2.5x) + minimum hold time: mob must have been in
-    -- Attacking state for at least one full cooldown before it can exit.
-    -- This survives crowd-jostle from multiple mobs without state thrashing.
-    local holdElapsed = now - self.AttackStateEnteredAt
-    if distanceToTarget > self.Stats.AttackRange * 2.5 and holdElapsed >= self.Stats.AttackCooldown then
-        self.AIState = "Chasing"
+    if distanceToTarget > self.Stats.AttackRange * ATTACK_RANGE_LEEWAY then
+        self.AIState = "Walking"
         return
     end
 
-    -- Attack cooldown
+    local now = tick()
     if now - self.LastAttackTime >= self.Stats.AttackCooldown then
         self:PerformAttack(targetHumanoid)
         self.LastAttackTime = now
-    end
-end
-
--- Handle Returning state
-function MobClass:HandleReturningState(deltaTime, currentPosition, humanoid, players)
-    if self:TryAcquireTarget(players, currentPosition) then
-        return
-    end
-
-    local distanceFromSpawn = (currentPosition - self.SpawnPosition).Magnitude
-
-    if distanceFromSpawn < 6 then
-        self.AIState = "Idle"
-        self.TargetPlayer = nil
-        self.Path = nil
-        self.CurrentWaypointIndex = 1
-        self.LastPathTime = 0
-        self:TryAcquireTarget(players, currentPosition)
-        return
-    end
-
-    local primaryPart = self.Model and (self.Model.PrimaryPart or self.Model:FindFirstChildWhichIsA("BasePart"))
-    if humanoid and primaryPart then
-        self:DriveToward(humanoid, primaryPart, self.SpawnPosition, deltaTime)
-    end
-end
-
--- Move to target using pathfinding
-function MobClass:MoveToTarget(targetPosition, humanoid, deltaTime)
-    if not humanoid then return end
-
-    local now = tick()
-    local primaryPart = self.Model.PrimaryPart or self.Model:FindFirstChildWhichIsA("BasePart")
-    if not primaryPart then return end
-
-    local variedTarget = self:GetVariedTargetPosition(primaryPart.Position, targetPosition, deltaTime)
-    local hopHeight = self:GetMovementHopHeight()
-
-    if not self.Path or now - self.LastPathTime > 1.0 then
-        self.Path = PathfindingService:CreatePath({
-            AgentRadius = 2,
-            AgentHeight = 5,
-            AgentCanJump = true,
-        })
-
-        self.Path:ComputeAsync(primaryPart.Position, variedTarget)
-        self.CurrentWaypointIndex = 1
-        self.LastPathTime = now
-    end
-
-    if self.Path.Status ~= Enum.PathStatus.Success then
-        self:DriveToward(humanoid, primaryPart, variedTarget, deltaTime)
-        return
-    end
-
-    local waypoints = self.Path:GetWaypoints()
-
-    if self.CurrentWaypointIndex <= #waypoints then
-        local waypoint = waypoints[self.CurrentWaypointIndex]
-        if hopHeight > 0 and waypoint.Action == Enum.PathWaypointAction.Jump then
-            humanoid.Jump = true
-            self:ApplyForwardJumpBoost(humanoid, primaryPart, targetPosition)
-        end
-        humanoid:MoveTo(waypoint.Position)
-        if hopHeight <= 0 then
-            self:ApplyWalkLocomotion(humanoid, primaryPart, waypoint.Position, deltaTime)
-        end
-
-        local distanceToWaypoint = (primaryPart.Position - waypoint.Position).Magnitude
-        if distanceToWaypoint < 2 then
-            self.CurrentWaypointIndex = self.CurrentWaypointIndex + 1
-        end
-    end
-
-    if hopHeight > 0 then
-        self:TryPeriodicMovementJump(humanoid, primaryPart, targetPosition)
     end
 end
 
@@ -953,14 +830,57 @@ end
 -- Routes through DamageService so player armor reduces incoming damage and
 -- the player profile HP stays in sync with the Humanoid.
 function MobClass:PerformAttack(targetHumanoid)
+    if self.IsSpawnStunned then return end
     if not targetHumanoid or targetHumanoid.Health <= 0 then return end
+    MobAnimController.playAttack(self)
     local char = targetHumanoid.Parent
     local player = char and Players:GetPlayerFromCharacter(char)
     if player then
         DamageService.ApplyToPlayer(player, self.Stats.BaseDamage, self)
+        self:ApplyPlayerHitstun(char)
     else
         -- NPC target (no player profile). Fall back to direct.
         targetHumanoid:TakeDamage(self.Stats.BaseDamage)
+    end
+end
+
+-- Small hop + outward push on the player when hit -- just enough to
+-- interrupt their movement slightly. A one-time AssemblyLinearVelocity add
+-- does NOT work here: confirmed by direct testing that Roblox's player
+-- Humanoid controller zeroes it out the very next physics step (the same
+-- class of problem as mob locomotion, just on the player's side this time).
+-- A BodyVelocity re-asserts the push every step for a short duration, which
+-- wins against that correction -- confirmed by testing to produce real,
+-- if small, displacement. Self-destructs via Debris so it never lingers.
+local Debris = game:GetService("Debris")
+function MobClass:ApplyPlayerHitstun(playerCharacter)
+    local hrp = playerCharacter:FindFirstChild("HumanoidRootPart")
+    if not hrp or not self.Model then
+        return
+    end
+    local primaryPart = self.Model.PrimaryPart
+    if not primaryPart then
+        return
+    end
+
+    local horizontal = Vector3.new(hrp.Position.X - primaryPart.Position.X, 0, hrp.Position.Z - primaryPart.Position.Z)
+    local dir = horizontal.Magnitude > 0.1 and horizontal.Unit or Vector3.new(0, 0, 1)
+
+    local bv = Instance.new("BodyVelocity")
+    bv.Velocity = Vector3.new(dir.X * PLAYER_HIT_KNOCKBACK_HORIZONTAL, PLAYER_HIT_KNOCKBACK_VERTICAL, dir.Z * PLAYER_HIT_KNOCKBACK_HORIZONTAL)
+    bv.MaxForce = Vector3.new(4000, 4000, 4000)
+    bv.P = 1250
+    bv.Parent = hrp
+    Debris:AddItem(bv, 0.15)
+end
+
+function MobClass:SetSpawnIntroState(active)
+    local on = (active == true)
+    self.IsSpawnStunned = on
+    self.IsInvulnerable = on
+    if on then
+        self.AIState = "Idle"
+        self.TargetPlayer = nil
     end
 end
 

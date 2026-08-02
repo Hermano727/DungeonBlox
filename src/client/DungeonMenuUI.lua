@@ -8,12 +8,13 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Types           = require(ReplicatedStorage:WaitForChild("DungeonProfileTypes"))
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
-local ItemTooltip     = require(Players.LocalPlayer:WaitForChild("PlayerScripts"):WaitForChild("ItemTooltip"))
+local DayNightConfig  = require(ReplicatedStorage:WaitForChild("DayNightConfig"))
+local ItemTooltip = require(script.Parent:WaitForChild("ItemTooltip"))
 local InventoryDragController = require(script.Parent:WaitForChild("InventoryDragController"))
 
 local HOTBAR_SLOTS = 9
 
-local EQUIP_SLOTS = { "Helm", "Chest", "Legs", "Boots", "Weapon", "Shield", "Necklace", "Ring" }
+local EQUIP_SLOTS = { "Helm", "Chest", "Legs", "Boots", "Shield", "Necklace", "Ring" }
 local ARMOR_STAT_SLOTS = { "Helm", "Chest", "Legs", "Boots" }
 local SLOT_ACCENT = {
     Helm     = Color3.fromRGB(180,160,255),
@@ -27,6 +28,30 @@ local SLOT_ACCENT = {
 }
 
 local DungeonMenuUI = {}
+
+local function hotbarSlotUuid(hb, i)
+	if type(hb) ~= "table" then return nil end
+	i = math.floor(tonumber(i) or -1)
+	if i < 1 or i > 9 then return nil end
+	local v = hb[i]
+	if type(v) == "string" and v ~= "" then return v end
+	v = hb[tostring(i)]
+	if type(v) == "string" and v ~= "" then return v end
+	return nil
+end
+
+local function bagSlotUuid(bs, i)
+	if type(bs) ~= "table" then return nil end
+	i = math.floor(tonumber(i) or -1)
+	if i < 1 or i > Types.BAG_SLOT_COUNT then return nil end
+	local v = bs[i]
+	if type(v) == "string" and v ~= "" then return v end
+	v = bs[tostring(i)]
+	if type(v) == "string" and v ~= "" then return v end
+	return nil
+end
+
+
 
 local QS = "rbxasset://fonts/families/Quicksand.json"
 local function qsFont(lbl, w)
@@ -147,7 +172,7 @@ function DungeonMenuUI.createLayout(panel, skillRows)
 	local accGroup=Instance.new("Frame",rowA); accGroup.Name="AccessoryGroup"
 	accGroup.BackgroundTransparency=1; accGroup.AnchorPoint=Vector2.new(1,0)
 	accGroup.Position=UDim2.new(1,0,0,0); accGroup.Size=UDim2.fromOffset(GRID_W,EQUIP_H); accGroup.ZIndex=3
-	for i,slot in ipairs({"Weapon","Shield","Necklace","Ring"}) do
+	for i,slot in ipairs({"Shield","Necklace","Ring"}) do
 		equipButtons[slot]=makeSlotBtn(slot,accGroup,ap[i][1],ap[i][2])
 		equipSlotState[slot]={item=nil,uuid=nil}
 	end
@@ -272,7 +297,45 @@ function DungeonMenuUI.createLayout(panel, skillRows)
 		end
 	end)
 
-	local ROW_B_Y=EQUIP_H+10
+	local ROW_CLOCK_Y=EQUIP_H+10
+	local CLOCK_H=36
+	local clockRow=Instance.new("Frame",body); clockRow.Name="DayNightRow"
+	clockRow.BackgroundTransparency=1
+	clockRow.Position=UDim2.new(0,0,0,ROW_CLOCK_Y)
+	clockRow.Size=UDim2.new(1,0,0,CLOCK_H); clockRow.ZIndex=3
+
+	local clockPanel=Instance.new("Frame",clockRow); clockPanel.Name="DayNightClock"
+	clockPanel.BackgroundColor3=Color3.fromRGB(20,14,14); clockPanel.BorderSizePixel=0
+	clockPanel.AnchorPoint=Vector2.new(1,0)
+	clockPanel.Position=UDim2.new(1,0,0,0)
+	clockPanel.Size=UDim2.new(0.48,-4,1,0); clockPanel.ZIndex=4
+	Instance.new("UICorner",clockPanel).CornerRadius=UDim.new(0,8)
+	local cp=Instance.new("UIPadding",clockPanel)
+	cp.PaddingLeft=UDim.new(0,10); cp.PaddingRight=UDim.new(0,10)
+	cp.PaddingTop=UDim.new(0,4); cp.PaddingBottom=UDim.new(0,4)
+
+	local clockPhase=Instance.new("TextLabel",clockPanel); clockPhase.Name="PhaseLabel"
+	clockPhase.BackgroundTransparency=1; clockPhase.Font=Enum.Font.GothamBold; clockPhase.TextSize=11
+	clockPhase.TextColor3=Color3.fromRGB(255,210,90); clockPhase.TextXAlignment=Enum.TextXAlignment.Left
+	clockPhase.Text="DAY"; clockPhase.Size=UDim2.new(0.42,0,0,14); clockPhase.ZIndex=5
+	qsFont(clockPhase, Enum.FontWeight.Bold)
+
+	local clockTime=Instance.new("TextLabel",clockPanel); clockTime.Name="TimeLabel"
+	clockTime.BackgroundTransparency=1; clockTime.Font=Enum.Font.GothamMedium; clockTime.TextSize=16
+	clockTime.TextColor3=Color3.fromRGB(230,218,195); clockTime.TextXAlignment=Enum.TextXAlignment.Left
+	clockTime.Text="12:00 PM"; clockTime.Position=UDim2.new(0,0,0,14)
+	clockTime.Size=UDim2.new(0.58,0,0,18); clockTime.ZIndex=5
+	qsFont(clockTime, Enum.FontWeight.SemiBold)
+
+	local clockRemain=Instance.new("TextLabel",clockPanel); clockRemain.Name="RemainingLabel"
+	clockRemain.BackgroundTransparency=1; clockRemain.Font=Enum.Font.Gotham; clockRemain.TextSize=10
+	clockRemain.TextColor3=Color3.fromRGB(150,135,115); clockRemain.TextXAlignment=Enum.TextXAlignment.Right
+	clockRemain.Text="Night in 20:00"
+	clockRemain.AnchorPoint=Vector2.new(1,0)
+	clockRemain.Position=UDim2.new(1,0,0,0)
+	clockRemain.Size=UDim2.new(0.55,0,1,0); clockRemain.ZIndex=5
+
+	local ROW_B_Y=ROW_CLOCK_Y+CLOCK_H+8
 	local sb=Instance.new("Frame",body); sb.Name="SkillsBox"
 	sb.BackgroundColor3=Color3.fromRGB(20,14,14); sb.BorderSizePixel=0
 	sb.Position=UDim2.new(0,0,0,ROW_B_Y); sb.Size=UDim2.new(1,0,0,54); sb.ZIndex=3
@@ -330,40 +393,50 @@ function DungeonMenuUI.createLayout(panel, skillRows)
 	hbLbl.Text="HOTBAR"; hbLbl.Position=UDim2.new(0,0,0,HB_Y); hbLbl.Size=UDim2.new(0,68,0,16); hbLbl.ZIndex=3
 	qsFont(hbLbl, Enum.FontWeight.Bold)
 
-	local hbRow=Instance.new("Frame",body); hbRow.Name="HotbarButtons"
-	hbRow.BackgroundTransparency=1; hbRow.Position=UDim2.new(0,0,0,HB_Y+16)
-	hbRow.Size=UDim2.new(1,0,0,HB_H); hbRow.ZIndex=4
-	local hbL=Instance.new("UIListLayout",hbRow)
-	hbL.FillDirection=Enum.FillDirection.Horizontal
-	hbL.HorizontalAlignment=Enum.HorizontalAlignment.Left
-	hbL.VerticalAlignment=Enum.VerticalAlignment.Center; hbL.Padding=UDim.new(0,HB_PAD)
+	local hbTotalW = HOTBAR_SLOTS * HB_W + (HOTBAR_SLOTS - 1) * HB_PAD
+	local hbWrap = Instance.new("Frame", body)
+	hbWrap.Name = "HotbarScroll"
+	hbWrap.BackgroundTransparency = 1
+	hbWrap.BorderSizePixel = 0
+	hbWrap.Position = UDim2.new(0, 0, 0, HB_Y + 16)
+	hbWrap.Size = UDim2.new(1, 0, 0, HB_H)
+	hbWrap.ZIndex = 4
 
-	local hotbarButtons={}; local hotbarSlotItem={}; local ctxHolder={current=nil}
-	for i=1,HOTBAR_SLOTS do
-		local b=Instance.new("TextButton")
-		b.Name="HB"..i; b.AutoButtonColor=false; b.TextWrapped=true
-		b.Font=Enum.Font.GothamMedium; b.TextSize=13; b.TextColor3=Color3.new(1,1,1)
+	local hbRow = Instance.new("Frame", hbWrap)
+	hbRow.Name = "HotbarButtons"
+	hbRow.BackgroundTransparency = 1
+	hbRow.Size = UDim2.fromOffset(hbTotalW, HB_H)
+	hbRow.ZIndex = 4
+
+	local hotbarButtons = {}; local hotbarSlotItem = {}; local ctxHolder = { current = nil }
+	for i = 1, HOTBAR_SLOTS do
+		local b = Instance.new("TextButton")
+		b.Name = "HB" .. i; b.AutoButtonColor = false; b.TextWrapped = true
+		b.Font = Enum.Font.GothamMedium; b.TextSize = 13; b.TextColor3 = Color3.new(1, 1, 1)
 		qsFont(b, Enum.FontWeight.Medium)
-		b.BackgroundColor3=Color3.fromRGB(36,28,28); b.Size=UDim2.fromOffset(HB_W,HB_H)
-		b.ZIndex=4; b.TextXAlignment=Enum.TextXAlignment.Center
-		b.TextYAlignment=Enum.TextYAlignment.Center
-		b.Text=tostring(i).."\n(empty)"
-		Instance.new("UICorner",b).CornerRadius=UDim.new(0,8)
-		if i==1 then
-			local rs=Instance.new("UIStroke",b); rs.Name="SlotRoleStroke"
-			rs.Thickness=2; rs.Color=Color3.fromRGB(220,180,90); rs.Enabled=true
-		end
-		b.Parent=hbRow
+		b.BackgroundColor3 = Color3.fromRGB(36, 28, 28); b.Size = UDim2.fromOffset(HB_W, HB_H)
+		b.Position = UDim2.fromOffset((i - 1) * (HB_W + HB_PAD), 0)
+		b.ZIndex = 5; b.TextXAlignment = Enum.TextXAlignment.Center
+		b.TextYAlignment = Enum.TextYAlignment.Center
+		b.Text = tostring(i) .. "\n(empty)"
+		Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+		b:SetAttribute("HotbarSlot", i)
+		b.Parent = hbRow
+		InventoryDragController.hookSource("hotbar", b, {})
 		local si=i
 		b.MouseEnter:Connect(function()
-			local it=hotbarSlotItem[si]; if it then ItemTooltip.show(it,b) end
+			local slot = tonumber(b:GetAttribute("HotbarSlot")) or si; local it=hotbarSlotItem[slot]; if it then ItemTooltip.show(it,b) end
+			InventoryDragController.setHoveredHotbar(tonumber(b:GetAttribute("HotbarSlot")) or si)
 		end)
-		b.MouseLeave:Connect(function() ItemTooltip.hide() end)
-		b.MouseButton1Click:Connect(function()
-			local h=ctxHolder.current; if h and h.onHotbarSelect then h.onHotbarSelect(si) end
+		b.MouseLeave:Connect(function()
+			ItemTooltip.hide()
+			InventoryDragController.clearHoveredHotbar(tonumber(b:GetAttribute("HotbarSlot")) or si)
 		end)
+		-- Hotbar clicks while the menu is open are owned entirely by InventoryDragController's
+		-- click-to-pick-up/click-to-place (hookSource below) -- there is no separate
+		-- equip-by-click-while-menu-open feature (onHotbarSelect was never wired in menuCtx).
 		b.MouseButton2Click:Connect(function()
-			local h=ctxHolder.current; if h and h.onHotbarClear then h.onHotbarClear(si) end
+			local h=ctxHolder.current; if h and h.onHotbarClear then do local slot=b:GetAttribute("HotbarSlot"); if type(slot)~="number" then slot=tonumber(string.match(b.Name,"^HB(%d+)$")) end; if type(slot)=="number" then h.onHotbarClear(math.floor(slot)) end end end
 		end)
 		hotbarButtons[i]=b
 	end
@@ -375,8 +448,12 @@ function DungeonMenuUI.createLayout(panel, skillRows)
 			local sl=slot
 			btn.MouseEnter:Connect(function()
 				local s=equipSlotState[sl]; if s and s.item then ItemTooltip.show(s.item,btn) end
+				InventoryDragController.setHoveredEquip(sl)
 			end)
-			btn.MouseLeave:Connect(function() ItemTooltip.hide() end)
+			btn.MouseLeave:Connect(function()
+				ItemTooltip.hide()
+				InventoryDragController.clearHoveredEquip(sl)
+			end)
 			btn.MouseButton2Click:Connect(function()
 				ItemTooltip.hide()
 				local h=ctxHolder.current
@@ -387,10 +464,11 @@ function DungeonMenuUI.createLayout(panel, skillRows)
 
 	return {
 		statsCurrency=currency, statsDerived=stats, inventoryScroll=scroll,
-		activeBuffsList=abl, hotbarButtons=hotbarButtons, hotbarSlotItem=hotbarSlotItem,
+		activeBuffsList=abl, hotbarButtons=hotbarButtons, hotbarRow=hbRow, hotbarSlotItem=hotbarSlotItem,
 		ctxHolder=ctxHolder, equipButtons=equipButtons, equipSlotState=equipSlotState,
 		hearthstoneRefs={locationLabel=hsLoc,teleButton=teleBtn,swapButton=swapBtn},
 		alignmentRefs={bars=alignBars,state=alignmentState},
+		dayNightRefs={phaseLabel=clockPhase,timeLabel=clockTime,remainingLabel=clockRemain},
 	}
 end
 
@@ -515,31 +593,13 @@ function DungeonMenuUI.redraw(refs,snapshot,ctx)
 	if type(inv)~="table" then inv={} end
 	local hotbar=profile.hotbar
 	if type(hotbar)~="table" then hotbar={} end
-	local inHotbar={}
-	for i=1,HOTBAR_SLOTS do
-		local uuid=hotbar[i]
-		if type(uuid)=="string" and uuid~="" then inHotbar[uuid]=true end
-	end
-	local inEquipped={}
-	for _,uuid in pairs(profile.equipped or {}) do
-		if type(uuid)=="string" and uuid~="" then inEquipped[uuid]=true end
-	end
-	local BAG_SLOTS=27; local bagItems={}
-	if type(inv)=="table" then
-		for uuid,item in pairs(inv) do
-			if type(item)=="table" and type(uuid)=="string" and not inHotbar[uuid] and not inEquipped[uuid] then
-				table.insert(bagItems,{uuid=uuid,item=item})
-			end
-		end
-		table.sort(bagItems,function(a,b) return a.uuid<b.uuid end)
-	end
-	local allBagUuids={}
-	for _,e in ipairs(bagItems) do table.insert(allBagUuids,e.uuid) end
-	InventoryDragController.syncBagOrder(allBagUuids)
-	bagItems=InventoryDragController.getSortedBagItems(bagItems)
+	local bagSlots=profile.bagSlots
+	if type(bagSlots)~="table" then bagSlots={} end
+	local BAG_SLOTS=Types.BAG_SLOT_COUNT
 	do
 		for slotIdx=1,BAG_SLOTS do
-			local entry=bagItems[slotIdx]; local item=entry and entry.item; local uuid=entry and entry.uuid
+			local uuid=bagSlotUuid(bagSlots, slotIdx)
+			local item=(type(uuid)=="string" and uuid~="") and inv[uuid] or nil
 			local hbOk=item and bagItemHotbarOk(item); local isArmor=item and item.type=="Armor"
 			local showFull=hbOk or isArmor
 			local rCol=item and Types.GetRarityColor(item.rarity) or Color3.fromRGB(35,28,28)
@@ -554,6 +614,7 @@ function DungeonMenuUI.redraw(refs,snapshot,ctx)
 			local sk=Instance.new("UIStroke",btn); sk.Thickness=1.5
 			sk.Color=item and (showFull and rCol or Color3.fromRGB(50,40,40)) or Color3.fromRGB(38,30,30)
 			sk.Transparency=item and (showFull and 0.4 or 0.7) or 0.35
+			btn:SetAttribute("BagSlot",slotIdx)
 			if uuid then btn:SetAttribute("BagUUID",uuid) end
 			local iconImg=item and item.itemId and ItemDefinitions.GetIcon(item.itemId) or ""
 			local hasIcon=iconImg~=""
@@ -586,40 +647,50 @@ function DungeonMenuUI.redraw(refs,snapshot,ctx)
 				if dl then dl.Position=UDim2.new(0,2,1,-12) end
 			else syncDurabilityLabel(btn,nil) end
 			if item and uuid then
-				local ci,cb=item,btn
 				btn.MouseButton2Click:Connect(function()
 					if ctx and ctx.onBagSecondary then ctx.onBagSecondary(uuid) end
 				end)
-				btn.MouseEnter:Connect(function() ItemTooltip.show(ci,cb) end)
-				btn.MouseLeave:Connect(function() ItemTooltip.hide() end)
-				InventoryDragController.hookSource("bag",btn,{uuid=uuid})
 			end
+			-- Hover and click sources are hooked unconditionally (not just when occupied): an
+			-- empty bag slot must still be a valid hover target / click-to-place destination.
+			local ci,cb,thisSlot=item,btn,slotIdx
+			btn.MouseEnter:Connect(function()
+				if ci then ItemTooltip.show(ci,cb) end
+				InventoryDragController.setHoveredBag(uuid,thisSlot)
+			end)
+			btn.MouseLeave:Connect(function()
+				ItemTooltip.hide()
+				InventoryDragController.clearHoveredBag(thisSlot)
+			end)
+			InventoryDragController.hookSource("bag",btn,{uuid=uuid,bagSlot=slotIdx})
 			btn.Parent=refs.inventoryScroll
 		end
 	end
 	local hb=refs.hotbarButtons; local hsi=refs.hotbarSlotItem
+	local hbRow=refs.hotbarRow
+	if hbRow then
+		if type(hb)~="table" then hb={}; refs.hotbarButtons=hb end
+		for _,child in ipairs(hbRow:GetChildren()) do
+			if child:IsA("GuiButton") then
+				local slot=tonumber(child.Name:match("^HB(%d+)$"))
+				if slot and slot>=1 and slot<=HOTBAR_SLOTS then hb[slot]=child end
+			end
+		end
+	end
+	if type(hsi)=="table" then for _i=1,HOTBAR_SLOTS do hsi[_i]=nil end end
 	if type(hb)=="table" then
 		for i=1,HOTBAR_SLOTS do
 			local b=hb[i]
 			if b then
+				local slotNum = tonumber(b.Name:match("^HB(%d+)$")) or i
+				b:SetAttribute("HotbarSlot", slotNum)
 				b.TextXAlignment=Enum.TextXAlignment.Center; b.TextYAlignment=Enum.TextYAlignment.Top
-				local uuid=hotbar[i]
+				local uuid=hotbarSlotUuid(hotbar, i)
 				local it=(type(uuid)=="string" and uuid~="") and inv[uuid] or nil
 				if hsi then hsi[i]=it end
-				local slotStroke=b:FindFirstChild("SlotRoleStroke")
-				if i==1 then
-					if not slotStroke then
-						slotStroke=Instance.new("UIStroke",b); slotStroke.Name="SlotRoleStroke"; slotStroke.Thickness=2
-					end
-					slotStroke.Color=Color3.fromRGB(220,180,90); slotStroke.Enabled=true
-				elseif slotStroke then slotStroke.Enabled=false end
 				if it then
 					local nm=itemDisplayName(it); local cnt=itemCount(it)
-					if i==1 then
-						b.Text=cnt and string.format("Weapon\n%s (x%d)",nm,cnt) or "Weapon\n"..nm
-					else
-						b.Text=cnt and string.format("%d\n%s (x%d)",i,nm,cnt) or string.format("%d\n%s",i,nm)
-					end
+					b.Text=cnt and string.format("%d\n%s (x%d)",i,nm,cnt) or string.format("%d\n%s",i,nm)
 					b.TextColor3=Types.GetRarityColor(it.rarity)
 					if it.maxDurability then
 						local dl=b:FindFirstChild("DurLabel")
@@ -681,6 +752,32 @@ function DungeonMenuUI.setActiveBuffs(refs,rows)
 			tl.TextXAlignment=Enum.TextXAlignment.Left; tl.TextWrapped=true
 			tl.Text=line; tl.ZIndex=6; tl.LayoutOrder=order; order+=1
 			tl.Parent=listFrame
+		end
+	end
+end
+
+function DungeonMenuUI.updateDayNight(refs, state)
+	if type(state) ~= "table" or type(refs) ~= "table" then return end
+	local dn = refs.dayNightRefs
+	if not dn then return end
+	local phase = state.phase == "Night" and "Night" or "Day"
+	local clockTime = tonumber(state.clockTime) or 12
+	local remaining = tonumber(state.phaseRemaining) or 0
+	local nextPhase = phase == "Day" and "Night" or "Day"
+	if dn.phaseLabel then
+		dn.phaseLabel.Text = string.upper(phase)
+		dn.phaseLabel.TextColor3 = phase == "Day"
+			and Color3.fromRGB(255, 210, 90)
+			or Color3.fromRGB(140, 170, 255)
+	end
+	if dn.timeLabel then
+		dn.timeLabel.Text = DayNightConfig.formatClockTime(clockTime)
+	end
+	if dn.remainingLabel then
+		if state.devOverride then
+			dn.remainingLabel.Text = "Dev override (paused)"
+		else
+			dn.remainingLabel.Text = string.format("%s in %s", nextPhase, DayNightConfig.formatRemaining(remaining))
 		end
 	end
 end

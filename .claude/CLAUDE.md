@@ -1,247 +1,199 @@
 # Project: DungeonBlox
 
-## Core Concept
-DungeonBlox is a first-person, high-uptime Roblox Looter-ARPG inspired by DungeonRealms. It features a 5-tier progression system (Levels 1, 21, 41, 61, 81) with energy-based combat and a high-risk player alignment system (Lawful, Neutral, Chaotic).
+Roblox first-person Looter-ARPG (DungeonRealms-like). 5-tier progression (lvl 1/21/41/61/81), energy-based combat, alignment system (Lawful/Neutral/Chaotic).
 
-## Core Gameplay Loop
-1. **Combat & Energy:** High-CPS farming loop regulated by an energy bar (8/sec regen). Zero energy triggers "Low Energy Mode" (3s lockout). Walking allows regen; sprinting/swinging consumes energy.
-2. **Spawners & Sharding:** Mobs spawn from radius-based spawners with cooldowns. Players "Shard Hop" to find open spots. Hopping has a cooldown based on alignment (Lawful: 10s, Neutral: 30s, Chaotic: 1m).
-3. **Loot System:** Private loot via visual-only "flying keys" that travel from mobs to world chests (Food/Green, Normal/White, Elite/Purple).
-4. **Score Mechanic:** 1 Score = 1 Loot Roll. Kill credit is damage-weighted, but all party members get a base score (default 1 in world, 4 in dungeons).
-5. **Dungeons:** Instanced 8-player raids using Tier-specific keys with difficulty modifiers. Automatic "Scrap" conversion for low-tier loot to prevent inventory clutter.
+## Gameplay loop
+- **Combat/Energy:** energy bar 8/s regen. 0 energy = "Low Energy Mode" (3s lockout). Walk regens; sprint/swing drains.
+- **Spawners/Sharding:** radius spawners w/ cooldowns. Shard Hop cooldown by alignment: Lawful 10s, Neutral 30s, Chaotic 1m.
+- **Loot:** private, visual "flying keys" mob→world chests (Food/Green, Normal/White, Elite/Purple).
+- **Score:** 1 Score = 1 Loot Roll. Damage-weighted kill credit; base score 1 (world) / 4 (dungeon) to all party.
+- **Dungeons:** instanced 8-player, tier keys + difficulty mods. Auto-Scrap low-tier loot.
 
-## Key Systems Logic
-- **Alignment Risks:** Neutral/Chaotic allows PvP. Chaotic players drop worn gear/weapons on death; others only drop inventory items. Profession tools are NEVER dropped.
-- **Enchanting:** Safe to +3. Failure at +4 (20% chance) breaks the item (3x repair cost) and resets to +0. Max enchant +9. Protection scrolls (crafted from shards) prevent breaking but not failure.
-- **Level Scaling:** Scaling damage penalty for mobs 5+ levels above player; XP penalty for mobs 5+ levels below.
-- **Professions:** Active Mining and Spear-Fishing. Tools roll sub-stats (Double Ore, Mining Success, etc.). 2:1 Ore-to-Scrap conversion.
+## Key systems
+- **Alignment/death-drop:** Neutral/Chaotic = PvP. Death rule (`SSS/DungeonDeathProtection`) applies to *every* death regardless of alignment today — no Lawful/Neutral leniency yet. See Death-drop section below.
+- **Enchanting:** safe to +3. +4 fail (20%) breaks item (3x repair), resets to +0. Max +9. Protection scrolls block breaking, not failure.
+- **Level scaling:** dmg penalty if mob 5+ lvl above; XP penalty if mob 5+ lvl below.
+- **Professions:** Mining + Spear-Fishing, tools roll substats, 2:1 Ore→Scrap.
 
-## Development Principles
-- **Perspective:** Strictly First-Person.
-- **Tone:** Grim-Stylized aesthetic with high atmospheric tension.
-- **UI/UX:** Minimalist, no emojis, no em-dashes. Use clear progress bars/pies for energy.
-- **Code Logic:** Prioritize human-readable, efficient scripts that handle high-speed loot rolls and multi-instance shard logic without lag.
+## Dev principles
+First-person only. Grim-stylized tone. No emoji/em-dash in UI. Prefer readable code over clever; combat/loot/shard logic must stay lag-free at high CPS.
 
 ---
 
-## Codebase Systems Map
-
-### Two Profile Systems (do not mix them up)
-There are two parallel profile systems. The **modern Dungeon system** is the active one:
-
-| | Old (legacy) | Modern (active) |
+## Two profile systems — don't mix up
+| | Legacy (dead) | Modern (active) |
 |---|---|---|
 | Service | `SSS/PlayerDataManager` | `SSS/DungeonProfileService` |
-| Types/schema | `SSS/PlayerBootstrap` DEFAULT_KIT | `RS/DungeonProfileTypes` DefaultProfile() |
-| Storage key | slot-indexed `profile.Inventory[slotIdx]` | UUID-keyed `profile.inventory[uuid]` |
-| Used by | `InventoryService`, `PlayerBootstrap` | Everything new (drops, equip, UI) |
+| Schema | `SSS/PlayerBootstrap` DEFAULT_KIT | `RS/DungeonProfileTypes` DefaultProfile() |
+| Storage | slot-indexed `profile.Inventory[i]` | uuid-keyed `profile.inventory[uuid]` |
+| Used by | `InventoryService`, `PlayerBootstrap` | everything new |
 
-### Default Starter Inventory
-`SSS/DungeonBootstrap` → `seedStarterIfEmpty(player)` (lines ~213–265)
-- Runs on join if `profile.inventory` is empty
-- Grants: Worn Blade (Weapon T1), Tattered Mail (Armor T1 Uncommon), Stone Pickaxe, Twig Rod (FishingSpear), Cracked Flask ×3
-- All granted via `DungeonProfileService.GrantItem(player, template, count)`
-- Old legacy kit (TrainingSword, LeatherHelm etc.) is in `SSS/PlayerBootstrap` → `DEFAULT_KIT` — this is the **old system** and largely superseded
+Legacy capitalized `profile.Equipped`/`profile.Inventory` (InventoryService, PlayerBootstrap) is a different system — don't touch when working on modern inventory.
 
-### Item Generation Pipeline
+## Item pipeline
 ```
-ItemConfig (RS)         ← all raw stat tables, no logic
-    ↓ required by
-ItemGenerator (SSS)     ← rolls rarity, base stats, substats → returns ItemClass
-    ↓ returns
-ItemClass (SSS)         ← OOP wrapper; getFinalStats() applies multipliers; toGrantTemplate() formats for GrantItem
-    ↓ used by
-LootService (SSS)       ← called by MobManager.ProcessMobDeath; rolls drop chance → grants item → fires ItemDropNotify
-    ↓ notifies
-LootClient (StarterPlayerScripts) ← slides in top-right banner on drop
+ItemConfig (RS) -- raw stat tables
+  -> ItemGenerator (SSS) -- rolls rarity/stats -> ItemClass
+  -> ItemClass (SSS) -- getFinalStats(), toGrantTemplate()
+  -> LootService (SSS) -- MobManager.ProcessMobDeath -> grant -> ItemDropNotify
+  -> LootClient -- top-right banner
 ```
+`ItemConfig`: TIER_MEDIANS, ARMOR_*_RANGES[tier][rarity], WEAPON_DMG_RANGES, WEAPON_MULTIPLIERS (Sword 1.00..Bow 1.20), TIER_DROP_CHANCE (server-side only!), TIER_RARITY_WEIGHTS.
 
-### Item Config File: `ReplicatedStorage/ItemConfig`
-All static numbers — no logic. Key tables:
-- `TIER_MEDIANS` = {10, 30, 50, 70, 90} — used in level-scaling formula
-- `ARMOR_HP_RANGES[tier][rarity]` = {lo, hi} — e.g. T1 Common = {45,51}
-- `ARMOR_ARMOR_RANGES`, `ARMOR_DMGRED_RANGES`, `ARMOR_ENERGY_RANGES` — per tier/rarity
-- `WEAPON_DMG_RANGES[tier][rarity]` = `{min={lo,hi}, max={lo,hi}}` — produces a "7-9" style range
-- `ARMOR_SUBSTAT_RANGE[tier]` = {lo, hi} — single range, all 4 armor substats share it
-- `ARMOR_EFFECTS` — VIT/STR/INT/DEX, weight=30 each
-- `WEAPON_EFFECTS` — 15 effects with `meleeOnly`/`rangedOnly` flags and per-tier ranges
-- `WEAPON_TYPE_WEIGHTS[weaponType]` — per-effect multipliers (e.g. Mace: critical×3, crushing×3)
-- `WEAPON_MULTIPLIERS` — Sword=1.00 … Bow=1.20; applied to dmgMin/dmgMax and elemDmg substat
-- `TIER_DROP_CHANCE[tier]` — default {T1=0.18 … T5=0.72}; **change server-side only** (switch command bar to Server before running)
-- `TIER_RARITY_WEIGHTS[tier]` — rarity distribution per tier
+Scale formula (`SSS/ItemGenerator.scaleStat`): `base*(1+(lvl-tierMedian)*0.01)`, floor; if lvl>100 also floor at `base*(1+(lvl-100)*0.05)`. Armor hps=floor(hp*0.5). Energy is float, 2dp.
 
-### Item Stat Scaling Formula (`SSS/ItemGenerator` → `scaleStat`)
-```
-result = baseStat * (1 + (level - tierMedian) * 0.01)
-if level > 100: result = max(result, baseStat * (1 + (level-100) * 0.05))
-result = floor(result)
-```
-Armor HP/s is always `floor(hp * 0.5)`. Energy rolls as a float, rounded to 2 decimal places.
+GrantItem template: `{name, type, rarity, tier, enchantLevel, subStats={}, equipSlot, tags={}}`.
 
-### Armor Base Stats (all four slots: Helm/Chest/Legs/Boots share same tables)
-`hp`, `hps` (=floor(hp*0.5)), `armor` (flat rating), `dmgRed` (% integer), `energy` (float Energy/s regen)
+`RS/DungeonProfileTypes`: `DefaultProfile()`, `ValidateItemTemplate`, `VALID_SLOTS`, `GetAllowedEquipSlot(item)`.
 
-### Weapon Base Stats
-`dmgMin`, `dmgMax` — after WEAPON_MULTIPLIERS applied via `ItemClass:getFinalStats()`
+`SSS/DungeonStatsService.RecomputeRuntimeHp(profile)` — call after every GrantItem.
 
-### Item Template Format (what GrantItem accepts)
-```lua
-{
-  name        = string,
-  type        = "Weapon" | "Armor" | "Material" | "Consumable",
-  rarity      = "Common"|"Uncommon"|"Rare"|"Epic"|"Legendary",
-  tier        = 1-5,
-  enchantLevel = 0,
-  subStats    = { [statId] = number, ... },  -- base stats + substats all in one flat dict
-  equipSlot   = "Weapon"|"Helm"|"Chest"|"Legs"|"Boots"|"Armor"|"Pickaxe"|"FishingSpear"|"Potion",
-  tags        = { string, ... },  -- e.g. {"Mace"} or {"Helm"}
-}
-```
-
-### Profile Schema: `ReplicatedStorage/DungeonProfileTypes`
-- `DefaultProfile()` — the canonical empty profile structure
-- `ValidateItemTemplate(t)` — validates before GrantItem
-- `VALID_SLOTS` — all allowed equipSlot values
-- `GetAllowedEquipSlot(item)` — derives correct slot from item.equipSlot or item.tags
-
-### Player Stats / HP Recompute
-`SSS/DungeonStatsService` → `RecomputeRuntimeHp(profile)` — called after every GrantItem
-
-### Mob System
-- `SSS/MobClass` — OOP mob, fields: `mob.Tier`, `mob.MobID`, `mob.Stats.Level`, `mob.DamageTracker`
-- `SSS/MobManager` — heartbeat loop; owns `ProcessMobDeath` which calls `LootService.onMobDied`
-- `SSS/MobData` (RS) — static mob definitions; `MobData.FindMobById(id)` returns `baseStats, tier`
-- `SSS/SpawnerService` — reads `Workspace/Spawners/MobSpawners` Parts with attributes (MobId, Count, Radius, RespawnDelay, Active)
-
-### Combat & Animation System
-
-#### Files — what to touch and what to avoid
-
-| File | Purpose | Touch for |
-|---|---|---|
-| `ReplicatedStorage/CombatAnimConfig` | All animation + hitbox constants | Swap anim ID, tune speed/priority/hitbox |
-| `StarterPlayerScripts/CombatClient` | Input → animation → hit detection → remotes | Combat logic changes only; never hardcode values here |
-| `StarterPack/R6Sword/AnimationScript` | Gutted — replaced by CombatClient | Do not restore; CombatClient owns all swing anims |
-
-#### How to swap the swing animation
-Edit only `CombatAnimConfig.SWING_ANIM_ID`. Nothing else needs to change.
-- Animation must be published to the same Roblox account/group as this game.
-- Use R15-native or R6 animations (R6 auto-converts on R15 characters). R15 animations that fail asset delivery produce **no console error and no visual output** — silent failure.
-- To diagnose: set `CombatAnimConfig.DEBUG = true` → logs rig type, anim ID, track length, and `IsPlaying` on every load and swing.
-
-#### Key constants (all live in `CombatAnimConfig`)
-- `SWING_ANIM_ID` — animation asset ID
-- `ANIM_SPEED_MULT` — playback speed (4.0 = 4× for high-CPS feel)
-- `ANIM_PRIORITY` — `Enum.AnimationPriority.Action` by default
-- `CANCEL_FADE` — fade-out seconds when cancelling an in-progress swing
-- `HITBOX_SIZE` — overlap box for the secondary melee sweep
-
-#### What to avoid
-- **Never hardcode animation IDs or Vector3 hitbox sizes in CombatClient.** All tunable values belong in `CombatAnimConfig`.
-- **Never restore the `SwingAnimId` tool attribute pattern.** It was removed because `execute_luau` attribute changes revert when play stops, making the attribute silently override `CombatAnimConfig` with stale data.
-- **Never add `SwingAnimId` attributes to tools in StarterPack.** `CombatClient` no longer reads them; they would be dead data.
-- **Never re-enable `R6Sword.AnimationScript`.** It played `SlashAnim2` independently on the Humanoid Animator and raced with CombatClient.
-
-### NPC System
-- `SSS/NPCService` — server-side NPC logic
-- CollectionService tag `"NPC"` — drives NPCClient factory on the client
-- NPC spawner markers in `Workspace/Spawners/NPCSpawners` (NpcId, NpcType, NpcName attributes)
-
-### Innkeeper and Hearthstone (how the client UI is wired)
-**What was wrong**
-- `StarterPlayerScripts/MerchantShopClient` hooks `ProximityPromptService.PromptTriggered` for every prompt. It used to treat **Innkeeper** like a wallet or scrap merchant (`SHOP_NPC_TYPES.Innkeeper`). That opened **MerchantShopFallbackUI** and filled offers from `NPCRegistry` **TeleportNodes**, which are empty for Innkeeper (hearthstone routes live in DataStore and **HearthstoneSync**, not in the registry).
-- A separate **client-only** `ProximityPrompt` named `HearthstonePrompt` on the Innkeeper rig conflicted with the real NPC prompt. Disabling sibling prompts or wrong key bindings could remove the normal **E** affordance entirely.
-
-**What we did (Blacksmith pattern)**
-- **Innkeeper is not a merchant shop type:** `Innkeeper` was removed from `SHOP_NPC_TYPES` in `MerchantShopClient`, so the wallet or scrap UI never opens for Innkeepers.
-- **Same entry path as Blacksmith:** After resolving a **Blacksmith** prompt with `getNpcFromPrompt`, `MerchantShopClient` calls `getInnkeeperFromPrompt(prompt)` (matches `NpcType == "Innkeeper"` or model **Name** `"Innkeeper"`; default `NpcId` **`innkeeper_01`** if missing) and then **`HearthstoneClient.openInnkeeperShop()`**.
-- **`HearthstoneClient`** keeps the **HearthstoneShopUI** (catalog from **`HearthstoneSync`**, buy via **`HearthstonePurchase`**) and tele or swap UI from **`SkillsTabClient.init`**. It **no longer** creates a second prompt, scans the world for Innkeepers, or disables other **ProximityPrompt** instances on the HRP.
-- **`NPCClient`** still short-circuits **Innkeeper** on `prompt.Triggered` so the dialog UI does not fight the shop; the shop is opened only through **`ProximityPromptService`** in `MerchantShopClient`, like the blacksmith repair UI.
-
-**Data and remotes (ReplicatedStorage)**
-- **`HearthstoneConfig`** (ModuleScript): seeds, admin ids, DataStore key name, cooldown constant.
-- **`HearthstoneSync`** (RemoteFunction): client gets the location list (dev tool additions and server merge).
-- **`HearthstonePurchase`**, **`HearthstoneTeleport`**, **`HearthstoneSwap`**, plus admin **`HearthstoneAdminAdd`** / **`HearthstoneAdminDelete`** for the dev panel.
-
-### Networking (RemoteEvents/Functions in ReplicatedStorage)
-| Name | Type | Direction | Purpose |
-|---|---|---|---|
-| `DungeonProfilePush` | RemoteEvent | S→C | Push full profile snapshot to client |
-| `DungeonProfileRequestSync` | RemoteFunction | C→S | Client requests fresh snapshot |
-| `DungeonEquipItem` | RemoteEvent | C→S | Equip item by UUID |
-| `DungeonUnequipItem` | RemoteEvent | C→S | Unequip by slot name |
-| `DungeonInventoryAct` | RemoteFunction | C→S | Hotbar/chest/enchant actions |
-| `ItemDropNotify` | RemoteEvent | S→C | Notify client of item drop (shows banner) |
-| `CombatRemote` | RemoteEvent | C→S | Weapon hit registration |
-| `CombatXPEvent` | RemoteEvent | S→C | Combat XP popup |
-
-### UI Entry Points (StarterPlayerScripts)
-- `DungeonMenuUI` — Tab menu: inventory grid + equipment slots panel (Helm/Chest/Legs/Boots/Weapon)
-- `DungeonMenuNet` — client cache for profile snapshots; inventory RF (`DungeonInventoryAct`), equip/unequip, **`requestSync`**. After **`ApplyEnchantScroll`** success, merges state via sync so `_seq` races with **`DungeonProfilePush`** do not drop the update (see Important Caveats).
-- `LootClient` — ItemDropNotify listener; shows slide-in banner top-right
-- `ItemTooltip` — hover tooltip showing dmgMin-dmgMax / hp / substats
-- `SkillsTabClient` — skills/stats tab; wires equip/unequip callbacks into DungeonMenuNet; character bag scroll UI. If callbacks call `refresh` before it is defined, use **`local refresh` forward declare** then **`refresh = function() ... end`** (see Important Caveats). Calls **`HearthstoneClient.init`** for tele or swap and hearthstone menu refs
-- `MerchantShopClient` — global **ProximityPromptService** routing: **Blacksmith** to `BlacksmithClient`, **Innkeeper** to **`HearthstoneClient.openInnkeeperShop`**, other shop NPC types to merchant UI
-- `HearthstoneClient` — hearthstone shop UI, picker, and profile-driven tele or swap (opened from `MerchantShopClient` on Innkeeper prompt)
-
-### Important Caveats
-- **Command bar Server vs Client:** The Studio command bar runs as **Client** by default during play. Use the dropdown to switch to **Server** before running any server-side require() or config mutations. Client-side changes to `ItemConfig` do NOT affect the server drop rolls.
-- **Script persistence:** Scripts created via MCP `multi_edit` persist to the place file. Scripts created via `execute_luau` do NOT persist after session ends.
-- **`goto continue` is invalid in Luau** inside nested if blocks — use inline `and not (condition)` guards instead.
-
-### Enchant scrolls and profile snapshots (do not regress)
-Authoritative scroll logic lives in **`ReplicatedStorage/EnchantScrollApply`**. Server entry: **`ServerScriptService/DungeonProfileService`** `ApplyEnchantScroll` → `EnchantScrollApply.ApplyFromAct(profile, act, Random.new())` after validation. Client entry: **`DungeonInventoryAct`** → same server function; client merge in **`StarterPlayerScripts/DungeonMenuNet`**.
-
-- **Luau `Random` is userdata, not a table.** `Random.new()` must never be validated with `type(rng) == "table"`. If `RollEnchantSuccess` (or any RNG helper) rejects the instance, every scroll will look like a failure: scroll consumed, `enchantLevel` forced to `0`, substats unchanged. Duck-type only: `rng` non-nil and `type(rng.NextNumber) == "function"`. Do not use `game:GetService("Random")` (nil).
-
-- **Scroll targets vs catalog `itemId`.** `DungeonProfileTypes.ValidateOwnedItem` requires a non-empty catalog `itemId`. Rolled weapons/armor from **`ItemGenerator`** often have **no** `itemId`. For scroll application, validate the **scroll** with `ValidateOwnedItem`; validate the **target** with **`EnchantScrollApply.ValidateEnchantTargetItem`** (type + tier). Using `ValidateOwnedItem` on the target yields `bad_itemId` for legitimate drops.
-
-- **Client snapshot merge after `ApplyEnchantScroll`.** Snapshots carry monotonic `_seq` from **`DungeonProfileService.BuildSnapshotPayload`** (`snapshotGenByUserId`). While the client is yielding on **`DungeonInventoryAct:InvokeServer`**, **`DungeonProfilePush`** can still run and advance `lastSnapshot._seq`. The RF return payload can then look **stale** to `applySnapshotPayload` / `snapshotIsStale` and be dropped, so the UI shows no `+N` even though the server applied the scroll. After a successful scroll act, **`DungeonMenuNet.requestInventoryAct`** should rely on an authoritative **`requestSync()`** for `ApplyEnchantScroll` (not only the RF second return value).
-
-- **`SkillsTabClient` and `task.defer(refresh)`.** `menuCtx` callbacks are created **before** the `refresh` function is defined. Without a forward declaration (`local refresh` then `refresh = function() ... end` later), `refresh` inside those closures resolves to **global** (nil) and `task.defer(refresh)` errors. Any callback defined above `refresh` that calls `refresh` must use that pattern or an inline closure.
-
-- **Repo vs Studio.** On-disk `roblox/` may only mirror **`ReplicatedStorage/EnchantScrollApply`**, **`ItemDefinitions`**, **`ItemTooltip`**. **`DungeonProfileService`**, **`DungeonMenuNet`**, **`SkillsTabClient`**, **`DungeonBootstrap`**, **`MobCombat`**, etc. often exist **only in the place file**. After MCP or manual edits in Studio, **save the place** and consider copying critical modules into `roblox/` if you use Rojo.
-
-- **Optional debug:** Server `ApplyEnchantScroll` and client `DungeonMenuNet` may log **`[EnchantTrace]`** (target uuid, `enchantLevel`, `push_seq` / merged `_seq`) when tracing server vs UI drift. Remove or gate once stable.
+## Mob system
+- `SSS/MobClass` — `mob.Tier/MobID/Stats.Level/DamageTracker`
+- `SSS/MobManager` — heartbeat; `ProcessMobDeath` → `LootService.onMobDied`
+- `SSS/MobData` (RS) — `FindMobById(id)` → baseStats, tier
+- `SSS/SpawnerService` — reads `Workspace/Spawners/MobSpawners` Part attrs (MobId/Count/Radius/RespawnDelay/Active)
 
 ---
 
-## Inventory GUI Revamp (May 2026)
+## Hotbar/Inventory model (current, Minecraft-style)
 
-### Files Changed
+All 9 hotbar slots identical, no reserved weapon slot. `profile.equipped.Weapon` doesn't exist — your weapon is just whatever's in the hotbar. Bag is positional too: `profile.bagSlots[1..27]` (3x9, `Types.BAG_SLOT_COUNT`), same uuid-pointer pattern as `hotbar[1..9]`. `profile.inventory[uuid]` is the only ownership dict; `hotbar`/`bagSlots` are indices into it.
 
-| File | Role |
+**Fill-first-empty-slot on every acquisition.** `SSS/DungeonProfileService.placeItemInFirstEmptySlot(profile, uuid)`: hotbar 1-9 first (if `itemAllowsHotbar`), else bagSlots 1-27. Wired into `GrantItem`, `GrantItemId`, `mergeStackableIntoInventory`'s create-fallback, `ChestWithdrawSlot`. Public wrapper `DungeonProfileService.PlaceItemInFirstEmptySlot` for the 2 outside callers that mint uuids directly: `AuctionHouseService.grantItemDirect`, `DungeonWorldLootService.GrantLootToPlayer`. **Any new direct `profile.inventory[uuid]=item` write must call this too**, or item is owned but invisible.
+
+**Never raw-assign `profile.equipped[slot]=uuid` or `profile.hotbar[i]=uuid`.** Always go through `EquipItem`/`SetHotbarSlot`/`SetBagSlot`/etc — they clear the uuid's old slot reference first. A raw assignment (e.g. an old `seedStarterIfEmpty` bug) leaves the same uuid referenced in two places at once → item renders twice, and unequip/requip can make it vanish. Every "leaves a slot" path must call `clearUuidFromBagSlots`/`clearItemUuidFromAllHotbar`/`clearItemUuidFromAllEquipped` — already wired into `EquipItem`, `SetHotbarSlot`, `ChestDepositToSlot`, `ConsumeItemId`, `SalvageGearByUuid`, scroll-apply safety nets, and `DungeonDeathLoot.stripReferencesToMissing` (hotbar+bagSlots+equipped).
+
+**Starter seed order (`DungeonBootstrap.seedStarterIfEmpty`):** explicit reorder step after granting — Sword→hotbar[1], Bow→[2], Pickaxe→[3], Spear→[4], independent of grant order. Armor still explicitly equipped via `EquipItem` (not hotbar-eligible, would otherwise sit in bag). Gated by `flags.trainingGearSeeded`, runs once ever; later sessions preserve player's own arrangement.
+
+**Server actions:** `SetHotbarSlot`/`ClearHotbarSlot`/`SwapHotbarSlots`, `SetBagSlot`/`SwapBagSlot` (mirror pair), `EquipItem` (rejects `slot=="Weapon"` outright), `UnequipItem`. Dispatched via `DungeonInventoryAct` RF kinds of the same name in `DungeonBootstrap`.
+
+**Client (`InventoryDragController`) — two gestures, one dispatch path (`performDrop`):**
+1. Click-to-pick-up/place: click occupied slot → picks up (cursor-follow ghost), click destination → places (swaps if occupied). Same slot or right-click = cancel, free (nothing mutated until the placing click).
+2. Hold-and-drag: press+hold on occupied slot, move past 5px threshold, release on destination. Release under threshold falls through to gesture 1. Drag-release uses position hit-testing (`dropTargetAt`/`pointInGui`) since it isn't tied to one button's own click event.
+Both gestures end at the same `performDrop`/`performHotbarToHotbarSwap`/`performAssignToHotbar` calls — never add a third path to the server.
+
+**Hover+number-key (1-9):** while menu open, hover bag/hotbar slot + press 1-9 = same assign/swap actions. Hover state fed by `DungeonMenuUI`'s existing tooltip MouseEnter/Leave (no 2nd hover system).
+
+**Hotbar clicks while menu open = pick/place only**, no equip-by-click (that callback was always dead code). `DungeonHotbarHud`'s "press 1-9 while menu *closed*" to equip is separate/untouched.
+
+`DungeonMenuUI` bag render reads `profile.bagSlots[i]` directly (no client-side sorting). Every bag button gets `BagSlot` attr (even empty ones — valid drop targets).
+
+## Death-drop protection (`SSS/DungeonDeathProtection`)
+Decision logic is standalone, not inlined in `DungeonDeathLoot` (which only owns the drop loop/coin loss/world-loot spawn). Keep precedence:
+1. Profession items (Pickaxe/FishingSpear/`IsProtectedOnDeath`) — always
+2. Equipped armor — always
+3. "Main weapon" = first weapon found scanning `hotbar[1..9]` (closest-to-1, not strictly slot1) — `GetProtectedWeaponUuid`
+4. Single highest-damage Bow anywhere in hotbar — `GetProtectedBowUuid` (can overlap rule 3)
+5. Everything else, incl. all bag items, drops
+
+**`ReorderHotbarAfterDeath(profile)`** runs after the drop loop: front-loads survivors into slots 1-4 in priority — melee weapon, bow, pickaxe, fishing spear, then anything else — closing gaps left by dropped items. Pickaxe/spear detection checks `equipSlot` then falls back to `toolPrefabName`/`itemId` substring match (catalog items don't carry an explicit equipSlot field).
+
+---
+
+## NPC system
+Two parallel, non-unified paths — don't conflate:
+1. **Bootstrap scripts** (primary): one `SSS/<Type>Bootstrap` per type. Scans `Workspace:GetDescendants()` for **every** matching Model (not just first — old `FindFirstChild(name,true)` bug silently broke all-but-one duplicate town copy), wires `NpcId`/ProximityPrompt/CollectionService tag `"NPC"`/Head.gui dialog.
+2. **SpawnerService + ServerStorage/NPCModels clone** (dev-tool, F8 placer): independent of path 1, known 2nd source of duplicate NPCs (not yet unified).
+
+NpcId convention: tutorial copy = `<type>_tutorial`, else first match = canonical (`blacksmith_01`), dupes get numeric suffix.
+
+**Quest state is per-player (`profile.flags.<questName>`), not per-NPC-instance** — handlers check `npcType` only, not exact `npcId`, so any duplicate NPC of that type serves the same quest.
+
+- `SSS/NPCService` — `NPCRequest` RF, `npcIndex` (by NpcId), `HANDLERS` dispatch, validates via `NPCRegistry.AllowsAction`.
+- `RS/NPCRegistry` — pure data: `NpcType -> {Interactions, ShopCatalog, TradeRates, ...}`. Catalog data itself lives in `RS/ShopCatalogConfig` (one file, all NPC prices) — NPCRegistry just assigns `ShopCatalog = ShopCatalogConfig.<Type>.ShopCatalog`.
+- `RS/DialogModule` — indexes `UIStroke` directly (not FindFirstChild) on name/arrow/dialog labels; calls `ensureNpcBillboardStrokes` first to backfill on old pre-UIStroke `Head.gui`s. Don't remove.
+- Innkeeper is NOT a merchant-shop type (`SHOP_NPC_TYPES`) — routes through `HearthstoneClient.openInnkeeperShop()` like Blacksmith routes to `BlacksmithClient`, both via `MerchantShopClient`'s ProximityPromptService hook. Hearthstone remotes: `HearthstoneSync/Purchase/Teleport/Swap` + admin Add/Delete.
+
+## Combat & animation
+| File | Purpose |
 |---|---|
-| `StarterPlayer.StarterPlayerScripts.DungeonMenuUI` | **Primary inventory file.** Complete layout rewrite: 2×2 equipment grids, bag below hotbar, skill bars horizontal, active buffs panel removed. Also owns `redraw` and `setActiveBuffs`. **Edit this file for all layout, font, and slot styling changes.** |
-| `StarterPlayer.StarterPlayerScripts.InventoryDragController` | Added bag-to-bag drag-to-swap: `syncBagOrder`, `swapBagOrder`, `getSortedBagItems`, and `bag_item` drop target detection via `BagUUID` attribute on bag buttons. |
-| `StarterPlayer.StarterPlayerScripts.StatsOverlayClient` | New script. Injects a "View Stats ›" button into the frame named `PlayerStatsBox` (searches `playerGui` recursively by name) and creates the character sheet overlay ScreenGui (DisplayOrder 150). |
+| `RS/CombatAnimConfig` | all anim/hitbox constants — edit here only |
+| `StarterPlayerScripts/CombatClient` | input->anim->hit->remote; never hardcode values |
+| `StarterPack/R6Sword/AnimationScript` | gutted, do not restore (raced with CombatClient) |
 
-### Changing Fonts
+Swap swing anim: edit `CombatAnimConfig.SWING_ANIM_ID` only. Must be R15-native or R6 (auto-converts); failed R15 delivery = silent no-op (no console error). `DEBUG=true` logs rig/anim/track per swing.
 
-All fonts are controlled in **`DungeonMenuUI`** at the top of the file:
+Gotchas: never restore `SwingAnimId` tool attribute (reverts on play-stop, becomes stale). `CombatClient.InitAnimator` must try `FindFirstChildOfClass("Animator")` then `WaitForChild` fallback — never `FindFirstChildOfClass` alone (races Roblox's async `Animate` script, creates a phantom 2nd Animator that doesn't drive the character). Player chars are R15 (Game Settings->Avatar, not the toolbar Avatar tab); NPC/mob rigs are R6, separate.
 
-```lua
-local QS = "rbxasset://fonts/families/Quicksand.json"
-local function qsFont(lbl, w)
-    pcall(function() lbl.FontFace = Font.new(QS, w or Enum.FontWeight.Medium) end)
-end
+## Networking (ReplicatedStorage)
+| Name | Type | Dir | Purpose |
+|---|---|---|---|
+| `DungeonProfilePush` | RemoteEvent | S->C | full snapshot push |
+| `DungeonProfileRequestSync`/`requestSync` | RF | C->S | fresh snapshot pull |
+| `DungeonEquipItem`/`DungeonUnequipItem` | Event/RF | C->S | equip by uuid / unequip by slot |
+| `DungeonInventoryAct` | RF | C->S | hotbar/bag/chest/enchant actions |
+| `ItemDropNotify` | RemoteEvent | S->C | drop banner |
+| `CombatRemote`/`CombatXPEvent` | Event | C->S / S->C | hit reg / XP popup |
+
+**Any new purchase/shop client must call `DungeonMenuNet.requestSync()` after a successful action.** The implicit `DungeonProfilePush` broadcast can race or get dropped as stale — `BankClient`/`SkillsTabClient`/`AuctionHouseClient`/`BlacksmithClient` all do this defensively; `MerchantClient`/`ShopClientBase` originally didn't (fixed).
+
+## UI entry points (StarterPlayerScripts)
+`DungeonMenuUI` (panel layout+redraw, fonts via `qsFont`/`QS` at top of file), `DungeonMenuNet` (snapshot cache, `_seq`-aware merge), `LootClient`, `ItemTooltip`, `SkillsTabClient` (uses `local refresh` forward-declare pattern — see gotcha below), `MerchantShopClient` (routes ProximityPrompt by NpcType), `HearthstoneClient`.
+
+## Enchant scrolls (`RS/EnchantScrollApply`, entry via `DungeonProfileService.ApplyEnchantScroll`)
+- `Random.new()` is userdata, not a table — never `type(rng)=="table"` check; duck-type `type(rng.NextNumber)=="function"`.
+- Validate scroll with `Types.ValidateOwnedItem`; validate target with `EnchantScrollApply.ValidateEnchantTargetItem` (rolled gear often has no catalog itemId, `ValidateOwnedItem` would reject it).
+- After `ApplyEnchantScroll`, client must call `requestSync()` — RF return payload can look stale vs a racing `DungeonProfilePush` and get dropped silently.
+
+## Studio/tooling gotchas
+- **Command bar defaults to Client during play** — switch to Server before server-side require()/mutations.
+- **`execute_luau` caches `require()` across calls within one Edit-mode session.** Editing a ModuleScript does NOT invalidate an already-required copy — you'll silently get pre-edit behavior (missing new functions) until a Play-mode Start/Stop cycle resets the Lua VM. If a just-added function "doesn't exist," verify with a fresh Play cycle before assuming the edit failed.
+- **MCP `multi_edit` is atomic** — one failing `old_string` match rolls back every edit in that call. Verify after with a read/grep.
+- Scripts via `multi_edit` persist to the place; scripts via `execute_luau` do not survive session end.
+- `goto continue` invalid in Luau nested-if — use inline `and not (cond)` guards.
+- `DungeonMenuUI` corruption recovery: rename old (`.Name = "..._OLD"`), create fresh via `multi_edit` empty-old_string, destroy old. Don't patch corrupted layout code in place.
+- Quicksand font "Temp read failed" in Studio is expected/harmless (works in real game) — keep `FontFace` set in `pcall`.
+- **Play-mode profile/join races:** `seedStarterIfEmpty`/character-spawn flow is async; ad-hoc `execute_luau` profile pokes right after spawn often race it (profile looks unseeded for several real seconds). Don't conclude a feature is broken from one early poke — wait or test via real UI.
+
+---
+
+## Asset & naming conventions
+
+**Tiering is the naming system.** The game is 5-tier (lvl 1/21/41/61/81); tier 1 is leather/wooden gear. Names must encode tier, never vague adjectives.
+
+- New itemIds / prefabs / configs: `T1_Sword`, `T2_Helm`, `T1_Bow`. PascalCase after the tier prefix.
+- Never "Low tier", "Basic", "Starter" as a *code-facing* identifier. Those are display words, not ids.
+- `DisplayName` is the only place human phrasing belongs ("T1 Sword", "Training Sword").
+- No snake_case or spaces in instance/prefab names. `Low_tier_sword`, `Wood Sword`, `Gravity Coil` are legacy — leave them, don't imitate them.
+
+**Legacy ids are frozen.** `ItemDefinitions` keys ARE itemIds and are persisted in `PlayerProfile_v1`. Renaming a key orphans every saved item using it. Convention applies to *new* entries only; renaming an existing id requires an alias map that rewrites legacy ids on profile load. As of 2026-07 save data is dev-only, so a full rename + migration is still cheap if wanted.
+
+## Asset ID registries (`RS/Assets/...`)
+
+Asset IDs live in registry ModuleScripts, never as inline `rbxassetid://` literals.
+
+```
+RS/Assets/Icons/<Category>/<Category>Icons     -- Weapons, Armor, Materials, Keys, Consumables, Hearthstones
+RS/Assets/Meshes/<Category>/<Category>Meshes   -- Weapons (added 2026-07)
 ```
 
-- **To change the font family:** update the `QS` URL.
-- **To change a specific element's weight:** find its `qsFont(label, Enum.FontWeight.X)` call in `createLayout`.
-- **Gotham is the fallback** (set via `label.Font = Enum.Font.GothamMedium` before `qsFont`). Quicksand shows "Temp read failed" in Studio testing but loads correctly in-game — this is expected.
-- **TextSize** for each element is set inline in `createLayout`; there is no central size table.
+Keys are SCREAMING_SNAKE and match the `ItemDefinitions` itemId: `TRAINING_SWORD`. Mesh entries carry `MeshId`, `TextureId`, and `GripDrop` (see weapon pipeline below).
 
-### Critical Gotchas
+`MeshPart.MeshId` cannot be assigned from a script (`lacking capability NotAccessible`) — meshes must be set by importing, not generated at runtime. The registry is the source of truth for *documentation and validation*; the instance property is set at import time.
 
-1. **`PlayerStatsBox` must exist in the layout.** `StatsOverlayClient` searches `playerGui` recursively for a `Frame` named exactly `"PlayerStatsBox"`. If `DungeonMenuUI.createLayout` is redesigned and this frame is removed or renamed, the "View Stats" button disappears silently. Always keep a frame with this name in the `InfoCenter` area containing `Currency` and `DerivedStats` labels.
+## Blender -> Roblox export pipeline
 
-2. **`multi_edit` is atomic — one failing edit rolls back the entire call.** When making multiple changes to `DungeonMenuUI`, use separate `multi_edit` calls per change. A single `old_string` mismatch silently reverts every other edit in the same batch. Always verify with `execute_luau` checking `.Source` for key strings after editing.
+Hard-won rules. Each exists because of a specific silent failure.
 
-3. **`DungeonMenuUI` corruption recovery.** If partial rewrites leave orphaned code (duplicate `Instance.new()` calls, mismatched scopes), targeted edits become impossible. Recovery: rename via `execute_luau` (`.Name = "DungeonMenuUI_OLD"`), create a fresh script with `multi_edit` using an empty `old_string` to set initial content, then destroy the old one. Do not attempt to fix a badly corrupted file in place.
+**Texture filename collisions produce a black or error-flagged import.** Blender names embedded FBX textures from the image's *filepath*. An image with an empty filepath, or one pointing at a path that doesn't exist on this machine (common with packed/downloaded assets), falls back to a generic name — several textures then export as `base_color_texture` and overwrite each other. Symptom: import preview lists multiple `base_color_texture` entries with red icons, or the model imports black with only one part textured correctly. Fix: give every image a real unique file on disk (`img.filepath_raw = <unique path>; img.file_format='PNG'; img.save()`) before exporting.
 
-4. **Duplicate Animator breaks animations — fix is in place, do not regress.** `CombatClient.InitAnimator` uses `humanoid:FindFirstChildOfClass("Animator") or humanoid:WaitForChild("Animator", 10)`. It tries the fast path first; if the real Animator doesn't exist yet it waits. Never replace this with `FindFirstChildOfClass` alone as the sole call. Roblox's `Animate` script creates the real Animator asynchronously; calling `FindFirstChildOfClass` too early (before Animate runs) creates a second phantom Animator. Animations then fire (`IsPlaying = true`, `Length > 0`) but nothing moves visually because the phantom Animator doesn't drive the character.
+**One texture per MeshPart.** A multi-material mesh imports as one MeshPart per material. That's fine and often desirable for props. It is NOT fine for a single-part asset — merge into one atlas and remap UVs by material slot.
 
-5. **Player characters are R15, not R6.** The **Avatar** tab in the Studio toolbar ribbon is for appearance customization only — it does NOT change the character rig type. The actual setting is under **File → Game Settings → Avatar → Avatar Type**, which is set to **R15**. Confirm with `execute_luau` on a live character: `char:FindFirstChildOfClass("Humanoid").RigType`. NPC and mob rigs in Workspace are R6 (separate from player characters — they are authored independently). The working swing animation `98847827358249` plays correctly on R15 via Roblox's R6→R15 auto-conversion layer. New animations must be either R15-native or R6 (auto-converted); pure R15 animations that fail to load silently produce no visual output and no error in the console.
+**Delete material slots with zero faces before export.** They confuse the importer and add phantom entries.
 
-6. **Quicksand font fails in Studio, works in-game.** `Font family rbxasset://fonts/families/Quicksand.json failed to load: Temp read failed` in the Studio output is expected and harmless. Always wrap `FontFace` assignment in `pcall` (already done via the `qsFont()` helper in `DungeonMenuUI`).
+**Limits:** 10,000 triangles per MeshPart; textures capped at 1024 for meshes (2048 only for Marketplace avatar bodies).
+
+**Strip Normal/Metallic/Roughness links before exporting props.** Roblox uses base colour only unless you build a `SurfaceAppearance`. Leaving them linked bloats the FBX several times over.
+
+**Check whether alpha is actually used before stripping it.** Measure the alpha channel; if min == 1.0 the link is redundant and should go. If a meaningful share of pixels are below ~0.9 it's real cutout transparency and must stay.
+
+### Weapon authoring convention
+Author in Blender with **origin at the grip point** and **blade along +Z** (becomes +Y in Roblox after FBX axis conversion, matching the classic sword Handle convention). Scale in studs (a one-handed sword is ~3.5; the player character is 5.82).
+
+Roblox welds Tools by `Handle.CFrame` — the bounding-box centre — and **ignores `PivotOffset`**. So `Tool.Grip` must compensate: `CFrame.new(0, GripDrop, 0)` where `GripDrop` is the negative Y distance from bbox centre to grip. Store it in the mesh registry. Weapons authored this way need no hand-tuned Grip rotation — contrast `Low_tier_sword`, whose Grip is unrepeatable magic numbers from dragging in Studio.
+
+### R15 character pipeline
+Full workflow lives in the `tripo-to-roblox-r15` skill. The two that bite hardest:
+- The armature object's **90 deg X rotation must stay UNAPPLIED**. Freezing it silently prevents Roblox from ever offering R15 as a Rig Type.
+- The **rest pose must match Roblox's** (arms angled down, not T-pose). Stock animations store rotations relative to rest, so a T-posed rig plays every animation ~50 deg off.

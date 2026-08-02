@@ -6,11 +6,11 @@
     Layout:
       Name              (rarity color, GothamBold 14px)
       Type | Tier | Lv  (grey, Gotham 11px)
-      optional catalog description (grey, 11px)
       separator
       DMG N  or  HP N / HP/s N   (white, GothamBold 15px)
-      separator (if substats exist)
-      SubstatLabel  +N or N%     (gold, Gotham 12px)
+      separator (if catalog effects / substats exist)
+      Food: hunger, eat time, timed buffs
+      Consumable: HP heal, energy restore
 ]]
 
 local Players = game:GetService("Players")
@@ -27,10 +27,10 @@ local LABELS = {
     armor     = "Armor",
     dmgRed    = "DMG Red.",
     energy    = "Energy/s",
-    vit       = "VIT (HP)",
-    str       = "STR (DMG)",
-    ["int"]  = "INT (HP/s)",
-    dex       = "DEX (Accuracy)",
+    vit       = "VIT (Mace DMG)",
+    str       = "STR (Axe DMG)",
+    ["int"]  = "INT (Scythe DMG)",
+    dex       = "DEX (Sword DMG)",
     vsMon     = "vs. Monsters",
     vsPly     = "vs. Players",
     accuracy  = "Accuracy",
@@ -58,7 +58,7 @@ local PRIMARY_STATS = { dmgMin=true, dmgMax=true, hp=true, hps=true, armor=true,
 local PRIMARY_ORDER = { "dmgMin", "dmgMax", "hp", "hps", "armor", "dmgRed", "energy" }
 local PCT_STATS     = {
     vsMon=true, vsPly=true, accuracy=true, lifesteal=true,
-    crushing=true, critical=true, execute=true, pierce=true, dex=true,
+    crushing=true, critical=true, execute=true, pierce=true,
     coinFind=true, block=true, reflect=true, dodge=true, elemRes=true,
 }
 
@@ -74,6 +74,7 @@ local COLOR_PRIMARY   = Color3.new(1, 1, 1)
 local COLOR_SUBSTAT   = Color3.fromRGB(255, 215, 100)
 local COLOR_META      = Color3.fromRGB(160, 155, 145)
 local COLOR_SEPARATOR = Color3.fromRGB(70,  55,  45)
+local COLOR_PROTECTED = Color3.fromRGB(180, 100, 255)
 local TOOLTIP_W       = 230
 
 ------------------------------------------------------------------------
@@ -176,44 +177,132 @@ local function positionNear(btn)
     end)
 end
 
+local function positionAtWorldPart(part)
+    task.defer(function()
+        if not gui.Enabled then return end
+        local cam = workspace.CurrentCamera
+        if not cam or typeof(part) ~= "Instance" or not part.Parent then return end
+        local worldPos = part.Position + Vector3.new(0, 2, 0)
+        local screenPos, onScreen = cam:WorldToScreenPoint(worldPos)
+        if not onScreen then
+            gui.Enabled = false
+            return
+        end
+        local vp = cam.ViewportSize
+        local H = frame.AbsoluteSize.Y
+        local W = TOOLTIP_W
+        local x = screenPos.X + 18
+        local y = screenPos.Y - (H * 0.5)
+        if x + W > vp.X - 8 then x = screenPos.X - W - 18 end
+        if x < 8 then x = 8 end
+        if y < 8 then y = 8 end
+        if y + H > vp.Y - 8 then y = vp.Y - H - 8 end
+        frame.Position = UDim2.fromOffset(math.floor(x), math.floor(y))
+    end)
+end
+
+------------------------------------------------------------------------
+-- Static catalog effects (Food / Consumable) from ItemDefinitions
+------------------------------------------------------------------------
+
+local BUFF_TYPE_LABELS = {
+	WalkSpeedPct = "Move speed",
+	LuckPct = "Luck (drops)",
+}
+
+local function catalogBuffLine(b)
+	local label = BUFF_TYPE_LABELS[b.type] or b.type
+	local amt = math.floor(tonumber(b.amount) or 0)
+	local dur = math.floor((tonumber(b.duration) or 0) + 0.5)
+	if b.type == "WalkSpeedPct" or b.type == "LuckPct" then
+		return string.format("%s  +%d%%  (%ds)", label, amt, dur)
+	end
+	return string.format("%s  %+d  (%ds)", label, amt, dur)
+end
+
+local function appendCatalogEffectRows(itemId, n)
+	if type(itemId) ~= "string" or itemId == "" then
+		return n
+	end
+	local def = ItemDefinitions.Get(itemId)
+	if type(def) ~= "table" then
+		return n
+	end
+	local rows = {}
+	if def.Kind == "Food" then
+		local fc = ItemDefinitions.GetFoodConfig(itemId)
+		if fc then
+			if fc.hungerAmount > 0 then
+				table.insert(rows, { str = string.format("Restores hunger  +%d", fc.hungerAmount), color = COLOR_PRIMARY, size = 15, bold = true })
+			end
+			if fc.timeToEat > 0 then
+				table.insert(rows, { str = string.format("Eat time  %.1fs", fc.timeToEat), color = COLOR_META, size = 11, bold = false })
+			else
+				table.insert(rows, { str = "Eat time  Instant", color = COLOR_META, size = 11, bold = false })
+			end
+			for _, b in ipairs(fc.buffs) do
+				if type(b) == "table" and (tonumber(b.duration) or 0) > 0 then
+					table.insert(rows, { str = catalogBuffLine(b), color = COLOR_SUBSTAT, size = 12, bold = false })
+				end
+			end
+		end
+	elseif def.Kind == "Consumable" then
+		local heal = tonumber(def.HealAmount)
+		if heal and heal > 0 then
+			table.insert(rows, { str = string.format("Restores HP  +%d", heal), color = COLOR_PRIMARY, size = 15, bold = true })
+		end
+		local en = tonumber(def.EnergyAmount)
+		if en and en > 0 then
+			table.insert(rows, { str = string.format("Restores Energy  +%d", en), color = COLOR_PRIMARY, size = 15, bold = true })
+		end
+	end
+	if #rows == 0 then
+		return n
+	end
+	addSep(n); n += 1
+	for _, r in ipairs(rows) do
+		addRow(r.str, r.color, r.size, r.bold, n)
+		n += 1
+	end
+	return n
+end
+
 ------------------------------------------------------------------------
 -- Public
 ------------------------------------------------------------------------
 
 local ItemTooltip = {}
 
-function ItemTooltip.show(item, anchorBtn)
-    if type(item) ~= "table" then return end
+local function renderItem(item)
+    if type(item) ~= "table" then return false end
     clearRows()
 
     local n      = 1
     local rCol   = RARITY_COLORS[item.rarity] or COLOR_PRIMARY
     local subs   = type(item.subStats) == "table" and item.subStats or {}
-    local ench = math.floor(tonumber(item.enchantLevel) or 0)
 
-    -- Name (include +N in title so enchant is visible even if meta is missed)
-    local title = item.name or item.itemId or "Unknown"
-    if ench > 0 then
-        title = title .. " +" .. tostring(ench)
-    end
-    addRow(title, rCol, 14, true, n); n+=1
+    -- Name
+    addRow(item.name or item.itemId or "Unknown", rCol, 14, true, n); n+=1
 
     -- Meta: type | tier | level
     local meta = item.type or "Item"
     if item.tier  then meta = meta .. "  |  T" .. item.tier  end
     if item.level then meta = meta .. "  Lv" .. item.level   end
+    local ench = math.floor(tonumber(item.enchantLevel) or 0)
     if ench > 0 then
         meta = meta .. "  |  +" .. tostring(ench)
     end
     addRow(meta, COLOR_META, 11, false, n); n+=1
 
-    local itemIdForDesc = item.itemId
-    if type(itemIdForDesc) == "string" and itemIdForDesc ~= "" then
-        local desc = ItemDefinitions.GetDescription(itemIdForDesc)
+    local itemId = type(item.itemId) == "string" and item.itemId or ""
+    if itemId ~= "" then
+        local desc = ItemDefinitions.GetDescription(itemId)
         if desc ~= "" then
             addRow(desc, COLOR_META, 11, false, n); n+=1
         end
     end
+
+    n = appendCatalogEffectRows(itemId, n)
 
     -- Primary stats (DMG / HP / HP/s / Armor)
     local hasPrimary = false
@@ -247,6 +336,12 @@ function ItemTooltip.show(item, anchorBtn)
         end
     end
 
+    if (item.type == "Weapon" or item.type == "Armor") and item.scrollProtected == true then
+        addSep(n); n+=1
+        addRow("Protected", COLOR_PROTECTED, 14, true, n)
+        n+=1
+    end
+
     -- Secondary substats
     local subLines = {}
     for id, val in pairs(subs) do
@@ -271,8 +366,24 @@ function ItemTooltip.show(item, anchorBtn)
         end
     end
 
+    return true
+end
+
+function ItemTooltip.show(item, anchorBtn)
+    if not renderItem(item) then return end
     gui.Enabled = true
     positionNear(anchorBtn)
+end
+
+function ItemTooltip.showAtWorldPart(item, part)
+    if not renderItem(item) then return end
+    gui.Enabled = true
+    positionAtWorldPart(part)
+end
+
+function ItemTooltip.repositionAtWorldPart(part)
+    if not gui.Enabled then return end
+    positionAtWorldPart(part)
 end
 
 function ItemTooltip.hide()

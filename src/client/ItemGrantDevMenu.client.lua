@@ -1,3 +1,4 @@
+local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindConfig"))
 --[[
     ItemGrantDevMenu  (admin-only LocalScript)
     Opens with F9. Grants items or currency to the local player via DevGrantItem RF.
@@ -282,8 +283,8 @@ conLabel.Text     = "Consumables"
 conLabel.ZIndex   = 4
 
 local consumables = {
-    { label = "Heal x10",  id = "HealPotion",  qty = 10 },
-    { label = "Major x5",  id = "MajorPotion", qty = 5  },
+    { label = "Minor x10",  id = "MinorPotion",  qty = 10 },
+    { label = "Medium x5",  id = "MediumPotion", qty = 5  },
     { label = "Arrow x50", id = "Arrow",        qty = 50 },
     { label = "T1 Wep Scr x5",  id = "T1WeaponScroll", qty = 5  },
     { label = "T1 Arm Scr x5",  id = "T1ArmorScroll",  qty = 5  },
@@ -335,9 +336,9 @@ closeBtn.Activated:Connect(function() setOpen(false) end)
 UserInputService.InputBegan:Connect(function(input, _processed)
     -- Do not check _processed for function keys; Roblox marks them processed internally.
     if UserInputService:GetFocusedTextBox() ~= nil then return end
-    if input.KeyCode == Enum.KeyCode.F10 then
+    if input.KeyCode == Keys.ItemGrantMenu then
         setOpen(not open)
-    elseif input.KeyCode == Enum.KeyCode.Escape and open then
+    elseif input.KeyCode == Keys.CloseMenu and open then
         setOpen(false)
     end
 end)

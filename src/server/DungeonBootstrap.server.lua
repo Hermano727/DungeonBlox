@@ -47,6 +47,9 @@ ensureRemoteEvent("MiningDebrisRequest")
 ensureRemoteEvent("MiningXPEvent")
 ensureRemoteEvent("MiningCoalDrop")
 ensureRemoteEvent("MiningCoalCollect")
+ensureRemoteFunction("MiningExcavationStart")
+ensureRemoteFunction("MiningExcavationDig")
+ensureRemoteEvent("MiningExcavationCancel")
 ensureRemoteEvent("DamageNumberEvent")
 local rfSync = ensureRemoteFunction("DungeonProfileRequestSync")
 local rfEquip = ensureRemoteFunction("DungeonEquipItem")
@@ -101,7 +104,10 @@ do
 	end
 end
 require(ServerScriptService:WaitForChild("MountService")) -- GameEvents.MountRequest + horse mounts
+require(ServerScriptService:WaitForChild("ZoneService")) -- zone registry for party boosts + PvP gate
+require(ServerScriptService:WaitForChild("PartyService")) -- party invites + same-zone reward boosts
 local BackpackImport = require(ServerScriptService:WaitForChild("DungeonBackpackImport"))
+local DeathProtection = require(ServerScriptService:WaitForChild("DungeonDeathProtection"))
 local BankService = require(ServerScriptService:WaitForChild("BankService"))
 local EquippedHotbar = require(ServerScriptService:WaitForChild("DungeonEquippedHotbar"))
 local DungeonDeathLoot = require(ServerScriptService:WaitForChild("DungeonDeathLoot"))
@@ -121,7 +127,8 @@ end
 
 --[[
   RemoteFunction: DungeonEquipItem (client -> server)
-    Args: itemUuid: string, equipOpts: optional table { weaponBagSecondary = true }
+    Args: itemUuid: string, equipOpts: optional table (reserved, unused -- weapons are
+      not equip-panel items in the Minecraft-style hotbar model)
     Returns: ok: boolean, err: string?
   Security: UUID must exist in server inventory; slot derived server-side only.
 ]]
@@ -155,7 +162,8 @@ end
   RemoteFunction: DungeonInventoryAct (client -> server)
     Args: { kind = "SetHotbar", slot = 1..9, uuid = string|nil }
         | { kind = "SwapHotbar", a = number, b = number }
-        | { kind = "AssignFirstEmptyHotbar", uuid = string }
+        | { kind = "SetBagSlot", slot = 1..27, uuid = string }
+        | { kind = "SwapBagSlot", a = number, b = number }
         | { kind = "ChestDeposit", uuid = string, slot = 1..54 }
         | { kind = "ChestWithdraw", slot = 1..54 }
         | { kind = "ChestUnlockRow", row = 2..6 }
@@ -171,11 +179,15 @@ rfInventoryAct.OnServerInvoke = function(player, act)
 		return false, "throttled"
 	end
 	if act.kind == "SetHotbar" then
-		return DungeonProfile.SetHotbarSlot(player, act.slot, act.uuid)
+		act.slot = math.floor(tonumber(act.slot) or -1); return DungeonProfile.SetHotbarSlot(player, act.slot, act.uuid)
+	elseif act.kind == "ClearHotbarSlot" then
+		act.slot = math.floor(tonumber(act.slot) or -1); return DungeonProfile.ClearHotbarSlot(player, act.slot)
 	elseif act.kind == "SwapHotbar" then
-		return DungeonProfile.SwapHotbarSlots(player, act.a, act.b)
-	elseif act.kind == "AssignFirstEmptyHotbar" then
-		return DungeonProfile.AssignFirstEmptyHotbar(player, act.uuid)
+		act.a = math.floor(tonumber(act.a) or -1); act.b = math.floor(tonumber(act.b) or -1); return DungeonProfile.SwapHotbarSlots(player, act.a, act.b)
+	elseif act.kind == "SetBagSlot" then
+		act.slot = math.floor(tonumber(act.slot) or -1); return DungeonProfile.SetBagSlot(player, act.slot, act.uuid)
+	elseif act.kind == "SwapBagSlot" then
+		act.a = math.floor(tonumber(act.a) or -1); act.b = math.floor(tonumber(act.b) or -1); return DungeonProfile.SwapBagSlot(player, act.a, act.b)
 	elseif act.kind == "ChestDeposit" then
 		local ok, err = DungeonProfile.ChestDepositToSlot(player, act.uuid, act.slot)
 		if ok then
@@ -273,45 +285,68 @@ end)
 
 --[[
   RemoteFunction: BankRequest (client -> server)
-    Args: { action = "Deposit"|"Withdraw", amount = number }
-    Returns: { ok, err?, wallet, bank }
+    Args: { action = "DepositAll"|"Withdraw"|"WithdrawAll", amount?: number }
+    Returns: { ok, err?, wallet, inventoryCoins, amount? }
 ]]
 rfBankRequest.OnServerInvoke = function(player, request)
 	if not throttle(player.UserId) then
-		return { ok = false, err = "throttled", wallet = 0, bank = 0 }
+		return { ok = false, err = "throttled", wallet = 0, inventoryCoins = 0 }
 	end
-	if type(request) ~= "table" or type(request.action) ~= "string" or type(request.amount) ~= "number" then
-		return { ok = false, err = "bad_request", wallet = 0, bank = 0 }
+	if type(request) ~= "table" or type(request.action) ~= "string" then
+		return { ok = false, err = "bad_request", wallet = 0, inventoryCoins = 0 }
 	end
 
-	local ok, err
-	if request.action == "Deposit" then
-		ok, err = BankService.Deposit(player, request.amount)
+	local ok, err, amount
+	if request.action == "DepositAll" then
+		ok, err, amount = BankService.DepositAll(player)
 	elseif request.action == "Withdraw" then
-		ok, err = BankService.Withdraw(player, request.amount)
+		if type(request.amount) ~= "number" then
+			return { ok = false, err = "bad_request", wallet = 0, inventoryCoins = 0 }
+		end
+		ok, err, amount = BankService.Withdraw(player, request.amount)
+	elseif request.action == "WithdrawAll" then
+		ok, err, amount = BankService.WithdrawAll(player)
 	else
-		return { ok = false, err = "unknown_action", wallet = 0, bank = 0 }
+		return { ok = false, err = "unknown_action", wallet = 0, inventoryCoins = 0 }
 	end
 
 	local balances = BankService.GetBalances(player)
 	return {
 		ok = ok,
 		err = err,
+		amount = amount,
 		wallet = balances.wallet,
-		bank = balances.bank,
+		inventoryCoins = balances.inventoryCoins,
 	}
 end
 
 --[[
   RemoteFunction: BankSync (client -> server)
-    Returns current wallet + bank balances.
+    Returns current wallet + inventory coin balances.
 ]]
 rfBankSync.OnServerInvoke = function(player)
 	local balances = BankService.GetBalances(player)
-	return { wallet = balances.wallet, bank = balances.bank }
+	return { wallet = balances.wallet, inventoryCoins = balances.inventoryCoins }
 end
 
 local seedStarterIfEmpty
+
+local function grantAdminTestWeaponIfMissing(player)
+	if not RunService:IsStudio()
+		and table.find(HearthstoneConfig.ADMIN_IDS, player.UserId) == nil then
+		return
+	end
+	local profile = DungeonProfile.Get(player)
+	if not profile or type(profile.inventory) ~= "table" then
+		return
+	end
+	for _, it in pairs(profile.inventory) do
+		if type(it) == "table" and it.itemId == "AdminSword" then
+			return
+		end
+	end
+	DungeonProfile.GrantItemId(player, "AdminSword", 1)
+end
 
 local function syncDungeonBackpackAfterCharacter(player)
 	if not player or not player.Parent then
@@ -329,6 +364,7 @@ local function syncDungeonBackpackAfterCharacter(player)
 		BackpackImport.ImportPlayerBackpack(player)
 	end
 	seedStarterIfEmpty(player)
+	grantAdminTestWeaponIfMissing(player)
 	DungeonProfile.PushProfile(player)
 	EquippedHotbar.syncFromProfile(player, DungeonProfile.Get(player))
 end
@@ -472,19 +508,43 @@ function seedStarterIfEmpty(player)
 	-- Auto-equip starter gear
 	profile = DungeonProfile.Load(player)
 	local toEquip = {
-		["Training Sword"]  = "Weapon",
 		["Training Helm"]   = "Helm",
 		["Training Chest"]  = "Chest",
 		["Training Legs"]   = "Legs",
 		["Training Boots"]  = "Boots",
 		["Training Shield"] = "Shield",
 	}
+	-- Weapons/tools have no equip-panel slot (Minecraft-style hotbar model): GrantItem already
+	-- auto-placed the Training Sword/Bow/Pickaxe/Spear into the first empty hotbar slot at
+	-- grant time (placeItemInFirstEmptySlot in DungeonProfileService) -- no special-casing needed
+	-- here, only the armor auto-equip below.
+	--
+	-- Must go through DungeonProfile.EquipItem, not a raw profile.equipped[slot] = uuid
+	-- assignment: GrantItem's placement hook already put each armor uuid into the first empty
+	-- bag slot (armor isn't hotbar-eligible, so it always lands in the bag). EquipItem is what
+	-- clears that bag/hotbar reference when equipping -- a raw assignment leaves the uuid
+	-- referenced in both bagSlots AND equipped at once, showing the same item twice in the UI.
+	local toEquipUuid = {}
 	for uuid, item in pairs(profile.inventory) do
 		if type(item) == "table" and item.name and toEquip[item.name] then
-			profile.equipped[toEquip[item.name]] = uuid
+			toEquipUuid[toEquip[item.name]] = uuid
 			toEquip[item.name] = nil
 		end
 	end
+	for _, uuid in pairs(toEquipUuid) do
+		DungeonProfile.EquipItem(player, uuid)
+	end
+	profile = DungeonProfile.Load(player)
+
+	-- Explicit starter hotbar order, independent of grant order or which exact weapon item
+	-- ended up granted (e.g. a leftover backpack-imported sword instead of "Training Sword"
+	-- satisfying hasWeapon above): compact + bucket whatever's actually owned by TYPE (melee
+	-- weapon, bow, pickaxe, fishing spear), not by literal name. Shared with the post-death
+	-- reorder so there's one rule, not two that can drift apart. Future logins never run
+	-- this again (trainingGearSeeded gate above) -- after this, the player's own
+	-- rearrangement is preserved.
+	DeathProtection.CompactAndOrderHotbar(profile)
+	profile = DungeonProfile.Load(player)
 
 	-- Recompute currentHp so a fresh player starts at full HP
 	local newMaxHp = profile.stats.combat.maxHp

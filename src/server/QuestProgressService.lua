@@ -9,6 +9,15 @@ local DungeonProfile = require(ServerScriptService:WaitForChild("DungeonProfileS
 
 local QuestProgress = {}
 
+local function grantQuestCoins(player, amount)
+	local add = math.max(0, math.floor(tonumber(amount) or 0))
+	if add <= 0 then
+		return true
+	end
+	local ok = DungeonProfile.GrantItemId(player, 'Coins', add)
+	return ok == true
+end
+
 local function getCusoQuestTable(profile)
 	if type(profile.flags) ~= "table" then
 		profile.flags = {}
@@ -113,10 +122,10 @@ function QuestProgress.OnMobKilledByPlayer(player, mobId)
 		q.completed = true
 		q.active = false
 		if not q.rewardPaid then
-			profile.currencies = profile.currencies or { Scrap = 0, Coins = 0 }
 			local add = math.max(0, math.floor(tonumber(q.rewardCoins) or 10))
-			profile.currencies.Coins = math.floor(tonumber(profile.currencies.Coins) or 0) + add
-			q.rewardPaid = true
+			if grantQuestCoins(player, add) then
+				q.rewardPaid = true
+			end
 		end
 	end
 	DungeonProfile.PushProfile(player)
@@ -141,10 +150,10 @@ function QuestProgress.OnCoalCollected(player, amount)
 		q.completed = true
 		q.active = false
 		if not q.rewardPaid then
-			profile.currencies = profile.currencies or { Scrap = 0, Coins = 0 }
 			local add = math.max(0, math.floor(tonumber(q.rewardCoins) or 10))
-			profile.currencies.Coins = math.floor(tonumber(profile.currencies.Coins) or 0) + add
-			q.rewardPaid = true
+			if grantQuestCoins(player, add) then
+				q.rewardPaid = true
+			end
 		end
 	end
 	DungeonProfile.PushProfile(player)
@@ -170,10 +179,10 @@ function QuestProgress.OnSpearFishCaught(player, amount)
 		q.completed = true
 		q.active = false
 		if not q.rewardPaid then
-			profile.currencies = profile.currencies or { Scrap = 0, Coins = 0 }
 			local add = math.max(0, math.floor(tonumber(q.rewardCoins) or 10))
-			profile.currencies.Coins = math.floor(tonumber(profile.currencies.Coins) or 0) + add
-			q.rewardPaid = true
+			if grantQuestCoins(player, add) then
+				q.rewardPaid = true
+			end
 		end
 	end
 	DungeonProfile.PushProfile(player)

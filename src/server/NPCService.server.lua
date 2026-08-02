@@ -38,22 +38,40 @@ NPCRequest.Parent = GameEvents
 ---------------------------------------------------------------------------
 
 local npcIndex = {}
+local modelToNpcId = {}
+
+local function unindexNPC(model)
+    local oldId = modelToNpcId[model]
+    if oldId and npcIndex[oldId] == model then
+        npcIndex[oldId] = nil
+    end
+    modelToNpcId[model] = nil
+end
 
 local function indexNPC(model)
+    if not model or not model:IsA("Model") then
+        return
+    end
+    unindexNPC(model)
     local npcId = model:GetAttribute("NpcId")
     if type(npcId) == "string" and npcId ~= "" then
         npcIndex[npcId] = model
+        modelToNpcId[model] = npcId
     end
 end
 
-for _, model in ipairs(CollectionService:GetTagged("NPC")) do
+local function watchNPC(model)
     indexNPC(model)
+    model:GetAttributeChangedSignal("NpcId"):Connect(function()
+        indexNPC(model)
+    end)
 end
-CollectionService:GetInstanceAddedSignal("NPC"):Connect(indexNPC)
-CollectionService:GetInstanceRemovedSignal("NPC"):Connect(function(model)
-    local npcId = model:GetAttribute("NpcId")
-    if npcId then npcIndex[npcId] = nil end
-end)
+
+for _, model in ipairs(CollectionService:GetTagged("NPC")) do
+    watchNPC(model)
+end
+CollectionService:GetInstanceAddedSignal("NPC"):Connect(watchNPC)
+CollectionService:GetInstanceRemovedSignal("NPC"):Connect(unindexNPC)
 
 ---------------------------------------------------------------------------
 -- Helpers
@@ -396,8 +414,8 @@ local function handleRepairAll(player, _npcId, _npcType, _params)
     }
 end
 
-local function handleTalkCusoQuest(player, npcId, npcType, _params)
-    if npcType ~= "QuestGiver" or npcId ~= "cuso_01" then
+local function handleTalkCusoQuest(player, _npcId, npcType, _params)
+    if npcType ~= "QuestGiver" then
         return { ok = false, err = "bad_npc" }
     end
 
@@ -539,8 +557,8 @@ local function ensureMinerPickaxeForQuest(player, dProfile)
     end
 end
 
-local function handleTalkMinerGreet(player, npcId, npcType, _params)
-    if npcType ~= "Miner" or npcId ~= "miner_01" then
+local function handleTalkMinerGreet(player, _npcId, npcType, _params)
+    if npcType ~= "Miner" then
         return { ok = false, err = "bad_npc" }
     end
 
@@ -579,8 +597,8 @@ local function handleTalkMinerGreet(player, npcId, npcType, _params)
     return { ok = true, gavePickaxe = true }
 end
 
-local function handleTalkMinerCoalQuest(player, npcId, npcType, _params)
-    if npcType ~= "Miner" or npcId ~= "miner_01" then
+local function handleTalkMinerCoalQuest(player, _npcId, npcType, _params)
+    if npcType ~= "Miner" then
         return { ok = false, err = "bad_npc" }
     end
 
@@ -735,8 +753,8 @@ local function ensureFisherSpearForQuest(player, dProfile)
     end
 end
 
-local function handleTalkFishermanGreet(player, npcId, npcType, _params)
-    if npcType ~= "Fisherman" or npcId ~= "fisherman_01" then
+local function handleTalkFishermanGreet(player, _npcId, npcType, _params)
+    if npcType ~= "Fisherman" then
         return { ok = false, err = "bad_npc" }
     end
 
@@ -775,8 +793,8 @@ local function handleTalkFishermanGreet(player, npcId, npcType, _params)
     return { ok = true, gaveSpear = true }
 end
 
-local function handleTalkFishermanFishQuest(player, npcId, npcType, _params)
-    if npcType ~= "Fisherman" or npcId ~= "fisherman_01" then
+local function handleTalkFishermanFishQuest(player, _npcId, npcType, _params)
+    if npcType ~= "Fisherman" then
         return { ok = false, err = "bad_npc" }
     end
 

@@ -1,3 +1,4 @@
+local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindConfig"))
 --[[
 	MerchantClient
 	SELF-CONTAINED merchant shop UI. No routing, no NPC detection, no Auctioneer logic.
@@ -16,6 +17,7 @@ local UserInputService  = game:GetService("UserInputService")
 local MenuMouse       = require(ReplicatedStorage:WaitForChild("CursorUtils"))
 local NPCRegistry     = require(ReplicatedStorage:WaitForChild("NPCRegistry"))
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
+local DungeonMenuNet  = require(script.Parent:WaitForChild("DungeonMenuNet"))
 
 local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -68,7 +70,19 @@ local ERR = {
 	equipped           = "Unequip that piece first.",
 	in_raid            = "Cannot salvage during a dungeon run.",
 	not_owned          = "Item not in your bags anymore.",
+	bad_item_uuid      = "Could not identify that item. Try reopening the shop.",
+	bad_uuid           = "Could not identify that item. Try reopening the shop.",
+	salvage_failed     = "Salvage failed. Try again.",
+	unknown_item       = "That item cannot be salvaged.",
+	bad_scrap_item     = "Salvage reward unavailable.",
 	action_not_allowed = "This shop cannot do that.",
+	npc_not_found      = "Merchant unavailable. Step closer and reopen the shop.",
+	too_far            = "You are too far from the merchant.",
+	not_stackable      = "Could not add scrap to your bags.",
+	merge_failed       = "Could not add scrap to your bags.",
+	server_error       = "Salvage failed on the server. Try again.",
+	bad_request        = "Invalid salvage request.",
+	bad_npc            = "This merchant cannot salvage gear.",
 }
 
 -- Tiny helpers
@@ -145,6 +159,9 @@ cr(closeBtn,6)
 
 local walletLbl=lbl(panel,{text="Wallet: 0 Coins",color=T.Gold,bold=true,size=15,sz=UDim2.fromOffset(240,26),pos=UDim2.fromOffset(12,10),z=4})
 local statusLbl=lbl(panel,{text="",color=T.StatusOk,size=12,wrap=true,sz=UDim2.new(1,-280,0,22),pos=UDim2.fromOffset(12,38),z=4})
+lbl(panel,{text="Click item image to buy",color=T.TextSecond,size=12,
+	xa=Enum.TextXAlignment.Center,ya=Enum.TextYAlignment.Top,
+	sz=UDim2.new(1,-96,0,18),pos=UDim2.fromOffset(48,10),z=4})
 
 -- Sidebar
 local sidebar=Instance.new("Frame")
@@ -174,7 +191,7 @@ local tierBtn=Instance.new("TextButton")
 tierBtn.Size=UDim2.fromOffset(124,32); tierBtn.Position=UDim2.fromOffset(10,8)
 tierBtn.BackgroundColor3=T.TierBtn; tierBtn.BorderSizePixel=0
 tierBtn.Font=Enum.Font.GothamBold; tierBtn.TextSize=14
-tierBtn.TextColor3=Color3.new(1,1,1); tierBtn.Text="Tier 1  v"
+tierBtn.TextColor3=Color3.new(1,1,1); tierBtn.Text="Tier 1"
 tierBtn.ZIndex=6; tierBtn.Visible=false; tierBtn.Parent=contentArea; cr(tierBtn,6)
 
 local tierDD=Instance.new("Frame")
@@ -190,7 +207,7 @@ for i=1,5 do
 	tb.TextColor3=T.TextPrimary; tb.Text="Tier "..i; tb.ZIndex=13; tb.Parent=tierDD; cr(tb,5)
 	local ti=i
 	tb.Activated:Connect(function()
-		activeTier=ti; tierBtn.Text="Tier "..ti.."  v"
+		activeTier=ti; tierBtn.Text="Tier "..ti
 		tierDD.Visible=false; tierDDOpen=false
 		rebuild()
 	end)
@@ -208,7 +225,7 @@ local itemGrid=Instance.new("UIGridLayout",itemScroll)
 itemGrid.CellSize=UDim2.fromOffset(376,142); itemGrid.CellPadding=UDim2.fromOffset(8,8)
 itemGrid.SortOrder=Enum.SortOrder.LayoutOrder; itemGrid.HorizontalAlignment=Enum.HorizontalAlignment.Center
 local itemPad=Instance.new("UIPadding",itemScroll)
-itemPad.PaddingTop=UDim.new(0,50); itemPad.PaddingLeft=UDim.new(0,6)
+itemPad.PaddingTop=UDim.new(0,8); itemPad.PaddingLeft=UDim.new(0,6)
 itemPad.PaddingRight=UDim.new(0,6); itemPad.PaddingBottom=UDim.new(0,8)
 
 local emptyLbl=lbl(itemScroll,{text="Nothing here.",color=T.TextSecond,size=14,
@@ -293,7 +310,6 @@ local function buildItemCard(entry,lo)
 	hzone.Text=""; hzone.ZIndex=10; hzone.Parent=iconBox
 	hzone.MouseEnter:Connect(function() overlay.Visible=true  end)
 	hzone.MouseLeave:Connect(function() overlay.Visible=false end)
-	hzone.Activated:Connect(function()  overlay.Visible=false end)
 
 	-- Text area
 	local tf=Instance.new("Frame")
@@ -302,22 +318,14 @@ local function buildItemCard(entry,lo)
 
 	lbl(tf,{text=label,color=T.TextPrimary,bold=true,size=15,wrap=true,
 		sz=UDim2.new(1,0,0,26),pos=UDim2.fromOffset(0,0),z=6})
-	lbl(tf,{text=desc~="" and desc or ("Cost: "..priceStr),color=T.TextSecond,size=11,wrap=true,
-		sz=UDim2.new(1,0,1,-56),pos=UDim2.fromOffset(0,28),z=6})
-	lbl(tf,{text="Price: "..priceStr,color=T.Gold,size=12,
-		sz=UDim2.new(1,-108,0,20),pos=UDim2.new(0,0,1,-26),z=6})
+	lbl(tf,{text=desc,color=T.TextSecond,size=11,wrap=true,
+		sz=UDim2.new(1,0,1,-32),pos=UDim2.fromOffset(0,28),z=6})
 
-	local buyBtn=Instance.new("TextButton")
-	buyBtn.Size=UDim2.fromOffset(96,28); buyBtn.AnchorPoint=Vector2.new(1,1)
-	buyBtn.Position=UDim2.new(1,0,1,-2)
-	buyBtn.BackgroundColor3=isCoins and T.Buy or T.Trade
-	buyBtn.Font=Enum.Font.GothamBold; buyBtn.TextSize=13
-	buyBtn.TextColor3=Color3.new(1,1,1); buyBtn.Text=isCoins and "Buy" or "Trade"
-	buyBtn.ZIndex=7; buyBtn.Parent=tf; cr(buyBtn,6)
-
-	buyBtn.Activated:Connect(function()
-		if not buyBtn.Active then return end
-		buyBtn.Active=false; buyBtn.Text="..."
+	local buying = false
+	local function tryPurchase()
+		if buying then return end
+		buying = true
+		overlay.Visible = true
 		if npcRequest then
 			local ok,res=pcall(function()
 				return npcRequest:InvokeServer({npcId=currentNpcId,action="BuyItem",itemId=itemId,qty=1})
@@ -325,17 +333,26 @@ local function buildItemCard(entry,lo)
 			if ok and res and res.ok then
 				cachedCoins=res.wallet or cachedCoins; updateWallet()
 				flashStatus("Purchased: "..label,false)
+				-- Server-side grant already happened; force a fresh snapshot so the inventory
+				-- UI actually reflects the new item instead of waiting on the next unrelated push.
+				DungeonMenuNet.requestSync()
 			else
 				local ek=res and res.err
-				flashStatus((type(ek)=="string" and ERR[ek]) or "Error.",true)
+				flashStatus((type(ek)=="string" and (ERR[ek] or ("Failed: "..ek))) or "Error.",true)
 			end
 		end
-		buyBtn.Text=isCoins and "Buy" or "Trade"; buyBtn.Active=true
-	end)
+		buying = false
+		overlay.Visible = false
+	end
+
+	hzone.Activated:Connect(tryPurchase)
 end
 
 -- Salvage card (list view)
-local function buildSalvageCard(item,lo)
+local function buildSalvageCard(entry,lo)
+	local item = entry.item
+	local itemUuid = entry.uuid
+	if type(item) ~= "table" or type(itemUuid) ~= "string" or itemUuid == "" then return end
 	local tier=tonumber(item.tier) or 1
 	local scraps=SCRAP_AMT[item.rarity] or 4
 	local icon=getIcon(item.itemId)
@@ -362,11 +379,12 @@ local function buildSalvageCard(item,lo)
 	btn.Font=Enum.Font.GothamBold; btn.TextSize=13
 	btn.TextColor3=Color3.new(1,1,1); btn.Text="Salvage"; btn.ZIndex=6; btn.Parent=card; cr(btn,6)
 	local capturedItem=item
+	local capturedUuid=itemUuid
 	btn.Activated:Connect(function()
 		if not btn.Active then return end; btn.Active=false; btn.Text="..."
 		if npcRequest then
 			local ok,res=pcall(function()
-				return npcRequest:InvokeServer({npcId=currentNpcId,action="SalvageGear",itemUuid=capturedItem.uuid})
+				return npcRequest:InvokeServer({npcId=currentNpcId,action="SalvageGear",itemUuid=capturedUuid})
 			end)
 			if ok and res and res.ok then
 				cachedCoins=res.wallet or cachedCoins; updateWallet()
@@ -374,7 +392,7 @@ local function buildSalvageCard(item,lo)
 				rebuild()
 			else
 				local ek=res and res.err
-				flashStatus((type(ek)=="string" and ERR[ek]) or "Error.",true)
+				flashStatus((type(ek)=="string" and (ERR[ek] or ("Failed: "..ek))) or "Error.",true)
 			end
 		end
 		btn.Text="Salvage"; btn.Active=true
@@ -391,14 +409,18 @@ rebuild = function()
 		local prof=lastSnapshot.profile; local eqSet={}
 		if type(prof.equipped)=="table" then for _,u in pairs(prof.equipped) do eqSet[u]=true end end
 		local rows={}
-		for uuid,item in pairs(prof.inventory or {}) do
-			if not eqSet[uuid] and (item.type=="Weapon" or item.type=="Armor") then
-				table.insert(rows,item)
+		for key,item in pairs(prof.inventory or {}) do
+			if type(item)=="table" and (item.type=="Weapon" or item.type=="Armor") then
+				local uuid = (type(key)=="string" and key~="") and key or item.uuid
+				if type(uuid)=="string" and uuid~="" and not eqSet[uuid] then
+					table.insert(rows,{ uuid = uuid, item = item })
+				end
 			end
 		end
 		table.sort(rows,function(a,b)
-			local ra=RARITY_W[a.rarity] or 0; local rb=RARITY_W[b.rarity] or 0
-			if ra~=rb then return ra>rb end; return (a.name or "")<(b.name or "")
+			local ia=a.item; local ib=b.item
+			local ra=RARITY_W[ia.rarity] or 0; local rb=RARITY_W[ib.rarity] or 0
+			if ra~=rb then return ra>rb end; return (ia.name or "")<(ib.name or "")
 		end)
 		if #rows==0 then
 			local e=Instance.new("TextLabel"); e.BackgroundTransparency=1
@@ -412,6 +434,11 @@ rebuild = function()
 	end
 	-- Ores / Scrap / Potions
 	itemScroll.Visible=true; salvScroll.Visible=false; tierBtn.Visible=(activeTab=="Scrap")
+	if activeTab=="Scrap" then
+		itemPad.PaddingTop=UDim.new(0,50)
+	else
+		itemPad.PaddingTop=UDim.new(0,8)
+	end
 	clearItems()
 	local reg=NPCRegistry.Get("Merchant")
 	if not (reg and reg.ShopCatalog) then emptyLbl.Visible=true; return end
@@ -451,7 +478,7 @@ closeBtn.Activated:Connect(closeMerchant)
 dimBtn.Activated:Connect(closeMerchant)
 UserInputService.InputBegan:Connect(function(inp,proc)
 	if proc then return end
-	if inp.KeyCode==Enum.KeyCode.Escape and gui.Enabled then closeMerchant() end
+	if inp.KeyCode==Keys.CloseMenu and gui.Enabled then closeMerchant() end
 end)
 player.CharacterAdded:Connect(function()
 	if cursorHeld then MenuMouse.release(); cursorHeld=false end
@@ -471,7 +498,7 @@ end
 local MerchantClient={}
 function MerchantClient.open(npcId)
 	currentNpcId=npcId or ""; activeTab="Ores"; activeTier=1
-	tierBtn.Text="Tier 1  v"; applyTabStyles(); updateWallet()
+	tierBtn.Text="Tier 1"; applyTabStyles(); updateWallet()
 	if not cursorHeld then MenuMouse.acquire(); cursorHeld=true end
 	gui.Enabled=true; rebuild()
 end

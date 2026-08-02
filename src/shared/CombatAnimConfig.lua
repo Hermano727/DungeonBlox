@@ -8,7 +8,7 @@ return {
 	-- Asset ID of the swing animation. Swap this value to update globally.
 	-- THIS IS THE OLD ANIMATION ID: SWING_ANIM_ID   = "rbxassetid://98847827358249",
 	SWING_ANIM_ID   = "rbxassetid://102139503888423",
-
+	
 
 	-- Playback speed multiplier applied after Play().
 	-- 4.0 = 4x for high-CPS feel. Lower values = slower, more visible arc.

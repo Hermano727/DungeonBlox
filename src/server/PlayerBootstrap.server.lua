@@ -17,7 +17,7 @@ local DEFAULT_KIT = {
 	{ "WoodenSword",   1 },
 	{ "LeatherHelm",   1 },
 	{ "LeatherChest",  1 },
-	{ "HealPotion",    3 },
+	{ "MinorPotion",    3 },
 }
 
 local function deriveStats(profile)

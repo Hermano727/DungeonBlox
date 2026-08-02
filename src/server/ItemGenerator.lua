@@ -255,7 +255,7 @@ function ItemGenerator.generate(options)
 
     -- Build a human-readable name
     local kindLabel = weaponType or (armorSlot .. " Armor")
-    local name = string.format("%s %s (T%d L%d)", rarity, kindLabel, tier, level)
+    local name = string.format("%s %s (T%d)", rarity, kindLabel, tier)
 
     return ItemClass.new({
         name       = name,

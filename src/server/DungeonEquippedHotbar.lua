@@ -5,6 +5,7 @@
 
 local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Types = require(ReplicatedStorage:WaitForChild("DungeonProfileTypes"))
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
 local ItemConfig = require(ReplicatedStorage:WaitForChild("ItemConfig"))
 local EnergyConfig = require(ReplicatedStorage:WaitForChild("EnergyConfig"))
@@ -15,8 +16,22 @@ local ARCHIVE_NAME = "DungeonToolPrefabsArchive"
 -- Once per server session, replace weapon-drop Tool templates in the archive with fresh
 -- clones from StarterPack so edits to e.g. Low_tier_sword propagate without stale meshes.
 local sessionWeaponDropPrefabsResynced = false
+local sessionPickaxePrefabResynced = false
 
 local DungeonEquippedHotbar = {}
+
+local function hotbarSlotUuid(hb, i)
+	if type(hb) ~= "table" then return nil end
+	i = math.floor(tonumber(i) or -1)
+	if i < 1 or i > 9 then return nil end
+	local v = hb[i]
+	if type(v) == "string" and v ~= "" then return v end
+	v = hb[tostring(i)]
+	if type(v) == "string" and v ~= "" then return v end
+	return nil
+end
+
+
 
 local function ensureMountSaddleTemplate(folder)
 	if not folder or not folder:IsA("Folder") then
@@ -100,6 +115,44 @@ local function ensureDefaultFoodTool(folder)
 	tool.Parent = folder
 end
 
+-- Fallback prefab for Consumable items (potions) that don't define their own ToolPrefabName.
+-- Mirrors ensureDefaultFoodTool: drinking is right-click-while-held, no hold duration.
+local function ensureDefaultPotionTool(folder)
+	if not folder or not folder:IsA("Folder") then
+		return
+	end
+	if folder:FindFirstChild("DefaultPotionTool") then
+		return
+	end
+
+	local tmpl = ReplicatedStorage:FindFirstChild("DrinkPotionClientTemplate")
+	if not tmpl or not tmpl:IsA("LocalScript") then
+		warn("[DungeonEquippedHotbar] Missing ReplicatedStorage.DrinkPotionClientTemplate (LocalScript); potion drinking will not work")
+		return
+	end
+
+	local tool = Instance.new("Tool")
+	tool.Name = "DefaultPotionTool"
+	tool.CanBeDropped = false
+	tool.RequiresHandle = true
+
+	local handle = Instance.new("Part")
+	handle.Name = "Handle"
+	handle.Size = Vector3.new(0.5, 0.7, 0.5)
+	handle.Color = Color3.fromRGB(150, 60, 180)
+	handle.Material = Enum.Material.Glass
+	handle.TopSurface = Enum.SurfaceType.Smooth
+	handle.BottomSurface = Enum.SurfaceType.Smooth
+	handle.Parent = tool
+
+	local ls = tmpl:Clone()
+	ls.Name = "DrinkPotionClient"
+	ls.Disabled = false
+	ls.Parent = tool
+
+	tool.Parent = folder
+end
+
 local function inferWeaponDropToolPrefabFromTags(item)
 	if type(item) ~= "table" or item.type ~= "Weapon" then
 		return nil
@@ -149,6 +202,30 @@ local function ensureStarterWeaponDropPrefabs(folder)
 	sessionWeaponDropPrefabsResynced = true
 end
 
+local function ensureStarterPickaxePrefab(folder)
+	if not folder or not folder:IsA("Folder") then
+		return
+	end
+	local sp = game:GetService("StarterPack")
+	local src = sp:FindFirstChild("WoodenPickaxe")
+	if not src or not src:IsA("Tool") then
+		return
+	end
+	local existing = folder:FindFirstChild("WoodenPickaxe")
+	local resync = not sessionPickaxePrefabResynced
+	if resync and existing then
+		existing:Destroy()
+		existing = nil
+	end
+	if not existing then
+		local c = src:Clone()
+		c.Name = "WoodenPickaxe"
+		c.CanBeDropped = false
+		c.Parent = folder
+	end
+	sessionPickaxePrefabResynced = true
+end
+
 
 
 -- pcall the template builders: a single template failure (e.g. Roblox's runtime LocalScript.Source
@@ -159,6 +236,7 @@ function DungeonEquippedHotbar.ensureArchiveFolder()
 	if folder and folder:IsA("Folder") then
 		pcall(ensureMountSaddleTemplate, folder)
 		pcall(ensureDefaultFoodTool, folder)
+		pcall(ensureDefaultPotionTool, folder)
 		pcall(ensureStarterWeaponDropPrefabs, folder)
 		return folder
 	end
@@ -170,6 +248,7 @@ function DungeonEquippedHotbar.ensureArchiveFolder()
 	f.Parent = ServerStorage
 	pcall(ensureMountSaddleTemplate, f)
 	pcall(ensureDefaultFoodTool, f)
+	pcall(ensureDefaultPotionTool, f)
 	pcall(ensureStarterWeaponDropPrefabs, f)
 	return f
 end
@@ -216,13 +295,16 @@ local function toolPrefabNameForItem(item)
 			if not name and def.Kind == "Food" then
 				name = "DefaultFoodTool"
 			end
+			if not name and def.Kind == "Consumable" then
+				name = "DefaultPotionTool"
+			end
 		end
 	end
 	-- Legacy: sword loot used WoodenSword as the mesh prefab; all swords use Low_tier_sword now.
 	if name == "WoodenSword" and item.type == "Weapon" and type(item.tags) == "table" then
 		for _, tag in ipairs(item.tags) do
 			if tag == "Sword" then
-				return "Low_tier_sword"
+				return "TrainingSword"
 			end
 		end
 	end
@@ -329,7 +411,7 @@ function DungeonEquippedHotbar.syncFromProfile(player, profile)
 	local hotbar = profile.hotbar
 	if type(hotbar) == "table" then
 		for i = 1, 9 do
-			trySpawn("HB" .. tostring(i), hotbar[i])
+			trySpawn("HB" .. tostring(i), hotbarSlotUuid(hotbar, i))
 		end
 	end
 

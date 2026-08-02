@@ -2,61 +2,69 @@
   "name": "DungeonBlox",
   "tree": {
     "$className": "DataModel",
-
     "ReplicatedStorage": {
       "$path": "src/shared"
     },
-
     "ServerScriptService": {
-      "$path": "src/server",
-      "GetPlayerState":        { "$className": "BindableFunction" },
-      "CanPlayerAct":          { "$className": "BindableFunction" },
-      "TransitionPlayerState": { "$className": "BindableFunction" }
-    },
-
-    "StarterPlayer": {
-      "StarterPlayerScripts":    { "$path": "src/client" },
-      "StarterCharacterScripts": { "$path": "src/characterscripts" }
-    },
-
-    "StarterPack": {
-      "$path": "src/starterpack",
-      "Mace":           { "$className": "Tool" },
-      "Low_tier_sword": { "$className": "Tool" },
-      "Wood Sword":     { "$className": "Tool" },
-      "Building Tools": { "$className": "Tool" }
-    },
-
-    "Workspace": {
-      "$properties": {
-        "FilteringEnabled": true
+      "CanPlayerAct": {
+        "$className": "BindableFunction"
       },
-      "Baseplate": {
-        "$className": "Part",
-        "$properties": {
-          "Anchored": true,
-          "Color": [0.38823, 0.37254, 0.38823],
-          "Locked": true,
-          "Position": [0, -10, 0],
-          "Size": [512, 20, 512]
-        }
-      }
+      "GetPlayerState": {
+        "$className": "BindableFunction"
+      },
+      "TransitionPlayerState": {
+        "$className": "BindableFunction"
+      },
+      "$path": "src/server"
     },
-
-    "Lighting": {
-      "$properties": {
-        "Ambient": [0, 0, 0],
-        "Brightness": 2,
-        "GlobalShadows": true,
-        "Outlines": false,
-        "Technology": "Voxel"
-      }
+    "StarterPack": {
+      "$path": "src/starterpack"
     },
-
-    "SoundService": {
+    "StarterPlayer": {
+      "StarterCharacterScripts": {
+        "$path": "src/characterscripts"
+      },
+      "StarterPlayerScripts": {
+        "$path": "src/client"
+      },
       "$properties": {
-        "RespectFilteringEnabled": true
+        "AvatarJointUpgrade": "Enabled",
+        "CameraMaxZoomDistance": 128.0,
+        "CharacterBreakJointsOnDeath": false,
+        "CharacterJumpHeight": 40.128562927246094,
+        "LoadCharacterAppearance": false
       }
     }
+  },
+  "syncbackRules": {
+    "ignoreTrees": [
+      "Workspace",
+      "Lighting",
+      "MaterialService",
+      "SoundService",
+      "StarterGui",
+      "StarterPack",
+      "ServerStorage",
+      "Teams",
+      "Players",
+      "TextChatService"
+    ],
+    "ignorePaths": [
+      "Packages",
+      ".git",
+      "assets",
+      "roblox"
+    ],
+    "ignoreProperties": {
+      "BasePart": [
+        "Position",
+        "Orientation",
+        "CFrame"
+      ],
+      "Instance": [
+        "Archivable"
+      ]
+    },
+    "syncCurrentCamera": false
   }
 }

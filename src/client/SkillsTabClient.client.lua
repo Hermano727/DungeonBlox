@@ -1,3 +1,4 @@
+local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindConfig"))
 -- SkillsTabClient
 -- Tab toggles the Character menu: server-derived stats + bag inventory + 9-slot hotbar,
 -- plus the existing Combat/Mining/Fishing XP rows (client-side SkillXPShared).
@@ -13,10 +14,10 @@ local playerScripts = script.Parent
 local DungeonMenuNet = require(playerScripts:WaitForChild("DungeonMenuNet"))
 local DungeonMenuUI = require(playerScripts:WaitForChild("DungeonMenuUI"))
 local InventoryDragController = require(playerScripts:WaitForChild("InventoryDragController"))
-local InventoryHotbarRules = require(playerScripts:WaitForChild("InventoryHotbarRules"))
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
 local Types = require(ReplicatedStorage:WaitForChild("DungeonProfileTypes"))
 local ItemTooltip = require(playerScripts:WaitForChild("ItemTooltip"))
+local DayNightConfig = require(ReplicatedStorage:WaitForChild("DayNightConfig"))
 
 -- Roblox CoreGui binds Tab to the player list; disable it so Tab reaches this script.
 pcall(function()
@@ -27,6 +28,19 @@ pcall(function()
 end)
 
 local player = Players.LocalPlayer
+
+local function hotbarSlotUuid(hb, i)
+	if type(hb) ~= "table" then return nil end
+	i = math.floor(tonumber(i) or -1)
+	if i < 1 or i > 9 then return nil end
+	local v = hb[i]
+	if type(v) == "string" and v ~= "" then return v end
+	v = hb[tostring(i)]
+	if type(v) == "string" and v ~= "" then return v end
+	return nil
+end
+
+
 local playerGui = player:WaitForChild("PlayerGui")
 
 local function getGuiFolder()
@@ -72,6 +86,25 @@ screenGui.DisplayOrder = 120
 screenGui.Enabled = false
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.Parent = playerGui
+
+local open = false
+local setOpenFn = nil
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if input.KeyCode == Keys.SkillsTab then
+		if setOpenFn then
+			setOpenFn(not open)
+		else
+			open = not open
+			screenGui.Enabled = open
+			if open then MenuMouse.acquire() else MenuMouse.release() end
+		end
+		return
+	end
+	if gameProcessed then return end
+	if input.KeyCode == Keys.CloseMenu and open then
+		if setOpenFn then setOpenFn(false) else screenGui.Enabled = false; open = false; MenuMouse.release() end
+	end
+end)
 
 local dim = Instance.new("TextButton")
 dim.Name = "Dim"
@@ -133,9 +166,10 @@ fishingRow.Visible = true
 local uiRefs = DungeonMenuUI.createLayout(panel, { combatRow, miningRow, fishingRow })
 
 DungeonMenuUI.setActiveBuffs(uiRefs, {})
+
 do
-	local ge = ReplicatedStorage:WaitForChild("GameEvents", 20)
-	local abs = ge and ge:WaitForChild("ActiveBuffsSync", 10)
+	local ge = ReplicatedStorage:FindFirstChild("GameEvents")
+	local abs = ge and ge:FindFirstChild("ActiveBuffsSync")
 	if abs and abs:IsA("RemoteEvent") then
 		abs.OnClientEvent:Connect(function(rows)
 			if type(rows) == "table" then
@@ -247,37 +281,17 @@ local menuCtx = {
 			updateTitleHint()
 			return
 		end
-
-		-- Only equip to panel slots that have a visible button; tools (Pickaxe,
-		-- FishingSpear, etc.) go to the hotbar instead so they don't disappear.
-		local PANEL_SLOTS = {
-			Helm=true, Chest=true, Legs=true, Boots=true,
-			Weapon=true, Shield=true, Necklace=true, Ring=true,
-		}
-		local equipSlot = Types.GetAllowedEquipSlot(item)
-		if equipSlot and PANEL_SLOTS[equipSlot] then
-			local opts = nil
-			if equipSlot == "Weapon" then
-				local eq = profile.equipped or {}
-				local curW = eq.Weapon
-				if type(curW) == "string" and curW ~= "" and curW ~= uuid then
-					opts = { weaponBagSecondary = true }
-				end
-			end
-			DungeonMenuNet.requestEquip(uuid, opts)
-			return
-		end
-
-		DungeonMenuNet.requestInventoryAct({ kind = "AssignFirstEmptyHotbar", uuid = uuid })
 	end,
 	-- Right-click hotbar slot: apply scroll to gear in that slot, or clear slot
 	onHotbarClear = function(i)
+		i = math.floor(tonumber(i) or -1)
+		if i < 1 or i > 9 then return end
 		local profile = getProfileFromSnapshot()
 		if not profile then
 			return
 		end
 		local hotbar = profile.hotbar or {}
-		local slotUuid = hotbar[i]
+		local slotUuid = hotbarSlotUuid(hotbar, i)
 		if pendingScrollUuid and type(slotUuid) == "string" and slotUuid ~= "" then
 			local hotItem = snapshotItem(profile, slotUuid)
 			if hotItem and (hotItem.type == "Weapon" or hotItem.type == "Armor") then
@@ -292,11 +306,6 @@ local menuCtx = {
 				updateTitleHint()
 				return
 			end
-		end
-		if i == InventoryHotbarRules.WEAPON_SLOT then
-			DungeonMenuNet.requestUnequip("Weapon")
-		else
-			DungeonMenuNet.requestInventoryAct({ kind = "SetHotbar", slot = i, uuid = nil })
 		end
 	end,
 	onEquippedSecondary = function(slot)
@@ -328,7 +337,7 @@ local menuCtx = {
 	end,
 }
 
-local open = false
+local dayNightCycleStart = nil
 local lastSyncRequestClock = 0
 local function maybeRequestSync()
 	local now = os.clock()
@@ -351,6 +360,28 @@ local function redrawFromServer()
 	end
 end
 
+local function predictDayNightState()
+	local cycleStart = dayNightCycleStart or workspace:GetAttribute("DayNightCycleStart")
+	if type(cycleStart) ~= "number" then
+		return nil
+	end
+	local elapsed = (workspace:GetServerTimeNow() - cycleStart) % DayNightConfig.cycleDurationSec()
+	local isDay = elapsed < DayNightConfig.PHASE_DURATION_SEC
+	local phaseElapsed = isDay and elapsed or (elapsed - DayNightConfig.PHASE_DURATION_SEC)
+	return {
+		phase = isDay and "Day" or "Night",
+		clockTime = DayNightConfig.clockTimeForPhase(isDay, phaseElapsed / DayNightConfig.PHASE_DURATION_SEC),
+		phaseRemaining = DayNightConfig.PHASE_DURATION_SEC - phaseElapsed,
+	}
+end
+
+local function updateWorldClock(state)
+	if type(state) ~= "table" then
+		return
+	end
+	pcall(DungeonMenuUI.updateDayNight, uiRefs, state)
+end
+
 refresh = function()
 	local snap = DungeonMenuNet.getLastSnapshot()
 	local profile = snap and snap.profile
@@ -365,7 +396,29 @@ refresh = function()
 	redrawFromServer()
 	validatePendingScroll()
 	updateTitleHint()
+	updateWorldClock(predictDayNightState())
 end
+
+local function bindDayNightSync()
+	local ge = ReplicatedStorage:WaitForChild("GameEvents", 60)
+	if not ge then
+		return
+	end
+	local dns = ge:WaitForChild("DayNightSync", 60)
+	if not dns or not dns:IsA("RemoteEvent") then
+		warn("[SkillsTabClient] DayNightSync missing — world clock may stay blank.")
+		return
+	end
+	dns.OnClientEvent:Connect(function(state)
+		if type(state.cycleStart) == "number" then
+			dayNightCycleStart = state.cycleStart
+		end
+		updateWorldClock(state)
+	end)
+	updateWorldClock(predictDayNightState())
+end
+
+task.spawn(bindDayNightSync)
 
 local function setOpen(v)
 	if v == open then
@@ -403,6 +456,7 @@ local function setOpen(v)
 		ItemTooltip.hide()
 	end
 end
+setOpenFn = setOpen
 
 DungeonMenuNet.setListener(function(_snap)
 	if open then
@@ -416,19 +470,7 @@ dim.Activated:Connect(function()
 	setOpen(false)
 end)
 
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if gameProcessed then
-		return
-	end
-	if UserInputService:GetFocusedTextBox() ~= nil then
-		return
-	end
-	if input.KeyCode == Enum.KeyCode.Tab then
-		setOpen(not open)
-	elseif input.KeyCode == Enum.KeyCode.Escape and open then
-		setOpen(false)
-	end
-end)
+-- Tab/Escape handled by early InputBegan connection above.
 
 task.defer(refresh)
 

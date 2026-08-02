@@ -7,16 +7,17 @@
 local CollectionService = game:GetService("CollectionService")
 local workspace = game:GetService("Workspace")
 
-local function findMinerModel()
-	local direct = workspace:FindFirstChild("Miner")
-	if direct and direct:IsA("Model") then
-		return direct
+-- Wires every Model named "Miner" anywhere in Workspace, not just the first one found.
+-- Sorted by full path so id assignment (miner_01, miner_02, ...) stays stable across restarts.
+local function findAllMinerModels()
+	local found = {}
+	for _, inst in ipairs(workspace:GetDescendants()) do
+		if inst.Name == "Miner" and inst:IsA("Model") then
+			table.insert(found, inst)
+		end
 	end
-	local deep = workspace:FindFirstChild("Miner", true)
-	if deep and deep:IsA("Model") then
-		return deep
-	end
-	return nil
+	table.sort(found, function(a, b) return a:GetFullName() < b:GetFullName() end)
+	return found
 end
 
 local function setupNpcModel(model, npcName)
@@ -100,13 +101,8 @@ local function setupNpcModel(model, npcName)
 	end
 end
 
-local function ensureMiner()
-	local model = findMinerModel()
-	if not model then
-		return
-	end
-
-	model:SetAttribute("NpcId", "miner_01")
+local function ensureMiner(model, npcId)
+	model:SetAttribute("NpcId", npcId)
 	model:SetAttribute("NpcType", "Miner")
 	model:SetAttribute("NpcName", "Miner")
 	model:SetAttribute("MaxActivationDistance", 14)
@@ -133,13 +129,25 @@ local function ensureMiner()
 	end
 end
 
+local function tryBootstrapAll()
+	for i, model in ipairs(findAllMinerModels()) do
+		local npcId = (i == 1) and "miner_01" or string.format("miner_%02d", i)
+		local ok, err = pcall(ensureMiner, model, npcId)
+		if ok then
+			print("[MinerNpcBootstrap] wired:", model:GetFullName(), "as", npcId)
+		else
+			warn("[MinerNpcBootstrap] bootstrap failed:", err)
+		end
+	end
+end
+
 for i = 1, 5 do
-	task.delay(0.25 * (i - 1), ensureMiner)
+	task.delay(0.25 * (i - 1), tryBootstrapAll)
 end
 
 workspace.DescendantAdded:Connect(function(inst)
 	if inst.Name == "Miner" and inst:IsA("Model") then
-		task.defer(ensureMiner)
+		task.defer(tryBootstrapAll)
 	end
 end)
 

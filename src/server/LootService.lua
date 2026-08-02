@@ -7,20 +7,22 @@
       1. Roll against TIER_DROP_CHANCE (+ elite bonus if applicable)
       2. Roll rarity from TIER_RARITY_WEIGHTS for the mob's tier
       3. Generate item via ItemGenerator at mob level + tier
-      4. Grant to the killing player via DungeonProfileService.GrantItem
-      5. Fire ItemDropNotify to client so the HUD can show a pickup banner
+      4. Spawn a visible world pickup orb (press E to collect)
+      5. On pickup, grant to the killing player and show the HUD banner
 
-    Private loot model: only the killing blow player receives the drop for now.
-    Contribution-based multi-drop can be added later by iterating DamageTracker.
+    Private loot model: only the killing blow player can pick up their drops.
 ]]
 
 local ReplicatedStorage   = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local Config         = require(ReplicatedStorage:WaitForChild("ItemConfig"))
+local Types          = require(ReplicatedStorage:WaitForChild("DungeonProfileTypes"))
 local ItemGenerator  = require(ServerScriptService:WaitForChild("ItemGenerator"))
 local DungeonProfile = require(ServerScriptService:WaitForChild("DungeonProfileService"))
 local BuffService    = require(ServerScriptService:WaitForChild("BuffService"))
+local PartyService   = require(ServerScriptService:WaitForChild("PartyService"))
+local WorldLoot      = require(ServerScriptService:WaitForChild("DungeonWorldLootService"))
 
 local LootService = {}
 
@@ -124,6 +126,12 @@ function LootService.onMobDied(mob, killingBlowPlayer)
     local tier  = mob.Tier or 1
     local level = (mob.Stats and mob.Stats.Level) or 1
     local elite = isEliteMob(mob)
+    local deathPos = mob.GetPosition and mob:GetPosition()
+    if typeof(deathPos) ~= "Vector3" then
+        return
+    end
+    local ownerUserId = killingBlowPlayer.UserId
+    local scatterIndex = 0
 
     ----------------------------------------------------------------
     -- Coin drop (wallet): 30% base for all non-elite mobs; elites always.
@@ -143,15 +151,17 @@ function LootService.onMobDied(mob, killingBlowPlayer)
             local lo, hi = range[1], range[2]
             if type(lo) == "number" and type(hi) == "number" and hi >= lo then
                 local coins = math.random(lo, hi)
+                local partyMult = PartyService.GetRewardMultiplier(killingBlowPlayer)
+                if partyMult > 1 then
+                    coins = math.max(1, math.floor(coins * partyMult))
+                end
                 if coins > 0 then
-                    local profile = DungeonProfile.Load(killingBlowPlayer)
-                    profile.currencies.Coins = math.floor((profile.currencies.Coins or 0) + coins)
-                    DungeonProfile.PushProfile(killingBlowPlayer)
-                    ItemDropNotify:FireClient(killingBlowPlayer, {
-                        kind      = "Coins",
-                        amount    = coins,
-                        coinFind  = coinFindProc,
-                    })
+                    WorldLoot.SpawnMobDrop(deathPos, ownerUserId, {
+                        kind = "coins",
+                        amount = coins,
+                        coinFind = coinFindProc,
+                    }, scatterIndex)
+                    scatterIndex = scatterIndex + 1
                 end
             end
         end
@@ -163,14 +173,17 @@ function LootService.onMobDied(mob, killingBlowPlayer)
     local fragTier = math.clamp(math.floor(tonumber(tier) or 1), 1, 5)
     if math.random() <= KEY_FRAG_CHANCES[fragTier] then
         local fragId = KEY_FRAG_IDS[fragTier]
-        local okFrag = DungeonProfile.GrantItemId(killingBlowPlayer, fragId, 1)
-        if okFrag then
-            ItemDropNotify:FireClient(killingBlowPlayer, {
+        WorldLoot.SpawnMobDrop(deathPos, ownerUserId, {
+            kind = "item_id",
+            itemId = fragId,
+            count = 1,
+            notifyPayload = {
                 kind = "KeyFragment",
                 name = fragId,
                 tier = fragTier,
-            })
-        end
+            },
+        }, scatterIndex)
+        scatterIndex = scatterIndex + 1
     end
 
     -- Roll for drop. Luck buff (BuffService "LuckPct") multiplies the final chance.
@@ -179,7 +192,7 @@ function LootService.onMobDied(mob, killingBlowPlayer)
     local luckMult  = 1 + (BuffService.GetLuckBonusPct(killingBlowPlayer) / 100)
     local effectiveDrop = math.min(1, (baseDrop + dropBonus) * luckMult)
     if math.random() > effectiveDrop then
-        return  -- no drop this kill
+        return  -- no gear drop this kill
     end
 
     -- Roll rarity, biased to mob tier
@@ -196,25 +209,29 @@ function LootService.onMobDied(mob, killingBlowPlayer)
         return
     end
 
-    -- Build the grant template and validate it before granting
     local template = item:toGrantTemplate()
-
-    local granted, err = DungeonProfile.GrantItem(killingBlowPlayer, template, 1)
-    if not granted then
-        warn("[LootService] GrantItem failed for " .. killingBlowPlayer.Name
-            .. ": " .. tostring(err))
+    local okTpl, errTpl = Types.ValidateItemTemplate(template)
+    if not okTpl then
+        warn("[LootService] Invalid generated template for " .. killingBlowPlayer.Name .. ": " .. tostring(errTpl))
         return
     end
 
-    -- Notify the client so they can display a pickup banner
-    ItemDropNotify:FireClient(killingBlowPlayer, {
-        name   = template.name,
-        rarity = template.rarity,
-        tier   = template.tier,
-        type   = template.type,
-    })
+    local okSpawn, lootIdOrErr = pcall(function()
+        return WorldLoot.SpawnMobDrop(deathPos, ownerUserId, {
+            kind = "item_template",
+            template = template,
+        }, scatterIndex)
+    end)
+    if not okSpawn then
+        warn("[LootService] SpawnMobDrop failed for " .. killingBlowPlayer.Name .. ": " .. tostring(lootIdOrErr))
+        return
+    end
+    if not lootIdOrErr then
+        warn("[LootService] SpawnMobDrop returned nil for " .. killingBlowPlayer.Name .. ": " .. template.name)
+        return
+    end
 
-    print(string.format("[LootService] %s dropped: %s",
+    print(string.format("[LootService] %s dropped world loot: %s",
         killingBlowPlayer.Name, template.name))
 end
 

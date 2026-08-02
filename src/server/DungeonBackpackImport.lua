@@ -57,7 +57,10 @@ local function templateForTool(tool)
 		}
 	elseif name == "WoodenSword" or name == "TrainingSword" or name == "Training Sword" or name == "Low_tier_sword" then
 		return {
-			name = (name == "Low_tier_sword") and "Low Tier Sword" or "Training Sword",
+			-- Every legacy backpack sword variant (including the old "Low_tier_sword" prefab)
+			-- imports as the same display name now -- no more duplicate "Low Tier Sword" vs
+			-- "Training Sword" naming for what's functionally the same starter weapon.
+			name = "Training Sword",
 			type = "Weapon",
 			rarity = "Common",
 			tier = 1, level = 1, enchantLevel = 0,

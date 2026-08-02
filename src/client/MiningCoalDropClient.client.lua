@@ -48,12 +48,16 @@ local function spawnLocalCoalPickup(payload)
 
 	coal.Parent = Workspace
 	handle.CFrame = spawnCf
-	-- Small upward bias so it clears the ore, then gravity pulls it to the floor.
 	handle.AssemblyLinearVelocity = Vector3.new(0, 3, 0)
 
 	local prompt = Instance.new("ProximityPrompt")
 	prompt.ActionText = "Collect"
-	prompt.ObjectText = "Coal"
+	local amt = payload.amount
+	if type(amt) == "number" and amt > 1 then
+		prompt.ObjectText = "Coal x" .. tostring(math.floor(amt))
+	else
+		prompt.ObjectText = "Coal"
+	end
 	prompt.HoldDuration = 0
 	prompt.MaxActivationDistance = 12
 	prompt.RequiresLineOfSight = false

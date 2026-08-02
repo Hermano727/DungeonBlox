@@ -10,43 +10,43 @@ local function setupMerchant()
     local grimCamp = game.Workspace:FindFirstChild("TutorialPathway")
         and game.Workspace.TutorialPathway.Structures:FindFirstChild("GrimCamp")
     if not grimCamp then return nil end
-
+    
     local npc = grimCamp:FindFirstChild("CampMerchant")
     if not npc then return nil end
-
-    local prompt = npc:FindFirstChild("HumanoidRootPart")
+    
+    local prompt = npc:FindFirstChild("HumanoidRootPart") 
         and npc.HumanoidRootPart:FindFirstChild("ProximityPrompt")
     if not prompt then return nil end
-
+    
     -- Create the dialogue instance
     local dialogue = DialogModule.new("Hollow Merchant", npc, prompt, nil)
-
+    
     -- Add dialogue options with grim-stylized flavor
     dialogue:addDialog(
         "The fire burns low, stranger... but not as low as my spirits. What brings you to this wretched camp?",
         {"What can you tell me about this place?", "Got anything to trade?", "Just passing through."}
     )
-
+    
     dialogue:addDialog(
         "This camp? A refuge for the forgotten. We scrape by on what the dead leave behind. The mountains hold worse things than us, I promise you that.",
         {"What kind of things?", "Sounds dangerous. I'll be going."}
     )
-
+    
     dialogue:addDialog(
         "Trade? Ha! I've got rations that taste like ash and blades duller than a beggar's wit. But if you're desperate... take a look.",
         {"Show me what you have.", "Maybe another time."}
     )
-
+    
     dialogue:addDialog(
         "Shadows with teeth. Echoes that wear the faces of the dead. The mountains have a way of... changing things. Best keep your blade close and your wits closer.",
         {"How do I survive out there?", "I've heard enough."}
     )
-
+    
     dialogue:addDialog(
         "Stay near the fire when darkness falls. The light keeps the worst of it at bay. And never... NEVER... follow the whispering.",
         {"What whispering?", "I'll keep that in mind."}
     )
-
+    
     -- Handle player responses
     dialogue.responded:Connect(function(responseNum, dialogNum)
         if dialogNum == 1 then
@@ -83,14 +83,14 @@ local function setupMerchant()
             end
         end
     end)
-
+    
     -- Connect the ProximityPrompt to trigger dialogue
     prompt.Triggered:Connect(function(triggeringPlayer)
         if triggeringPlayer == player then
             dialogue:triggerDialog(player, 1)
         end
     end)
-
+    
     return dialogue
 end
 

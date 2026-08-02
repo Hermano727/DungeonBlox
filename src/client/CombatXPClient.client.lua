@@ -20,7 +20,7 @@ local function startHideTimer()
         task.cancel(uiHideTask)
         uiHideTask = nil
     end
-
+    
     uiHideTask = task.delay(UI_HIDE_DELAY, function()
         local gui = PlayerGui:FindFirstChild("CombatXPUI")
         if gui then
@@ -70,7 +70,7 @@ end
 local function startPriorityLoop()
     if priorityLoopRunning then return end
     priorityLoopRunning = true
-
+    
     task.spawn(function()
         while task.wait(0.1) do
             updateZIndexPriority()
@@ -82,38 +82,38 @@ end
 local function updateXPUI()
     local gui = PlayerGui:FindFirstChild("CombatXPUI")
     if not gui then return end
-
+    
     local mainFrame = gui:FindFirstChild("MainFrame")
     if not mainFrame then return end
-
+    
     -- Show UI if not already shown
     if not uiShown then
         mainFrame.Visible = true
         uiShown = true
     end
-
+    
     -- Update timestamp for priority system
     local player = Players.LocalPlayer
     if player then
         player:SetAttribute("LastCombatXPGain", tick())
     end
-
+    
     -- Reset hide timer and start a new one
     startHideTimer()
-
+    
     local xpBackground = mainFrame:FindFirstChild("XPBackground")
     local xpFill = xpBackground and xpBackground:FindFirstChild("XPFill")
     local levelLabel = mainFrame:FindFirstChild("LevelLabel")
     local xpLabel = mainFrame:FindFirstChild("XPLabel")
-
+    
     local xpNeeded = SkillXPShared.GetXPForLevel(SkillXPShared.Combat.Level)
     local progress = math.clamp(SkillXPShared.Combat.XP / xpNeeded, 0, 1)
-
+    
     -- Update fill bar
     if xpFill then
         xpFill.Size = UDim2.new(progress, 0, 1, -4)
     end
-
+    
     -- Update labels
     if levelLabel then
         levelLabel.Text = "Level " .. SkillXPShared.Combat.Level

@@ -7,8 +7,45 @@
 
 sourcemap.json
 
-# Wally packages (added when wally install is run for React Lua phase)
-Packages/
+# Wally packages (restored with `wally install`)
+# Leading slash = repo root ONLY. Without it these match at any depth.
+/Packages/
+/ServerPackages/
+/DevPackages/
 
 # aftman binary cache
 .aftman/
+
+# Raw art source (.blend, .fbx, .png) at the repo root.
+# MUST stay anchored with a leading slash: an unanchored `assets/` also matches
+# src/shared/Assets/ (git is case-insensitive on Windows), which silently
+# excluded the entire RS/Assets icon + mesh registry tree. Do not unanchor.
+/assets/
+
+# Any place file, wherever it lands - syncback input should never be committed
+*.rbxl
+*.rbxlx
+
+# Rojo build output
+/build
+
+# NOTE: do NOT blanket-ignore *.rbxm / *.rbxmx.
+# Syncback writes real source as .rbxm - animations, tool handles, stylesheets:
+#   src/shared/AnimationAssets/*.rbxm
+#   src/shared/Fish/Handle.rbxm, src/shared/Coal/Handle.rbxm
+#   src/shared/Design/StyleSheet.rbxm, BaseStyleSheet.rbxm
+#   src/shared/Images/Icons/*.rbxm
+# Ignoring those would silently drop them from the repo.
+# Only ignore build artifacts, which live in /build above.
+
+# Scratch files left behind by MCP tooling
+/b64_*.txt
+.claude/*.b64
+.claude/luau_exec_*.lua
+.claude/mcp_*.json
+.claude/enchant_*
+
+# OS noise
+Thumbs.db
+desktop.ini
+.DS_Store

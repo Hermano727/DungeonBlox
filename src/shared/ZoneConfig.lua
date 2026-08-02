@@ -2,8 +2,11 @@
 	ZoneConfig
 	Shared constants for the Zone system. Required by both server and client.
 
-	A Zone is a 2D circle on the XZ plane (Y is stored for visualization but
+	A Zone is a 2D region on the XZ plane (Y is stored for visualization but
 	ignored in distance checks — you can't escape a zone by climbing).
+
+	New zones are freeform polygons (array of XZ points). Legacy saves may
+	still use center + radius circles.
 
 	Zone properties:
 	  alignment       "Lawful" | "Neutral" | "Chaotic". Lawful zones block ALL
@@ -12,7 +15,10 @@
 	  bannedAlignments  Set keyed by alignment name. Players whose alignment
 	                  is in this set get an on-screen flash when they enter.
 	                  Entry is NOT actually prevented yet (per scope decision).
-	  radius          Circle radius in studs.
+	  radius          Legacy circle radius in studs (older zones).
+	  points          Array of { x, z } polygon corners (preferred).
+	  musicId         rbxassetid:// string for looped zone soundtrack. Empty
+	                  string = no music (default). Set via ZoneService.SetZoneMusic.
 ]]
 
 local ZoneConfig = {}
@@ -43,7 +49,30 @@ ZoneConfig.FLASH_DURATION_SEC      = 2.0
 ZoneConfig.FLASH_REENTRY_COOLDOWN  = 5.0
 
 -- Dev-only visualization tuning.
-ZoneConfig.DEV_CYLINDER_HEIGHT    = 1    -- thin disc lying flat on the ground
+ZoneConfig.DEV_ZONE_COLOR = Color3.fromRGB(255, 220, 50) -- yellow dev overlay (distinct from red mob spawners)
+ZoneConfig.DEV_ZONE_EDGE_THICKNESS = 0.35
+ZoneConfig.DEV_ZONE_CORNER_SIZE = 1.2
+ZoneConfig.MIN_POLYGON_POINTS = 3
+ZoneConfig.MAX_POLYGON_POINTS = 64
+
+-- Zone soundtrack defaults/tuning.
+ZoneConfig.DEFAULT_MUSIC_ID    = "" -- empty = no music
+ZoneConfig.ZONE_MUSIC_VOLUME   = 0.05
+ZoneConfig.ZONE_MUSIC_FADE_SEC = 1.2
+
+-- Accepts "rbxassetid://123" or a bare numeric id; returns "" (no music) on
+-- anything else so a bad id can never become a broken/garbage SoundId.
+function ZoneConfig.NormalizeMusicId(id)
+	if type(id) ~= "string" then return "" end
+	id = id:gsub("%s+", "")
+	if id == "" then return "" end
+	if id:match("^rbxassetid://%d+$") then return id end
+	if id:match("^%d+$") then return "rbxassetid://" .. id end
+	return ""
+end
+
+-- Legacy circle dev discs (pre-polygon zones).
+ZoneConfig.DEV_CYLINDER_HEIGHT = 1
 ZoneConfig.DEV_CYLINDER_TRANSPARENCY = 0.75
 
 return ZoneConfig

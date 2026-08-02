@@ -67,11 +67,8 @@ end
 
 --[[
 	Targets for enchant can be:
-	- Catalog-backed items with itemId (training gear, saddles-as-weapons, etc.)
+	- Catalog-backed items with itemId (training gear, etc.)
 	- Rolled loot from ItemGenerator: type/tier/name/subStats, often NO itemId
-
-	DungeonProfileTypes.ValidateOwnedItem typically requires a catalog itemId,
-	which wrongly rejects legitimate dropped gear. Use this for scroll targets only.
 ]]
 function EnchantScrollApply.ValidateEnchantTargetItem(target)
 	if type(target) ~= "table" then
@@ -265,3 +262,4 @@ function EnchantScrollApply.ApplyFromAct(profile, act, rng)
 end
 
 return EnchantScrollApply
+

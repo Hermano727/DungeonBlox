@@ -84,7 +84,8 @@ function ZoneDevStore.refreshCacheFromStore()
 end
 
 -- Returns the cached zone rows. Each row is the raw saved table:
---   { id, name, alignment, bannedAlignments (string array), x, y, z, radius }
+--   polygon: { id, name, alignment, bannedAlignments, y, points = { {x,z}, ... } }
+--   legacy circle: { id, name, alignment, bannedAlignments, x, y, z, radius }
 function ZoneDevStore.getCachedZones()
 	if not cachedPayload or type(cachedPayload.zones) ~= "table" then
 		return {}
@@ -98,7 +99,8 @@ function ZoneDevStore.loadInitial()
 end
 
 -- attrs: {
---   name: string?, alignment: string, bannedAlignments: { string }, radius: number
+--   name: string?, alignment: string, bannedAlignments: { string },
+--   radius: number? (legacy circle), points: { { x, z } }? (polygon)
 -- }
 -- position: Vector3
 function ZoneDevStore.addZone(attrs, position)
@@ -111,11 +113,19 @@ function ZoneDevStore.addZone(attrs, position)
 		name             = attrs.name or ("Zone_" .. id:sub(1,6)),
 		alignment        = attrs.alignment,
 		bannedAlignments = attrs.bannedAlignments or {},
-		x                = position.X,
-		y                = position.Y,
-		z                = position.Z,
-		radius           = attrs.radius,
+		musicId          = type(attrs.musicId) == "string" and attrs.musicId or "",
+		isEliteZone      = attrs.isEliteZone == true,
+		eliteMobId       = type(attrs.eliteMobId) == "string" and attrs.eliteMobId or "",
 	}
+	if type(attrs.points) == "table" and #attrs.points >= 3 then
+		row.y = position.Y
+		row.points = attrs.points
+	else
+		row.x = position.X
+		row.y = position.Y
+		row.z = position.Z
+		row.radius = attrs.radius
+	end
 	local ok, err = update(function(p)
 		table.insert(p.zones, row)
 	end)
@@ -124,7 +134,44 @@ function ZoneDevStore.addZone(attrs, position)
 		table.insert(cachedPayload.zones, row)
 		return true, row
 	end
+	-- Studio session fallback when DataStore is blocked (Finish Zone appeared to do nothing).
+	if RunService:IsStudio() then
+		warn("[ZoneDevStore] DataStore save failed — zone kept for this session only: " .. tostring(err))
+		if not cachedPayload then cachedPayload = defaultPayload() end
+		table.insert(cachedPayload.zones, row)
+		return true, row
+	end
 	return false, err
+end
+
+function ZoneDevStore.setZoneMusic(zoneId, musicId)
+	if type(zoneId) ~= "string" or zoneId == "" then return false end
+	local ok, err = update(function(p)
+		for _, row in ipairs(p.zones) do
+			if row.id == zoneId then
+				row.musicId = musicId
+			end
+		end
+	end)
+	if ok then
+		if cachedPayload and type(cachedPayload.zones) == "table" then
+			for _, row in ipairs(cachedPayload.zones) do
+				if row.id == zoneId then row.musicId = musicId end
+			end
+		end
+		return true
+	end
+	-- Studio session fallback when DataStore is blocked, mirroring addZone.
+	if RunService:IsStudio() then
+		warn("[ZoneDevStore] DataStore save failed — music kept for this session only: " .. tostring(err))
+		if cachedPayload and type(cachedPayload.zones) == "table" then
+			for _, row in ipairs(cachedPayload.zones) do
+				if row.id == zoneId then row.musicId = musicId end
+			end
+		end
+		return true
+	end
+	return false
 end
 
 function ZoneDevStore.removeZone(zoneId)

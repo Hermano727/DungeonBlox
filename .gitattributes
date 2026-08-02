@@ -1,0 +1,26 @@
+# Normalize line endings. Without this, git rewrites LF -> CRLF on checkout
+# and every file looks modified on a different machine.
+* text=auto eol=lf
+
+# Luau / Lua source
+*.lua   text eol=lf
+*.luau  text eol=lf
+
+# Rojo metadata
+*.json  text eol=lf
+*.toml  text eol=lf
+*.md    text eol=lf
+
+# BINARY - never apply EOL conversion. Rojo syncback writes real source as
+# .rbxm (animations, tool handles, stylesheets). Letting git treat these as
+# text would corrupt them.
+*.rbxm   binary
+*.rbxmx  binary
+*.rbxl   binary
+*.rbxlx  binary
+
+# Art source, should git ever track it
+*.png    binary
+*.fbx    binary
+*.blend  binary
+*.blend1 binary

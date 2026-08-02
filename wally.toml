@@ -1,0 +1,11 @@
+[package]
+name = "hermanhundsberger/dungeonblox"
+version = "0.1.0"
+registry = "https://github.com/UpliftGames/wally-index"
+realm = "shared"
+
+[dependencies]
+# React-lua is the successor to Roact, which is deprecated.
+# This is what Roblox itself ships Studio plugins and the Universal App on.
+React = "jsdotlua/react@17.0.1"
+ReactRoblox = "jsdotlua/react-roblox@17.0.1"

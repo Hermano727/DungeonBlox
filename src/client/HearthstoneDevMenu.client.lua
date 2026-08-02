@@ -1,3 +1,4 @@
+local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindConfig"))
 --[[
     HearthstoneDevMenu  (admin-only LocalScript)
     Opened with F8. Provides an "Add Hearthstone Location" form that writes to
@@ -428,9 +429,9 @@ closeBtn.Activated:Connect(function() setOpen(false) end)
 UserInputService.InputBegan:Connect(function(input, processed)
     if processed then return end
     if UserInputService:GetFocusedTextBox() ~= nil then return end
-    if input.KeyCode == Enum.KeyCode.F8 then
+    if input.KeyCode == Keys.HearthstoneMenu then
         setOpen(not open)
-    elseif input.KeyCode == Enum.KeyCode.Escape and open then
+    elseif input.KeyCode == Keys.CloseMenu and open then
         setOpen(false)
     end
 end)

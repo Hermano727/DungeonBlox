@@ -428,9 +428,11 @@ local function rebuildShop(unlockedIds, coinBalance)
                     return rfPurchase:InvokeServer(capturedId)
                 end)
                 if ok and newCoins == true then
+                    -- newCoins is actually the second return from PurchaseLocation
                     setShopStatus("Unlocked: " .. capturedName, false)
                     row:Destroy()
                 elseif ok and type(newCoins) == "boolean" and not newCoins then
+                    -- newCoins is false (failed), _err is the error string
                     setShopStatus(tostring(_err) or "Purchase failed.", true)
                     buyBtn.Active          = true
                     buyBtn.BackgroundColor3 = Color3.fromRGB(48, 98, 58)

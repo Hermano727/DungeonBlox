@@ -1,3 +1,4 @@
+local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindConfig"))
 --[[
 	DashClient (StarterCharacterScripts)
 	V: short ground slide. Humanoid overwrites velocity each tick, so we ease TranslateBy over ~0.12–0.2s.
@@ -32,7 +33,8 @@ local lastDashClock = 0
 local isDashing = false
 local slideConn = nil
 
--- Dash cooldown label (parented below BarBackground in EnergyBarGui)
+-- Dash cooldown label (parented to BarBackground in EnergyBarGui)
+local DASH_LABEL_OFFSET_Y = -8 -- negative = above the energy bar; more negative = higher
 local dashLabel = nil
 local dashLabelConn = nil
 
@@ -46,9 +48,6 @@ local function getDashLabel()
 	if not lbl then
 		lbl = Instance.new("TextLabel")
 		lbl.Name = "DashCooldownLabel"
-		lbl.AnchorPoint = Vector2.new(0.5, 0)
-		lbl.Size = UDim2.new(0, 160, 0, 20)
-		lbl.Position = UDim2.new(0.5, 0, 1, 6)
 		lbl.BackgroundTransparency = 1
 		lbl.Font = Enum.Font.GothamBold
 		lbl.TextSize = 14
@@ -58,6 +57,9 @@ local function getDashLabel()
 		lbl.Visible = false
 		lbl.Parent = bg
 	end
+	lbl.AnchorPoint = Vector2.new(0.5, 1)
+	lbl.Size = UDim2.new(0, 160, 0, 20)
+	lbl.Position = UDim2.new(0.5, 0, 0, DASH_LABEL_OFFSET_Y)
 	dashLabel = lbl
 	return dashLabel
 end
@@ -186,7 +188,7 @@ local function tryDash()
 end
 
 UserInputService.InputBegan:Connect(function(input, _gameProcessed)
-	if input.KeyCode ~= Enum.KeyCode.Q then
+	if input.KeyCode ~= Keys.Dash then
 		return
 	end
 	tryDash()

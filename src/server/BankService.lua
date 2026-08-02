@@ -1,14 +1,15 @@
 --[[
   BankService (Server)
-  Server-authoritative bank logic. Moves Coins between wallet (currencies.Coins)
-  and bank (bank.Coins) on the DungeonProfileService session profile.
-  All mutations go through DungeonProfileService.PushProfile so the client
-  tab menu stays in sync.
+  Coin bank: inventory coin items <-> wallet (currencies.Coins).
+  DepositAll moves every Coins stack from bags into the spendable wallet.
+  WithdrawAll moves the full wallet back into inventory as Coins items (max stack 100).
 ]]
 
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local DungeonProfile = require(ServerScriptService:WaitForChild("DungeonProfileService"))
+
+local COIN_ITEM_ID = "Coins"
 
 local BankService = {}
 
@@ -20,66 +21,125 @@ local function getProfile(player)
 	if not profile then
 		return nil
 	end
-	-- Ensure bank sub-table exists (safety for profiles loaded before bank feature)
-	if type(profile.bank) ~= "table" then
-		profile.bank = { Coins = 0 }
+	if type(profile.currencies) ~= "table" then
+		profile.currencies = { Coins = 0 }
 	end
-	if type(profile.bank.Coins) ~= "number" then
-		profile.bank.Coins = 0
+	if type(profile.currencies.Coins) ~= "number" then
+		profile.currencies.Coins = 0
 	end
 	return profile
 end
 
-function BankService.Deposit(player, amount)
-	if type(amount) ~= "number" or amount ~= amount or amount <= 0 or math.floor(amount) ~= amount then
-		return false, "invalid_amount"
+local function countCoinsInInventory(profile)
+	local total = 0
+	if type(profile) ~= "table" or type(profile.inventory) ~= "table" then
+		return 0
 	end
+	for _, it in pairs(profile.inventory) do
+		if type(it) == "table" and it.itemId == COIN_ITEM_ID then
+			total = total + math.max(0, math.floor(tonumber(it.count) or 1))
+		end
+	end
+	return total
+end
 
+local function removeAllCoinsFromInventory(profile)
+	local total = 0
+	local removed = {}
+	for uuid, it in pairs(profile.inventory or {}) do
+		if type(it) == "table" and it.itemId == COIN_ITEM_ID then
+			total = total + math.max(0, math.floor(tonumber(it.count) or 1))
+			removed[#removed + 1] = uuid
+		end
+	end
+	local removedSet = {}
+	for _, uuid in ipairs(removed) do
+		profile.inventory[uuid] = nil
+		removedSet[uuid] = true
+	end
+	if type(profile.hotbar) == "table" then
+		for i = 1, 9 do
+			local u = profile.hotbar[i]
+			if type(u) == "string" and removedSet[u] then
+				profile.hotbar[i] = nil
+			end
+		end
+	end
+	return total
+end
+
+function BankService.DepositAll(player)
 	local profile = getProfile(player)
 	if not profile then
-		return false, "no_profile"
+		return false, "no_profile", 0
 	end
 
-	if profile.currencies.Coins < amount then
-		return false, "insufficient_wallet"
+	local amount = removeAllCoinsFromInventory(profile)
+	if amount <= 0 then
+		return false, "no_coins_in_bags", 0
 	end
 
-	profile.currencies.Coins = profile.currencies.Coins - amount
-	profile.bank.Coins = profile.bank.Coins + amount
-
+	profile.currencies.Coins = math.floor((profile.currencies.Coins or 0) + amount)
 	DungeonProfile.PushProfile(player)
-	return true, nil
+	return true, nil, amount
 end
 
 function BankService.Withdraw(player, amount)
 	if type(amount) ~= "number" or amount ~= amount or amount <= 0 or math.floor(amount) ~= amount then
-		return false, "invalid_amount"
+		return false, "invalid_amount", 0
 	end
 
 	local profile = getProfile(player)
 	if not profile then
-		return false, "no_profile"
+		return false, "no_profile", 0
 	end
 
-	if profile.bank.Coins < amount then
-		return false, "insufficient_bank"
+	local wallet = math.floor(profile.currencies.Coins or 0)
+	if amount > wallet then
+		return false, "insufficient_wallet", 0
 	end
 
-	profile.bank.Coins = profile.bank.Coins - amount
-	profile.currencies.Coins = profile.currencies.Coins + amount
+	profile.currencies.Coins = wallet - amount
+	local ok, err = DungeonProfile.GrantItemId(player, COIN_ITEM_ID, amount)
+	if not ok then
+		profile.currencies.Coins = wallet
+		DungeonProfile.PushProfile(player)
+		return false, err or "grant_failed", 0
+	end
 
-	DungeonProfile.PushProfile(player)
-	return true, nil
+	return true, nil, amount
+end
+
+function BankService.WithdrawAll(player)
+	local profile = getProfile(player)
+	if not profile then
+		return false, "no_profile", 0
+	end
+
+	local amount = math.floor(profile.currencies.Coins or 0)
+	if amount <= 0 then
+		return false, "empty_wallet", 0
+	end
+
+	profile.currencies.Coins = 0
+	local ok, err = DungeonProfile.GrantItemId(player, COIN_ITEM_ID, amount)
+	if not ok then
+		profile.currencies.Coins = amount
+		DungeonProfile.PushProfile(player)
+		return false, err or "grant_failed", 0
+	end
+
+	return true, nil, amount
 end
 
 function BankService.GetBalances(player)
 	local profile = getProfile(player)
 	if not profile then
-		return { wallet = 0, bank = 0 }
+		return { wallet = 0, inventoryCoins = 0 }
 	end
 	return {
-		wallet = profile.currencies.Coins or 0,
-		bank   = profile.bank.Coins or 0,
+		wallet = math.floor(profile.currencies.Coins or 0),
+		inventoryCoins = countCoinsInInventory(profile),
 	}
 end
 

@@ -16,6 +16,28 @@ local Config       = require(ReplicatedStorage:WaitForChild("EnergyConfig"))
 local CombatSfxConfig  = require(ReplicatedStorage:WaitForChild("CombatSfxConfig"))
 local CombatAnimConfig = require(ReplicatedStorage:WaitForChild("CombatAnimConfig"))
 
+local partyMemberUserIds = {}
+task.defer(function()
+    local ge   = ReplicatedStorage:WaitForChild("GameEvents", 30)
+    local sync = ge and ge:WaitForChild("PartyStateSync", 30)
+    if sync and sync:IsA("RemoteEvent") then
+        sync.OnClientEvent:Connect(function(payload)
+            local ids = {}
+            if type(payload) == "table" and type(payload.myParty) == "table" then
+                local members = payload.myParty.members
+                if type(members) == "table" then
+                    for _, m in ipairs(members) do
+                        if type(m.userId) == "number" then
+                            ids[m.userId] = true
+                        end
+                    end
+                end
+            end
+            partyMemberUserIds = ids
+        end)
+    end
+end)
+
 local animator = nil
 local attackTracks = {}
 local currentAttackTrack = nil
@@ -114,6 +136,7 @@ end
 
 local function ReportPlayerHit(targetPlayer, hitPos, weaponId)
     if not targetPlayer or targetPlayer == Player then return end
+    if partyMemberUserIds[targetPlayer.UserId] then return end
     PvPHitRemote:FireServer(targetPlayer, weaponId, hitPos)
 end
 
@@ -191,9 +214,9 @@ end
 
 local function OnAttackInput()
     local character = Player.Character
-    if not character then
+    if not character then 
         warn("[CombatClient] No character")
-        return
+        return 
     end
 
     -- Initialize animator if needed
@@ -208,11 +231,11 @@ local function OnAttackInput()
     end
 
     local tool = GetEquippedTool(character)
-    if not tool then
+    if not tool then 
         warn("[CombatClient] No tool equipped")
-        return
+        return 
     end
-
+    
     print("[CombatClient] Tool equipped: " .. tool.Name)
 
     local weaponId = WeaponData.GetWeaponIdFromTool(tool)
@@ -220,9 +243,9 @@ local function OnAttackInput()
 
     -- Gate: only registered combat weapons drain energy and hit mobs.
     -- Pickaxe, fishing rod, etc. return nil from GetWeaponIdFromTool → skipped here.
-    if not weaponId or not WeaponData.Weapons or not WeaponData.Weapons[weaponId] then
+    if not weaponId or not WeaponData.Weapons or not WeaponData.Weapons[weaponId] then 
         warn("[CombatClient] Weapon not registered: " .. tool.Name)
-        return
+        return 
     end
 
     if Player:GetAttribute("EnergyPanting") == true then
@@ -233,7 +256,7 @@ local function OnAttackInput()
     local energyValue = Player:FindFirstChild("Energy")
     local swingMult = tool:GetAttribute("WeaponSwingMult") or 1
     local effectiveCost = Config.SWING_COST * swingMult
-    if energyValue and energyValue.Value < effectiveCost then
+    if energyValue and energyValue.Value < effectiveCost then 
         warn("[CombatClient] Not enough energy: " .. tostring(energyValue.Value) .. " / " .. tostring(effectiveCost) .. " — triggering pant")
         TrySwing:FireServer(weaponId)  -- notify server so it can trigger depletion/pant
         return  -- still skip animation and hit detection
@@ -268,7 +291,7 @@ Player.CharacterAdded:Connect(function(character)
     currentAttackTrack = nil
     attackComboIndex = 1
     isAttacking = false
-
+    
     -- InitAnimator uses WaitForChild internally — no fixed wait needed
     animator = InitAnimator(character)
     if animator then

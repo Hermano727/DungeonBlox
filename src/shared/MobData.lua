@@ -200,6 +200,25 @@ MobData[5] = {
     }
 }
 
+-- Tier 1 additional mobs
+MobData[1]["SmallSkeleton"] = {
+	Name = "Small Skeleton",
+	Level = 2,
+	BaseHP = 55,
+	BaseDamage = 14,
+	BaseScore = 13,
+	LootPool = "CommonDrop",
+	MobID = "SmallSkeleton",
+	Armor = 4,
+	AggroRange = 32,
+	ReturnDistance = 52,
+	AttackRange = 5,
+	AttackCooldown = 0.9,
+	MoveSpeed = 9,
+	JumpHeight = 0,
+	KnockbackMultiplier = 1.0,
+}
+
 -- Named Elite variants (separate MobID entries)
 MobData[1]["PlainsSlimeElite"] = {
     Name = "Plains Slime Elite",

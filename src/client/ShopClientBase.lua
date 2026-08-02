@@ -1,3 +1,4 @@
+local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindConfig"))
 --[[
 	ShopClientBase
 	Shared UI factory for NPC shop windows.
@@ -26,6 +27,7 @@ local UserInputService  = game:GetService("UserInputService")
 
 local MenuMouse       = require(ReplicatedStorage:WaitForChild("CursorUtils"))
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
+local DungeonMenuNet  = require(script.Parent:WaitForChild("DungeonMenuNet"))
 
 local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -137,7 +139,6 @@ function ShopClientBase.buildCard(scroll, entry, lo, npcId, npcRequest, cachedCo
 	hz.Size=UDim2.fromScale(1,1); hz.BackgroundTransparency=1; hz.Text=""; hz.ZIndex=10; hz.Parent=ibox
 	hz.MouseEnter:Connect(function() overlay.Visible = true  end)
 	hz.MouseLeave:Connect(function() overlay.Visible = false end)
-	hz.Activated:Connect(function()  overlay.Visible = false end)
 
 	-- Text
 	local tf = Instance.new("Frame")
@@ -145,31 +146,31 @@ function ShopClientBase.buildCard(scroll, entry, lo, npcId, npcRequest, cachedCo
 	tf.BackgroundTransparency = 1; tf.ZIndex = 6; tf.Parent = card
 	lbl(tf, {text=label, color=T.TextPrimary, bold=true, size=15, wrap=true,
 		sz=UDim2.new(1,0,0,26), pos=UDim2.fromOffset(0,0), z=6})
-	lbl(tf, {text=desc~="" and desc or ("Cost: "..priceStr), color=T.TextSecond, size=11, wrap=true,
-		sz=UDim2.new(1,0,1,-56), pos=UDim2.fromOffset(0,28), z=6})
-	lbl(tf, {text="Price: "..priceStr, color=T.Gold, size=12,
-		sz=UDim2.new(1,-108,0,20), pos=UDim2.new(0,0,1,-26), z=6})
+	lbl(tf, {text=desc, color=T.TextSecond, size=11, wrap=true,
+		sz=UDim2.new(1,0,1,-32), pos=UDim2.fromOffset(0,28), z=6})
 
-	local btn = Instance.new("TextButton")
-	btn.Size=UDim2.fromOffset(96,28); btn.AnchorPoint=Vector2.new(1,1)
-	btn.Position=UDim2.new(1,0,1,-2)
-	btn.BackgroundColor3 = isCoins and T.Buy or T.Trade
-	btn.Font=Enum.Font.GothamBold; btn.TextSize=13
-	btn.TextColor3=Color3.new(1,1,1); btn.Text=isCoins and "Buy" or "Trade"
-	btn.ZIndex=7; btn.Parent=tf; cr(btn,6)
-	btn.Activated:Connect(function()
-		if not btn.Active then return end; btn.Active=false; btn.Text="..."
+	local buying = false
+	local function tryPurchase()
+		if buying then return end
+		buying = true
+		overlay.Visible = true
 		if npcRequest then
 			local ok,res=pcall(function()
 				return npcRequest:InvokeServer({npcId=npcId,action="BuyItem",itemId=itemId,qty=1})
 			end)
 			if ok and res and res.ok then
 				if cachedCoinsRef then cachedCoinsRef.value = res.wallet or cachedCoinsRef.value end
+				-- Server-side grant already happened; force a fresh snapshot so the inventory
+				-- UI actually reflects the new item instead of waiting on the next unrelated push.
+				DungeonMenuNet.requestSync()
 				if onSuccess then onSuccess(label, res) end
 			end
 		end
-		btn.Text = isCoins and "Buy" or "Trade"; btn.Active=true
-	end)
+		buying = false
+		overlay.Visible = false
+	end
+
+	hz.Activated:Connect(tryPurchase)
 	return card
 end
 
@@ -231,6 +232,9 @@ function ShopClientBase.create(config)
 		sz=UDim2.fromOffset(240,26),pos=UDim2.fromOffset(12,10),z=4})
 	local statusLbl=lbl(panel,{text="",color=T.StatusOk,size=12,wrap=true,
 		sz=UDim2.new(1,-280,0,22),pos=UDim2.fromOffset(12,38),z=4})
+	lbl(panel,{text="Click item image to buy",color=T.TextSecond,size=12,
+		xa=Enum.TextXAlignment.Center,ya=Enum.TextYAlignment.Top,
+		sz=UDim2.new(1,-96,0,18),pos=UDim2.fromOffset(48,10),z=4})
 
 	local function updateWallet()
 		walletLbl.Text = string.format("Wallet: %d Coins", cachedCoins)
@@ -339,7 +343,7 @@ function ShopClientBase.create(config)
 	dimBtn.Activated:Connect(closeShop)
 	UserInputService.InputBegan:Connect(function(inp,proc)
 		if proc then return end
-		if inp.KeyCode==Enum.KeyCode.Escape and gui.Enabled then closeShop() end
+		if inp.KeyCode==Keys.CloseMenu and gui.Enabled then closeShop() end
 	end)
 	player.CharacterAdded:Connect(function()
 		if cursorHeld then MenuMouse.release(); cursorHeld=false end

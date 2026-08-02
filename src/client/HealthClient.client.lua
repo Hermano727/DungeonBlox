@@ -11,6 +11,7 @@ local StarterGui   = game:GetService("StarterGui")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local HungerConfig = require(ReplicatedStorage:WaitForChild("HungerConfig"))
+local MobData = require(ReplicatedStorage:WaitForChild("MobData"))
 
 -- Disable Roblox's built-in top-right health bar
 StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Health, false)
@@ -35,15 +36,63 @@ local container = Instance.new("Frame", gui)
 container.Name             = "Container"
 container.AnchorPoint      = Vector2.new(0.5, 0)
 container.Position         = UDim2.new(0.5, 0, 0.03, 0)
-container.Size             = UDim2.fromOffset(320, 54)
+container.Size             = UDim2.fromOffset(510, 98)
 container.BackgroundTransparency = 1
 container.BorderSizePixel  = 0
+
+local elitePityTitle = Instance.new("TextLabel", container)
+elitePityTitle.Name = "ElitePityTitle"
+elitePityTitle.Size = UDim2.fromOffset(440, 16)
+elitePityTitle.Position = UDim2.fromOffset(26, 0)
+elitePityTitle.BackgroundTransparency = 1
+elitePityTitle.Font = Enum.Font.GothamBold
+elitePityTitle.TextSize = 12
+elitePityTitle.TextColor3 = Color3.fromRGB(222, 188, 255)
+elitePityTitle.TextStrokeTransparency = 0.35
+elitePityTitle.TextStrokeColor3 = Color3.fromRGB(58, 26, 92)
+elitePityTitle.TextXAlignment = Enum.TextXAlignment.Left
+elitePityTitle.Text = "Lvl -- [Elite]"
+elitePityTitle.ZIndex = 3
+elitePityTitle.Visible = false
+
+local elitePityBarBg = Instance.new("Frame", container)
+elitePityBarBg.Name = "ElitePityBarBg"
+elitePityBarBg.Size = UDim2.fromOffset(380, 10)
+elitePityBarBg.Position = UDim2.fromOffset(26, 16)
+elitePityBarBg.BackgroundColor3 = Color3.fromRGB(38, 20, 52)
+elitePityBarBg.BorderSizePixel = 0
+elitePityBarBg.ZIndex = 2
+elitePityBarBg.Visible = false
+Instance.new("UICorner", elitePityBarBg).CornerRadius = UDim.new(0, 4)
+
+local elitePityFill = Instance.new("Frame", elitePityBarBg)
+elitePityFill.Name = "Fill"
+elitePityFill.Size = UDim2.new(0.01, 0, 1, 0)
+elitePityFill.BackgroundColor3 = Color3.fromRGB(176, 92, 255)
+elitePityFill.BorderSizePixel = 0
+elitePityFill.ZIndex = 3
+Instance.new("UICorner", elitePityFill).CornerRadius = UDim.new(0, 4)
+
+local elitePityText = Instance.new("TextLabel", container)
+elitePityText.Name = "ElitePityText"
+elitePityText.Size = UDim2.fromOffset(98, 18)
+elitePityText.Position = UDim2.fromOffset(412, 12)
+elitePityText.BackgroundTransparency = 1
+elitePityText.Font = Enum.Font.GothamBold
+elitePityText.TextSize = 11
+elitePityText.TextColor3 = Color3.fromRGB(222, 188, 255)
+elitePityText.TextStrokeTransparency = 0.4
+elitePityText.TextStrokeColor3 = Color3.fromRGB(58, 26, 92)
+elitePityText.TextXAlignment = Enum.TextXAlignment.Left
+elitePityText.Text = "Elite 1%"
+elitePityText.ZIndex = 3
+elitePityText.Visible = false
 
 -- Heart icon
 local heart = Instance.new("TextLabel", container)
 heart.Name                   = "Heart"
 heart.Size                   = UDim2.fromOffset(22, 26)
-heart.Position               = UDim2.fromOffset(0, 0)
+heart.Position               = UDim2.fromOffset(95, 28)
 heart.BackgroundTransparency = 1
 heart.Font                   = Enum.Font.GothamBold
 heart.TextSize               = 16
@@ -56,7 +105,7 @@ heart.ZIndex                 = 3
 -- Bar background
 local barBg = Instance.new("Frame", container)
 barBg.Name             = "BarBackground"
-barBg.Position         = UDim2.fromOffset(26, 3)
+barBg.Position         = UDim2.fromOffset(121, 31)
 barBg.Size             = UDim2.fromOffset(190, 20)
 barBg.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
 barBg.BackgroundTransparency = 0.3
@@ -82,7 +131,7 @@ Instance.new("UICorner", barFill).CornerRadius = UDim.new(0, 4)
 local hpText = Instance.new("TextLabel", container)
 hpText.Name                   = "HPText"
 hpText.Size                   = UDim2.fromOffset(98, 26)
-hpText.Position               = UDim2.fromOffset(220, 0)
+hpText.Position               = UDim2.fromOffset(315, 28)
 hpText.BackgroundTransparency = 1
 hpText.Font                   = Enum.Font.GothamBold
 hpText.TextSize               = 13
@@ -97,7 +146,7 @@ hpText.ZIndex                 = 3
 local hungerIcon = Instance.new("TextLabel", container)
 hungerIcon.Name = "HungerIcon"
 hungerIcon.Size = UDim2.fromOffset(22, 22)
-hungerIcon.Position = UDim2.fromOffset(0, 30)
+hungerIcon.Position = UDim2.fromOffset(95, 58)
 hungerIcon.BackgroundTransparency = 1
 hungerIcon.Font = Enum.Font.GothamBold
 hungerIcon.TextSize = 16
@@ -108,7 +157,7 @@ hungerIcon.ZIndex = 3
 local hungerBarBg = Instance.new("Frame", container)
 hungerBarBg.Name = "HungerBarBg"
 hungerBarBg.Size = UDim2.fromOffset(190, 16)
-hungerBarBg.Position = UDim2.fromOffset(26, 33)
+hungerBarBg.Position = UDim2.fromOffset(121, 61)
 hungerBarBg.BackgroundColor3 = Color3.fromRGB(40, 28, 18)
 hungerBarBg.BorderSizePixel = 0
 hungerBarBg.ZIndex = 2
@@ -127,7 +176,7 @@ Instance.new("UICorner", hungerFill).CornerRadius = UDim.new(0, 4)
 local hungerText = Instance.new("TextLabel", container)
 hungerText.Name = "HungerText"
 hungerText.Size = UDim2.fromOffset(98, 22)
-hungerText.Position = UDim2.fromOffset(220, 28)
+hungerText.Position = UDim2.fromOffset(315, 56)
 hungerText.BackgroundTransparency = 1
 hungerText.Font = Enum.Font.GothamBold
 hungerText.TextSize = 12
@@ -138,6 +187,7 @@ hungerText.TextXAlignment = Enum.TextXAlignment.Left
 hungerText.Text = "-- / --"
 hungerText.ZIndex = 3
 
+
 ---------------------------------------------------------------------------
 -- Update logic
 ---------------------------------------------------------------------------
@@ -145,6 +195,7 @@ hungerText.ZIndex = 3
 local barTweenInfo = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local currentTween = nil
 local currentHungerTween = nil
+local currentElitePityTween = nil
 
 local function updateHealth(current, max)
     if max <= 0 then return end
@@ -183,6 +234,56 @@ local function updateHunger(current, max)
     currentHungerTween:Play()
 
     hungerText.Text = math.floor(current) .. " / " .. math.floor(max)
+end
+
+local function refreshElitePityBar()
+    local inEliteZone = player:GetAttribute("IsInEliteZone") == true
+    local eliteActive = player:GetAttribute("EliteActive") == true
+    local chancePercent = tonumber(player:GetAttribute("ElitePityChance")) or 1
+    local eliteMobId = player:GetAttribute("CurrentEliteMobId")
+    chancePercent = math.clamp(chancePercent, 1, 100)
+
+    local shouldShow = inEliteZone or eliteActive
+    elitePityBarBg.Visible = shouldShow
+    elitePityText.Visible = shouldShow
+    elitePityTitle.Visible = shouldShow
+    if not shouldShow then
+        return
+    end
+
+    local level = "--"
+    local name = "Elite"
+    if type(eliteMobId) == "string" and eliteMobId ~= "" then
+        local mobStats = MobData.FindMobById(eliteMobId)
+        if type(mobStats) == "table" then
+            if mobStats.Level ~= nil then
+                level = tostring(mobStats.Level)
+            end
+            if type(mobStats.Name) == "string" and mobStats.Name ~= "" then
+                name = mobStats.Name
+            end
+        end
+    end
+
+    local fillRatio
+    if eliteActive then
+        local hp = tonumber(player:GetAttribute("EliteCurrentHealth")) or 0
+        local maxHp = tonumber(player:GetAttribute("EliteMaxHealth")) or 0
+        if maxHp <= 0 then maxHp = 1 end
+        fillRatio = math.clamp(hp / maxHp, 0, 1)
+        elitePityText.Text = string.format("HP %d/%d", math.floor(hp + 0.5), math.floor(maxHp + 0.5))
+        elitePityTitle.Text = string.format("Lvl %s [%s]", level, name)
+    else
+        fillRatio = chancePercent / 100
+        elitePityText.Text = string.format("Elite %d%%", math.floor(chancePercent + 0.5))
+        elitePityTitle.Text = string.format("Lvl %s [%s]", level, name)
+    end
+
+    if currentElitePityTween then currentElitePityTween:Cancel() end
+    currentElitePityTween = TweenService:Create(elitePityFill, barTweenInfo, {
+        Size = UDim2.new(fillRatio, 0, 1, 0),
+    })
+    currentElitePityTween:Play()
 end
 
 ---------------------------------------------------------------------------
@@ -226,5 +327,13 @@ if hungerVal then
 else
     warn("[HealthClient] Hunger NumberValue not found")
 end
+
+player:GetAttributeChangedSignal("IsInEliteZone"):Connect(refreshElitePityBar)
+player:GetAttributeChangedSignal("ElitePityChance"):Connect(refreshElitePityBar)
+player:GetAttributeChangedSignal("CurrentEliteMobId"):Connect(refreshElitePityBar)
+player:GetAttributeChangedSignal("EliteActive"):Connect(refreshElitePityBar)
+player:GetAttributeChangedSignal("EliteCurrentHealth"):Connect(refreshElitePityBar)
+player:GetAttributeChangedSignal("EliteMaxHealth"):Connect(refreshElitePityBar)
+task.defer(refreshElitePityBar)
 
 print("[HealthClient] ready")

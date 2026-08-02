@@ -1,3 +1,4 @@
+local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindConfig"))
 --[[
     NPCClient
     Factory that discovers all CollectionService-tagged "NPC" models,
@@ -416,7 +417,7 @@ closeBtn.Activated:Connect(function() setShopOpen(false) end)
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
     if UserInputService:GetFocusedTextBox() then return end
-    if input.KeyCode == Enum.KeyCode.Escape and shopOpen then
+    if input.KeyCode == Keys.CloseMenu and shopOpen then
         setShopOpen(false)
     end
 end)
@@ -530,7 +531,7 @@ end
 local function buildMinerQuestDialogue(dialogue, npcId, npcType, npcName, _reg)
     local questText = string.format(
         "Hey there, kiddo. I need some help mining some coal. Here, I've got a spare wooden pickaxe for you. Right click it in your inventory to equip it. Mine five lumps from the coal veins and I'll make it worth your coin. You in?"
-
+      
     )
     dialogue:addDialog(questText, { "Yes, I'll gather the coal.", "Not right now." })
     dialogue.responded:Connect(function(responseNum, dialogNum)
@@ -565,7 +566,7 @@ end
 local function buildMinerActiveDialogue(dialogue, npcId, npcType, npcName, _reg)
     local t = string.format(
         "You've still got an open coal contract with the forge. Want a progress check?"
-
+       
     )
     dialogue:addDialog(t, { "How's my haul?", "I'll get back to it." })
     dialogue.responded:Connect(function(responseNum, dialogNum)
@@ -600,7 +601,7 @@ end
 local function buildFishermanQuestDialogue(dialogue, npcId, npcType, npcName, _reg)
     local questText = string.format(
         "Ahoy. wanna help me get some fish. I have a spare Wooden Spear. The camp needs fresh fish and I'm stuck untangling the nets. Spear five honest catches from this river and I'll make it worth your while. You in?"
-
+       
     )
     dialogue:addDialog(questText, { "Yes, I'll fish.", "Not right now." })
     dialogue.responded:Connect(function(responseNum, dialogNum)
@@ -635,7 +636,7 @@ end
 local function buildFishermanActiveDialogue(dialogue, npcId, npcType, npcName, _reg)
     local t = string.format(
         "You getting lazy or what? Want a progress check?"
-
+       
     )
     dialogue:addDialog(t, { "How's my catch?", "I'll get back to it." })
     dialogue.responded:Connect(function(responseNum, dialogNum)
@@ -1104,7 +1105,7 @@ anvilClose.Activated:Connect(function() setAnvilState(false) end)
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
     if UserInputService:GetFocusedTextBox() then return end
-    if input.KeyCode == Enum.KeyCode.Escape and anvilOpen then
+    if input.KeyCode == Keys.CloseMenu and anvilOpen then
         setAnvilState(false)
     end
 end)
@@ -1261,7 +1262,7 @@ local function setupNPC(model)
 
     prompt.Triggered:Connect(function()
         -- Merchant-style shop UI (ProximityPromptService).
-        if npcType == "Merchant" or npcType == "AnimalTrainer" or npcType == "Dungeoneer" or npcType == "Innkeeper" then
+        if npcType == "Merchant" or npcType == "AnimalTrainer" or npcType == "Dungeoneer" or npcType == "Innkeeper" or npcType == "Blacksmith" then
             return
         end
         local char = player.Character
@@ -1275,18 +1276,6 @@ local function setupNPC(model)
     end)
 
     wiredNpcIds[npcId] = true
-end
-
-local function setupMerchantFallback()
-    setupAnimalTrainerFallback()
-    setupDungeoneerFallback()
-    setupInnkeeperFallback()
-    setupMinerFallback()
-    setupFishermanFallback()
-    local merchant = workspace:FindFirstChild("The Merchant") or workspace:FindFirstChild("Noob")
-    if merchant and merchant:IsA("Model") then
-        task.spawn(setupNPC, merchant)
-    end
 end
 
 local function setupAnimalTrainerFallback()
@@ -1321,6 +1310,22 @@ local function setupFishermanFallback()
     local f = workspace:FindFirstChild("Fisherman") or workspace:FindFirstChild("Fisherman", true)
     if f and f:IsA("Model") then
         task.spawn(setupNPC, f)
+    end
+end
+
+-- Defined after its dependencies above: Luau resolves a not-yet-declared `local function`
+-- as a global (nil) lookup inside an earlier function body, since locals are scoped from
+-- the point of declaration onward, not hoisted. This previously made every call inside
+-- here throw "attempt to call a nil value" on setupAnimalTrainerFallback.
+local function setupMerchantFallback()
+    setupAnimalTrainerFallback()
+    setupDungeoneerFallback()
+    setupInnkeeperFallback()
+    setupMinerFallback()
+    setupFishermanFallback()
+    local merchant = workspace:FindFirstChild("The Merchant") or workspace:FindFirstChild("Noob")
+    if merchant and merchant:IsA("Model") then
+        task.spawn(setupNPC, merchant)
     end
 end
 

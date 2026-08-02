@@ -103,12 +103,15 @@ local function reduceDurability(player, profile, uuid, delta)
 	end
 end
 
--- Equipped weapon loses 1 dur on a confirmed hit
+-- Weapons have no equip-panel slot (Minecraft-style hotbar model): the held Tool's
+-- DungeonItemUuid attribute is the currently wielded weapon. Loses 1 dur on a confirmed hit.
 function DurabilityService.weaponHit(player)
 	local profile = dp().Get(player)
 	if not profile then return end
-	local uuid = (profile.equipped or {})["Weapon"]
-	if not uuid then return end
+	local char = player.Character
+	local tool = char and char:FindFirstChildOfClass("Tool")
+	local uuid = tool and tool:GetAttribute("DungeonItemUuid")
+	if type(uuid) ~= "string" or uuid == "" then return end
 	reduceDurability(player, profile, uuid, 1)
 end
 
@@ -134,11 +137,17 @@ function DurabilityService.applyDeathPenalty(profile, player)
 	-- Collect UUIDs that take the penalty
 	local penaltySet = {}
 
-	-- Equipped weapons and armor
-	local combatSlots = { "Weapon", "Shield", "Helm", "Chest", "Legs", "Boots" }
+	-- Equipped armor
+	local combatSlots = { "Shield", "Helm", "Chest", "Legs", "Boots" }
 	for _, slot in ipairs(combatSlots) do
 		local uuid = (profile.equipped or {})[slot]
 		if uuid then penaltySet[uuid] = true end
+	end
+
+	-- Weapon (hotbar[1] is the only "equipped weapon" location now)
+	if type(profile.hotbar) == "table" then
+		local wuuid = profile.hotbar[1]
+		if type(wuuid) == "string" and wuuid ~= "" then penaltySet[wuuid] = true end
 	end
 
 	-- ALL profession tools regardless of equipped state

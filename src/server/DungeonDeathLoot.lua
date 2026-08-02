@@ -1,103 +1,27 @@
 --[[
-	Server death penalties:
+	Server death penalties (Minecraft-style hotbar model -- no weapon-mirror slot 1):
 	- Drop unprotected inventory rows into world loot pickups.
-	- Keep explicitly protected items.
-	- Keep equipped armor.
-	- Keep melee weapon currently placed in hotbar.
+	- What's "protected" is decided entirely by DungeonDeathProtection, not inline here --
+	  this module only owns the drop loop, coin loss, and world-loot mechanics.
 	- Apply a wallet coin loss.
 ]]
 
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
+local Types = require(ReplicatedStorage:WaitForChild("DungeonProfileTypes"))
 local DungeonProfile = require(ServerScriptService:WaitForChild("DungeonProfileService"))
 local Hotbar = require(ServerScriptService:WaitForChild("DungeonEquippedHotbar"))
 local WorldLoot = require(ServerScriptService:WaitForChild("DungeonWorldLootService"))
+local DeathProtection = require(ServerScriptService:WaitForChild("DungeonDeathProtection"))
 
 local COIN_LOSS_PERCENT = 0.15
 
 local DurabilityService = require(ServerScriptService:WaitForChild("DurabilityService"))
+local HungerData        = require(ServerScriptService:WaitForChild("HungerData"))
 
 local DungeonDeathLoot = {}
-
-local function isMeleeItem(item)
-	if type(item) ~= "table" then
-		return false
-	end
-	if type(item.itemId) == "string" and item.itemId ~= "" then
-		return ItemDefinitions.IsMeleeWeapon(item.itemId)
-	end
-	if item.type ~= "Weapon" then
-		return false
-	end
-	local n = string.lower(tostring(item.name or ""))
-	local wt = string.lower(tostring(item.weaponType or ""))
-	if string.find(n, "bow", 1, true) or string.find(wt, "bow", 1, true) then
-		return false
-	end
-	return true
-end
-
-local function isProfessionItem(item)
-	if type(item) ~= "table" then
-		return false
-	end
-	if type(item.itemId) == "string" and item.itemId ~= "" then
-		return ItemDefinitions.IsProtectedOnDeath(item.itemId)
-	end
-	local slot = item.equipSlot
-	return slot == "Pickaxe" or slot == "FishingSpear"
-end
-
-local function buildUuidSets(profile)
-	local hotbarSet = {}
-	if type(profile.hotbar) == "table" then
-		for i = 1, 9 do
-			local u = profile.hotbar[i]
-			if type(u) == "string" and u ~= "" then
-				hotbarSet[u] = true
-			end
-		end
-	end
-
-	local equippedSet = {}
-	if type(profile.equipped) == "table" then
-		for slot, u in pairs(profile.equipped) do
-			if type(u) == "string" and u ~= "" then
-				equippedSet[u] = slot
-			end
-		end
-	end
-
-	return hotbarSet, equippedSet
-end
-
-local function shouldKeepItem(item, uuid, hotbarSet, equippedSet)
-	if type(item) ~= "table" then
-		return true
-	end
-
-	if type(item.itemId) == "string" and item.itemId ~= "" and ItemDefinitions.IsProtectedOnDeath(item.itemId) then
-		return true
-	end
-
-	if isProfessionItem(item) then
-		return true
-	end
-
-	local eqSlot = equippedSet[uuid]
-	if eqSlot and item.type == "Armor" then
-		return true
-	end
-
-	if hotbarSet[uuid] and isMeleeItem(item) then
-		return true
-	end
-
-	return false
-end
 
 local function stripReferencesToMissing(profile)
 	if type(profile.hotbar) == "table" then
@@ -105,6 +29,15 @@ local function stripReferencesToMissing(profile)
 			local u = profile.hotbar[i]
 			if type(u) == "string" and u ~= "" and (not profile.inventory[u]) then
 				profile.hotbar[i] = nil
+			end
+		end
+	end
+
+	if type(profile.bagSlots) == "table" then
+		for i = 1, Types.BAG_SLOT_COUNT do
+			local u = profile.bagSlots[i]
+			if type(u) == "string" and u ~= "" and (not profile.inventory[u]) then
+				profile.bagSlots[i] = nil
 			end
 		end
 	end
@@ -132,11 +65,13 @@ function DungeonDeathLoot.applyToPlayer(player, deathPosition)
 
 	local droppedItems = {}
 	local inv = profile.inventory
-	local hotbarSet, equippedSet = buildUuidSets(profile)
+	local equippedSlotByUuid = DeathProtection.BuildEquippedSlotByUuid(profile)
+	local protectedWeaponUuid = DeathProtection.GetProtectedWeaponUuid(profile)
+	local protectedBowUuid = DeathProtection.GetProtectedBowUuid(profile)
 
 	if type(inv) == "table" then
 		for uuid, item in pairs(inv) do
-			if type(uuid) == "string" and not shouldKeepItem(item, uuid, hotbarSet, equippedSet) then
+			if type(uuid) == "string" and not DeathProtection.ShouldKeepOnDeath(uuid, item, equippedSlotByUuid, protectedWeaponUuid, protectedBowUuid) then
 				table.insert(droppedItems, item)
 				inv[uuid] = nil
 			end
@@ -144,6 +79,7 @@ function DungeonDeathLoot.applyToPlayer(player, deathPosition)
 	end
 
 	stripReferencesToMissing(profile)
+	DeathProtection.ReorderHotbarAfterDeath(profile)
 
 	if type(profile.currencies) == "table" and type(profile.currencies.Coins) == "number" then
 		local loss = math.floor(profile.currencies.Coins * COIN_LOSS_PERCENT)
@@ -156,6 +92,7 @@ function DungeonDeathLoot.applyToPlayer(player, deathPosition)
 
 	local StatsService = require(ServerScriptService:WaitForChild("DungeonStatsService"))
 	StatsService.RecomputeRuntimeHp(profile)
+	HungerData.addHunger(player, 100)
 	DungeonProfile.PushProfile(player)
 	Hotbar.syncFromProfile(player, profile)
 end

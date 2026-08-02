@@ -4,6 +4,7 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindConfig"))
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
@@ -22,6 +23,19 @@ local CAMERA_OFFSET = Vector3.new(0, 0.95, 0)
 
 -- Camera rotation sensitivity
 local SENSITIVITY = 0.003
+
+-- PERSPECTIVE MODES (Minecraft-style F5 cycling, bound to Keys.TogglePerspective)
+--   1 = first person       - camera at the head, original behaviour
+--   2 = over-shoulder      - camera pulled back along the look vector
+-- Minecraft's 3rd-person camera sits 4 blocks back; scaled to a 5.8-stud
+-- character that is ~13 studs. Roblox's own zoom system is NOT in play here
+-- (CameraType is Scriptable), so this is an absolute distance, not a zoom %.
+local PERSPECTIVE_FIRST  = 1
+local PERSPECTIVE_THIRD  = 2
+local THIRD_DISTANCE     = 11.05      -- studs behind the head
+local THIRD_HEIGHT       = 1.5     -- studs above the head
+local CAMERA_COLLIDE_PAD = 1.0     -- keep this far off geometry when pulled in
+local perspective = PERSPECTIVE_FIRST
 
 -- Transparency settings
 local HEAD_TRANSPARENCY = 0  -- Not used - head clipped by camera near plane
@@ -95,6 +109,10 @@ local function setupFirstPersonCamera(character)
 	-- Handle mouse movement for camera rotation
 	inputConnection = UserInputService.InputChanged:Connect(function(input, gameProcessed)
 		if input.UserInputType == Enum.UserInputType.MouseMovement then
+			-- Respect free cursor (DevPlacer, dialogs, minigames, etc.)
+			if UserInputService.MouseBehavior ~= Enum.MouseBehavior.LockCenter then
+				return
+			end
 			local delta = input.Delta
 
 			-- Update rotation (yaw and pitch)
@@ -113,6 +131,18 @@ local function setupFirstPersonCamera(character)
 				CFrame.Angles(0, cameraRotation.Y, 0) *  -- Yaw (horizontal rotation)
 				CFrame.Angles(cameraRotation.X, 0, 0) *  -- Pitch (vertical rotation)
 				CFrame.new(CAMERA_OFFSET)  -- Apply offset
+
+			if perspective == PERSPECTIVE_THIRD then
+				local focus = cameraCFrame.Position + Vector3.new(0, THIRD_HEIGHT, 0)
+				local back  = -cameraCFrame.LookVector
+				local params = RaycastParams.new()
+				params.FilterType = Enum.RaycastFilterType.Exclude
+				params.FilterDescendantsInstances = { humanoidRootPart.Parent }
+				local hit = workspace:Raycast(focus, back * THIRD_DISTANCE, params)
+				local dist = hit and math.max((hit.Position - focus).Magnitude - CAMERA_COLLIDE_PAD, 0.5)
+					or THIRD_DISTANCE
+				cameraCFrame = CFrame.lookAt(focus + back * dist, focus)
+			end
 
 			camera.CFrame = cameraCFrame
 
@@ -151,3 +181,28 @@ end
 player.CharacterAdded:Connect(onCharacterAdded)
 
 print("[FirstPersonViewModel] Script loaded")
+
+-- Perspective toggle (Keys.TogglePerspective, default R).
+-- Cycles first person <-> over-shoulder, Minecraft F5 style.
+-- View 3 (camera facing the player's face) is deliberately NOT implemented:
+-- it needs character rotation decoupled from camera yaw, which the
+-- humanoidRootPart.CFrame line inside updateCamera owns.
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	if input.KeyCode ~= Keys.TogglePerspective then return end
+
+	perspective = (perspective == PERSPECTIVE_FIRST) and PERSPECTIVE_THIRD or PERSPECTIVE_FIRST
+
+	-- the head decal is forced invisible for first person; restore it in third
+	local char = player.Character
+	local head = char and char:FindFirstChild("Head")
+	if head then
+		for _, d in ipairs(head:GetDescendants()) do
+			if d:IsA("Decal") then
+				d.LocalTransparencyModifier = (perspective == PERSPECTIVE_FIRST) and 1 or 0
+			end
+		end
+	end
+
+	print("[FirstPersonViewModel] perspective =", perspective)
+end)

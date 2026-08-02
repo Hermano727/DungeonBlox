@@ -15,11 +15,14 @@
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService      = game:GetService("TweenService")
+local SoundService      = game:GetService("SoundService")
 
-local ZoneConfig = require(ReplicatedStorage:WaitForChild("ZoneConfig"))
+local ZoneConfig      = require(ReplicatedStorage:WaitForChild("ZoneConfig"))
+local VolumeSettings  = require(ReplicatedStorage:WaitForChild("VolumeSettings"))
 local GameEvents = ReplicatedStorage:WaitForChild("GameEvents")
 local ZoneEntryFlash  = GameEvents:WaitForChild("ZoneEntryFlash")
 local ZoneEntryNotify = GameEvents:WaitForChild("ZoneEntryNotify")
+local ZoneMusicSync   = GameEvents:WaitForChild("ZoneMusicSync")
 
 local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -198,4 +201,65 @@ end
 ZoneEntryNotify.OnClientEvent:Connect(function(payload)
 	if type(payload) ~= "table" then return end
 	showEntryBanner(payload.zoneName, payload.zoneAlignment)
+end)
+
+----------------------------------------------------------------------
+-- Zone soundtrack: looped SoundService track that crossfades when the
+-- player's active music zone changes (set on ZoneService via SetZoneMusic).
+-- Default is no music — silence until a zone with a musicId is entered.
+----------------------------------------------------------------------
+
+local zoneMusic = Instance.new("Sound")
+zoneMusic.Name    = "ZoneMusic"
+zoneMusic.Looped  = true
+zoneMusic.Volume  = 0
+zoneMusic.SoundId = ""
+zoneMusic.Parent  = SoundService
+
+local currentMusicId = ""
+local musicFadeToken = 0
+
+local function setZoneMusic(musicId)
+	musicId = type(musicId) == "string" and musicId or ""
+	if musicId == currentMusicId then return end
+	currentMusicId = musicId
+	musicFadeToken += 1
+	local myToken = musicFadeToken
+
+	local fadeOut = TweenService:Create(zoneMusic,
+		TweenInfo.new(ZoneConfig.ZONE_MUSIC_FADE_SEC * (musicId == "" and 1 or 0.5), Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{ Volume = 0 })
+
+	if musicId == "" then
+		if not zoneMusic.IsPlaying then return end
+		fadeOut:Play()
+		fadeOut.Completed:Connect(function()
+			if myToken == musicFadeToken then zoneMusic:Stop() end
+		end)
+		return
+	end
+
+	local function swapAndFadeIn()
+		if myToken ~= musicFadeToken then return end
+		zoneMusic.SoundId = musicId
+		zoneMusic.Volume  = 0
+		zoneMusic:Play()
+		TweenService:Create(zoneMusic,
+			TweenInfo.new(ZoneConfig.ZONE_MUSIC_FADE_SEC, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+			{ Volume = VolumeSettings.music }):Play()
+	end
+
+	if zoneMusic.IsPlaying then
+		fadeOut:Play()
+		fadeOut.Completed:Connect(function()
+			if myToken == musicFadeToken then swapAndFadeIn() end
+		end)
+	else
+		swapAndFadeIn()
+	end
+end
+
+ZoneMusicSync.OnClientEvent:Connect(function(payload)
+	if type(payload) ~= "table" then return end
+	setZoneMusic(payload.musicId)
 end)

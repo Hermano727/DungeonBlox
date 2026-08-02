@@ -1,6 +1,15 @@
+local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindConfig"))
 --[[
-	InventoryDragController — drag items between bag, equipment, and hotbar.
-	Slot 1 mirrors equipped.Weapon on the server; dropping a Weapon onto slot 1 equips it.
+	InventoryDragController — move items between bag, equipment, and hotbar.
+	Minecraft-style model: all 9 hotbar slots behave identically, no reserved weapon slot.
+	Two supported gestures, both ending at the same performDrop dispatch:
+	  1. Click-to-pick-up / click-to-place: click once to pick an item up (it follows the
+	     cursor), click a destination to place it there (swaps if occupied). Click the same
+	     slot again, or right-click, to cancel. Nothing is mutated server-side until the
+	     placing click, so cancelling is free.
+	  2. Press-and-hold-drag: press and hold on an occupied slot, move past a small
+	     threshold, release over the destination. Releasing without crossing the threshold
+	     is treated as a plain click instead (falls through to gesture 1).
 ]]
 
 local UserInputService = game:GetService("UserInputService")
@@ -14,59 +23,21 @@ local InventoryHotbarRules = require(script.Parent:WaitForChild("InventoryHotbar
 
 local InventoryDragController = {}
 
-local DRAG_THRESHOLD = 5
-
--- Client-side bag display order (persists across server snapshots until menu closes)
-local _bagOrder = {}
-
-function InventoryDragController.syncBagOrder(allUuids)
-	local newSet = {}
-	for _, u in ipairs(allUuids) do newSet[u] = true end
-	local filtered = {}
-	for _, u in ipairs(_bagOrder) do
-		if newSet[u] then
-			table.insert(filtered, u)
-			newSet[u] = nil
-		end
-	end
-	for _, u in ipairs(allUuids) do
-		if newSet[u] then table.insert(filtered, u) end
-	end
-	_bagOrder = filtered
-end
-
-function InventoryDragController.swapBagOrder(uuidA, uuidB)
-	local ia, ib
-	for i, u in ipairs(_bagOrder) do
-		if u == uuidA then ia = i
-		elseif u == uuidB then ib = i
-		end
-	end
-	if ia and ib then _bagOrder[ia], _bagOrder[ib] = uuidB, uuidA end
-end
-
-function InventoryDragController.getSortedBagItems(bagItems)
-	if #_bagOrder == 0 then return bagItems end
-	local orderMap = {}
-	for i, u in ipairs(_bagOrder) do orderMap[u] = i end
-	local sorted = {}
-	for _, e in ipairs(bagItems) do table.insert(sorted, e) end
-	table.sort(sorted, function(a, b)
-		local ia2 = orderMap[a.uuid] or 99999
-		local ib2 = orderMap[b.uuid] or 99999
-		if ia2 ~= ib2 then return ia2 < ib2 end
-		return (a.uuid or "") < (b.uuid or "")
-	end)
-	return sorted
+local function hotbarSlotUuid(hb, i)
+	if type(hb) ~= "table" then return nil end
+	i = math.floor(tonumber(i) or -1)
+	if i < 1 or i > 9 then return nil end
+	local v = hb[i]
+	if type(v) == "string" and v ~= "" then return v end
+	v = hb[tostring(i)]
+	if type(v) == "string" and v ~= "" then return v end
+	return nil
 end
 
 local state = {
 	refs = nil,
 	getSnapshot = nil,
-	active = nil,
 	ghost = nil,
-	connMove = nil,
-	connUp = nil,
 }
 
 local function destroyGhost()
@@ -76,13 +47,15 @@ local function destroyGhost()
 	end
 end
 
-local function pointInGui(px, py, gui)
-	if not gui or not gui.AbsolutePosition then
-		return false
+local function resolveHotbarSlotIndex(btn, fallback)
+	if typeof(btn) ~= "Instance" then return fallback end
+	local parsed = tonumber(btn:GetAttribute("HotbarSlot"))
+		or tonumber(tostring(btn.Name):match("^HB(%d+)$"))
+	if parsed then
+		local slot = math.floor(parsed)
+		if slot >= 1 and slot <= 9 then return slot end
 	end
-	local ap = gui.AbsolutePosition
-	local as = gui.AbsoluteSize
-	return px >= ap.X and px <= ap.X + as.X and py >= ap.Y and py <= ap.Y + as.Y
+	return fallback
 end
 
 local function getItemFromProfile(profile, uuid)
@@ -104,50 +77,7 @@ local function allowedEquipSlotForItem(item)
 	return slot
 end
 
-local function dropTargetAt(px, py)
-	local refs = state.refs
-	if not refs then return nil, nil end
-	for slot, btn in pairs(refs.equipButtons or {}) do
-		if pointInGui(px, py, btn) then return "equip", slot end
-	end
-	local hb = refs.hotbarButtons
-	if type(hb) == "table" then
-		for i = 1, 9 do
-			if hb[i] and pointInGui(px, py, hb[i]) then return "hotbar", i end
-		end
-	end
-	-- Check individual bag item buttons first (bag-to-bag swap)
-	local scroll = refs.inventoryScroll
-	if scroll then
-		for _, child in ipairs(scroll:GetChildren()) do
-			if child:IsA("GuiButton") then
-				local bu = child:GetAttribute("BagUUID")
-				if bu and bu ~= "" and pointInGui(px, py, child) then
-					return "bag_item", bu
-				end
-			end
-		end
-		if pointInGui(px, py, scroll) then return "bag", nil end
-	end
-	return nil, nil
-end
-
-local function clearDragConns()
-	if state.connMove then
-		state.connMove:Disconnect()
-		state.connMove = nil
-	end
-	if state.connUp then
-		state.connUp:Disconnect()
-		state.connUp = nil
-	end
-end
-
-local function finishDrag()
-	clearDragConns()
-	destroyGhost()
-	state.active = nil
-end
+local DRAG_THRESHOLD = 5
 
 local function resolveUuidFrom(profile, from)
 	if from.kind == "bag" then
@@ -158,10 +88,26 @@ local function resolveUuidFrom(profile, from)
 		return type(u) == "string" and u ~= "" and u or nil
 	end
 	if from.kind == "hotbar" and type(from.hotbarIndex) == "number" then
-		local u = profile.hotbar and profile.hotbar[from.hotbarIndex]
+		local u = profile.hotbar and hotbarSlotUuid(profile.hotbar, from.hotbarIndex)
 		return type(u) == "string" and u ~= "" and u or nil
 	end
 	return nil
+end
+
+-- Shared by drag-and-drop and the hover+number-key path (section 3 of the hotbar refactor):
+-- both must dispatch the exact same server actions, not a third code path.
+local function performHotbarToHotbarSwap(fromIdx, targetSlot)
+	if fromIdx == targetSlot then
+		return
+	end
+	DungeonMenuNet.requestInventoryAct({ kind = "SwapHotbar", a = fromIdx, b = targetSlot })
+end
+
+local function performAssignToHotbar(uuid, targetSlot, it)
+	if not InventoryHotbarRules.mayAssignToHotbarSlot(targetSlot, it) then
+		return
+	end
+	DungeonMenuNet.requestInventoryAct({ kind = "SetHotbar", slot = targetSlot, uuid = uuid })
 end
 
 local function performDrop(from, targetKind, targetSlot)
@@ -192,59 +138,33 @@ local function performDrop(from, targetKind, targetSlot)
 		local uuid = resolveUuidFrom(profile, from)
 		if not uuid then return end
 		local it = getItemFromProfile(profile, uuid)
-		if not InventoryHotbarRules.mayAssignToHotbarSlot(targetSlot, it) then
-			return
-		end
-		if InventoryHotbarRules.isWeaponMirrorSlot(targetSlot) then
-			DungeonMenuNet.requestEquip(uuid)
-			return
-		end
 		-- Hotbar -> hotbar drag: swap the two slots instead of overwriting.
 		-- The old behavior (SetHotbar) silently kicked the target item out of the hotbar
 		-- (back to bag) which looked like two slots being unequipped at once.
 		if from.kind == "hotbar" and type(from.hotbarIndex) == "number" then
-			local fromIdx = from.hotbarIndex
-			if fromIdx == targetSlot then
-				return
-			end
-			-- Slot 1 mirrors equipped weapon; don't let the user drag it onto a non-weapon slot.
-			-- (Slot 1 -> slot 1 already handled above; slot N -> slot 1 with a weapon goes through requestEquip.)
-			if InventoryHotbarRules.isWeaponMirrorSlot(fromIdx) then
-				return
-			end
-			DungeonMenuNet.requestInventoryAct({ kind = "SwapHotbar", a = fromIdx, b = targetSlot })
+			performHotbarToHotbarSwap(from.hotbarIndex, targetSlot)
 			return
 		end
-		DungeonMenuNet.requestInventoryAct({ kind = "SetHotbar", slot = targetSlot, uuid = uuid })
+		performAssignToHotbar(uuid, targetSlot, it)
 		return
 	end
 
-	if targetKind == "bag_item" and type(targetSlot) == "string" then
-		if from.kind == "bag" then
-			local fromUuid = resolveUuidFrom(profile, from)
-			if fromUuid and fromUuid ~= targetSlot then
-				InventoryDragController.swapBagOrder(fromUuid, targetSlot)
-			end
-		elseif from.kind == "hotbar" and type(from.hotbarIndex) == "number" then
-			if from.hotbarIndex == InventoryHotbarRules.WEAPON_SLOT then
-				DungeonMenuNet.requestUnequip("Weapon")
-			else
-				DungeonMenuNet.requestInventoryAct({ kind = "SetHotbar", slot = from.hotbarIndex, uuid = nil })
-			end
+	if targetKind == "bag" and type(targetSlot) == "number" then
+		local uuid = resolveUuidFrom(profile, from)
+		if not uuid then
+			return
 		end
+		-- Bag -> bag: swap the two slots instead of overwriting (same reasoning as the
+		-- hotbar -> hotbar swap above).
+		if from.kind == "bag" and type(from.bagSlot) == "number" then
+			if from.bagSlot == targetSlot then
+				return
+			end
+			DungeonMenuNet.requestInventoryAct({ kind = "SwapBagSlot", a = from.bagSlot, b = targetSlot })
+			return
+		end
+		DungeonMenuNet.requestInventoryAct({ kind = "SetBagSlot", slot = targetSlot, uuid = uuid })
 		return
-	end
-
-	if targetKind == "bag" then
-		if from.kind == "equip" and type(from.slot) == "string" then
-			DungeonMenuNet.requestUnequip(from.slot)
-		elseif from.kind == "hotbar" and type(from.hotbarIndex) == "number" then
-			if from.hotbarIndex == InventoryHotbarRules.WEAPON_SLOT then
-				DungeonMenuNet.requestUnequip("Weapon")
-			else
-				DungeonMenuNet.requestInventoryAct({ kind = "SetHotbar", slot = from.hotbarIndex, uuid = nil })
-			end
-		end
 	end
 end
 
@@ -253,110 +173,357 @@ function InventoryDragController.install(refs, getSnapshot)
 	state.getSnapshot = getSnapshot
 end
 
+-- ── Hover + number-key hotbar assign/swap (Minecraft-style) ────────────────────────────
+-- Reuses the exact MouseEnter/MouseLeave enumeration DungeonMenuUI already builds for
+-- tooltips (it calls setHoveredBag/setHoveredHotbar from those same callbacks) instead of
+-- standing up a second hover-tracking system.
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local hover = { kind = nil, bagUuid = nil, bagSlot = nil, hotbarIndex = nil, equipSlot = nil }
+
+-- `uuid` may be nil (an empty bag slot is still a valid hover target -- it's a valid
+-- click-to-place / drag-release destination, just not a pickup source).
+function InventoryDragController.setHoveredBag(uuid, bagSlot)
+	hover.kind = "bag"
+	hover.bagUuid = uuid
+	hover.bagSlot = bagSlot
+	hover.hotbarIndex = nil
+end
+
+function InventoryDragController.clearHoveredBag(bagSlot)
+	if hover.kind == "bag" and hover.bagSlot == bagSlot then
+		hover.kind = nil
+		hover.bagUuid = nil
+		hover.bagSlot = nil
+	end
+end
+
+function InventoryDragController.setHoveredHotbar(slotIndex)
+	hover.kind = "hotbar"
+	hover.hotbarIndex = slotIndex
+	hover.bagUuid = nil
+end
+
+function InventoryDragController.clearHoveredHotbar(slotIndex)
+	if hover.kind == "hotbar" and hover.hotbarIndex == slotIndex then
+		hover.kind = nil
+		hover.hotbarIndex = nil
+	end
+end
+
+function InventoryDragController.setHoveredEquip(slotName)
+	hover.kind = "equip"
+	hover.equipSlot = slotName
+	hover.bagUuid = nil
+	hover.hotbarIndex = nil
+end
+
+function InventoryDragController.clearHoveredEquip(slotName)
+	if hover.kind == "equip" and hover.equipSlot == slotName then
+		hover.kind = nil
+		hover.equipSlot = nil
+	end
+end
+
+local function isMenuOpen()
+	local g = playerGui:FindFirstChild("SkillsPopupUI", true)
+	return g and g:IsA("ScreenGui") and g.Enabled
+end
+
+local KEY_TO_SLOT = Keys.HotbarSlot
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then
+		return
+	end
+	local targetSlot = KEY_TO_SLOT[input.KeyCode]
+	if not targetSlot then
+		return
+	end
+	if not isMenuOpen() then
+		return
+	end
+	if hover.kind == "bag" and type(hover.bagUuid) == "string" and hover.bagUuid ~= "" then
+		local snap = state.getSnapshot and state.getSnapshot()
+		local profile = snap and snap.profile
+		if not profile then
+			return
+		end
+		local it = getItemFromProfile(profile, hover.bagUuid)
+		performAssignToHotbar(hover.bagUuid, targetSlot, it)
+	elseif hover.kind == "hotbar" and type(hover.hotbarIndex) == "number" then
+		performHotbarToHotbarSwap(hover.hotbarIndex, targetSlot)
+	end
+end)
+
 function InventoryDragController.bindStaticSources(refs)
 	for slot, btn in pairs(refs.equipButtons or {}) do
 		InventoryDragController.hookSource("equip", btn, { equipSlot = slot })
 	end
-	for i = 1, 9 do
-		local b = refs.hotbarButtons and refs.hotbarButtons[i]
-		if b then
-			InventoryDragController.hookSource("hotbar", b, { hotbarIndex = i })
+	local row = refs.hotbarRow
+	if row then
+		for _, child in ipairs(row:GetChildren()) do
+			if child:IsA("GuiButton") then
+				local slot = resolveHotbarSlotIndex(child, nil)
+				if slot then
+					child:SetAttribute("HotbarSlot", slot)
+					if refs.hotbarButtons then
+						refs.hotbarButtons[slot] = child
+					end
+					if not child:GetAttribute("_InvDragHooked") then
+						InventoryDragController.hookSource("hotbar", child, {})
+					end
+				end
+			end
 		end
 	end
 end
+
+-- ── Shared slot-identity resolution (used by both the click and hold-drag gestures) ──────
+
+-- Reads the static identity of a hooked button: which hotbar slot / bag slot it is.
+-- Bag buttons are rebuilt every redraw, so this always reads live attributes rather than
+-- anything captured at hook time.
+local function resolveSlotIdentity(kind, guiObject)
+	local hotbarIndex, bagSlot, bagUuid
+	if kind == "hotbar" then
+		hotbarIndex = resolveHotbarSlotIndex(guiObject, nil)
+	elseif kind == "bag" then
+		bagSlot = tonumber(guiObject:GetAttribute("BagSlot"))
+		local bu = guiObject:GetAttribute("BagUUID")
+		bagUuid = (type(bu) == "string" and bu ~= "") and bu or nil
+	end
+	return hotbarIndex, bagSlot, bagUuid
+end
+
+-- Resolves the uuid currently occupying a slot, given the profile snapshot.
+local function resolveItemUuidAt(profile, kind, srcSlot, hotbarIndex, bagUuid)
+	if kind == "bag" then
+		return bagUuid
+	elseif kind == "hotbar" then
+		return hotbarSlotUuid(profile.hotbar, hotbarIndex)
+	elseif kind == "equip" then
+		local u = profile.equipped and profile.equipped[srcSlot]
+		return (type(u) == "string" and u ~= "") and u or nil
+	end
+	return nil
+end
+
+-- ── Click-to-pick-up / click-to-place state machine ────────────────────────────────────
+
+local held = nil -- { kind, uuid, slot (equip name), hotbarIndex, bagSlot }
+
+local function clearHeld()
+	held = nil
+	destroyGhost()
+end
+
+local function sameSlot(a, b)
+	if a.kind ~= b.kind then
+		return false
+	end
+	if a.kind == "hotbar" then
+		return a.hotbarIndex == b.hotbarIndex
+	end
+	if a.kind == "bag" then
+		return a.bagSlot == b.bagSlot
+	end
+	if a.kind == "equip" then
+		return a.slot == b.slot
+	end
+	return false
+end
+
+local function showGhost()
+	destroyGhost()
+	local lp = Players.LocalPlayer
+	local pg = lp and lp:FindFirstChildOfClass("PlayerGui")
+	if not pg or not held then
+		return
+	end
+	local snap = state.getSnapshot and state.getSnapshot()
+	local prof = snap and snap.profile
+	local it = prof and held.uuid and prof.inventory and prof.inventory[held.uuid]
+	local sg = Instance.new("ScreenGui")
+	sg.Name = "InventoryDragGhost"
+	sg.DisplayOrder = 1000
+	sg.ResetOnSpawn = false
+	sg.IgnoreGuiInset = true
+	local f = Instance.new("Frame")
+	f.Size = UDim2.fromOffset(56, 56)
+	f.AnchorPoint = Vector2.new(0.5, 0.5)
+	f.BackgroundColor3 = Color3.fromRGB(40, 34, 34)
+	f.BorderSizePixel = 0
+	Instance.new("UICorner", f).CornerRadius = UDim.new(0, 8)
+	local t = Instance.new("TextLabel", f)
+	t.BackgroundTransparency = 1
+	t.Size = UDim2.new(1, -4, 1, -4)
+	t.Font = Enum.Font.GothamMedium
+	t.TextSize = 9
+	t.TextWrapped = true
+	t.TextColor3 = Color3.new(1, 1, 1)
+	t.Text = it and (it.name or it.itemId or "") or "?"
+	local m = UserInputService:GetMouseLocation()
+	f.Position = UDim2.fromOffset(m.X, m.Y)
+	f.Parent = sg
+	sg.Parent = pg
+	state.ghost = sg
+end
+
+-- ── Hold-and-drag gesture ──────────────────────────────────────────────────────
+-- A press that crosses DRAG_THRESHOLD before release adopts `held`/the ghost (the same
+-- state the click gesture uses) so both gestures share one visual + one performDrop call.
+-- A press that DOESN'T cross the threshold is left alone here -- it falls through to the
+-- source button's own MouseButton1Click (the plain click-to-pick-up/place handler below).
+
+local dragSession = nil -- { kind, uuid, slot, hotbarIndex, bagSlot, startPos, dragging }
+
+local function clearDragSession()
+	dragSession = nil
+end
+
+-- Ghost follows the cursor continuously while something is held, whether it got there via
+-- a discrete click or a drag that just crossed the threshold.
+UserInputService.InputChanged:Connect(function(input)
+	if input.UserInputType ~= Enum.UserInputType.MouseMovement then
+		return
+	end
+	if dragSession and not dragSession.dragging then
+		local now = UserInputService:GetMouseLocation()
+		local start = dragSession.startPos
+		if (Vector2.new(now.X, now.Y) - Vector2.new(start.X, start.Y)).Magnitude >= DRAG_THRESHOLD then
+			dragSession.dragging = true
+			-- A fresh drag-out always takes over from whatever was previously held by a
+			-- discrete click -- only one item can be "in hand" at a time.
+			held = {
+				kind = dragSession.kind, uuid = dragSession.uuid, slot = dragSession.slot,
+				hotbarIndex = dragSession.hotbarIndex, bagSlot = dragSession.bagSlot,
+			}
+			showGhost()
+		end
+	end
+	if not held or not state.ghost then
+		return
+	end
+	local fr = state.ghost:FindFirstChildWhichIsA("Frame")
+	if fr then
+		local m = UserInputService:GetMouseLocation()
+		fr.Position = UDim2.fromOffset(m.X, m.Y)
+	end
+end)
+
+-- Drag-release target resolution reuses the SAME hover state the number-key feature reads,
+-- rather than re-deriving "what's under the cursor" via manual AbsolutePosition math: Roblox's
+-- own GuiButton MouseEnter/Leave already handles coordinate-space/scaling correctly, so this
+-- is more robust than a second, hand-rolled hit-test (which is what used to live here, via
+-- dropTargetAt/pointInGui -- removed because it could silently miss the release target).
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType ~= Enum.UserInputType.MouseButton1 then
+		return
+	end
+	local session = dragSession
+	dragSession = nil
+	if not session or not session.dragging then
+		-- Never crossed the threshold: this was a plain click, already handled (or about to
+		-- be handled) by the source button's own MouseButton1Click.
+		return
+	end
+	if held and hover.kind then
+		local targetSlot
+		if hover.kind == "hotbar" then
+			targetSlot = hover.hotbarIndex
+		elseif hover.kind == "bag" then
+			targetSlot = hover.bagSlot
+		elseif hover.kind == "equip" then
+			targetSlot = hover.equipSlot
+		end
+		if targetSlot ~= nil then
+			performDrop(held, hover.kind, targetSlot)
+		end
+	end
+	clearHeld()
+end)
+
+-- Clear any held/in-progress drag if the menu closes mid-gesture (nothing was mutated
+-- server-side during pickup, so this is just dropping client-only state -- no item is lost).
+task.spawn(function()
+	local popup
+	repeat
+		popup = playerGui:FindFirstChild("SkillsPopupUI", true)
+		if not popup then task.wait(0.5) end
+	until popup
+	popup:GetPropertyChangedSignal("Enabled"):Connect(function()
+		if not popup.Enabled then
+			clearHeld()
+			clearDragSession()
+		end
+	end)
+end)
 
 function InventoryDragController.hookSource(kind, guiObject, payload)
 	if not guiObject or not guiObject:IsA("GuiButton") then
 		return
 	end
+	if guiObject:GetAttribute("_InvDragHooked") then
+		return
+	end
+	guiObject:SetAttribute("_InvDragHooked", true)
+	local srcSlot = payload and payload.equipSlot
+
+	-- Drag-start: only arms a dragSession if the slot is occupied (nothing to drag out of
+	-- an empty slot). Whether this turns into an actual drag is decided by the global
+	-- InputChanged threshold check above.
 	guiObject.MouseButton1Down:Connect(function()
-		local start = UserInputService:GetMouseLocation()
-		state.active = {
-			kind = kind,
-			uuid = payload and payload.uuid,
-			slot = payload and payload.equipSlot,
-			hotbarIndex = payload and payload.hotbarIndex,
-			start = start,
-			moved = false,
+		local hotbarIndex, bagSlot, bagUuid = resolveSlotIdentity(kind, guiObject)
+		local snap = state.getSnapshot and state.getSnapshot()
+		local profile = snap and snap.profile
+		if not profile then return end
+		local uuid = resolveItemUuidAt(profile, kind, srcSlot, hotbarIndex, bagUuid)
+		if type(uuid) ~= "string" or uuid == "" then return end
+		dragSession = {
+			kind = kind, uuid = uuid, slot = srcSlot, hotbarIndex = hotbarIndex, bagSlot = bagSlot,
+			startPos = UserInputService:GetMouseLocation(), dragging = false,
 		}
-		clearDragConns()
-		state.connMove = UserInputService.InputChanged:Connect(function(input)
-			if input.UserInputType ~= Enum.UserInputType.MouseMovement then
-				return
-			end
-			local a = state.active
-			if not a then
-				return
-			end
-			local now = UserInputService:GetMouseLocation()
-			if (Vector2.new(now.X, now.Y) - Vector2.new(a.start.X, a.start.Y)).Magnitude >= DRAG_THRESHOLD then
-				a.moved = true
-				if not state.ghost then
-					local lp = Players.LocalPlayer
-					local pg = lp and lp:FindFirstChildOfClass("PlayerGui")
-					if not pg then
-						return
-					end
-					local snap = state.getSnapshot and state.getSnapshot()
-					local prof = snap and snap.profile
-					local uuid = resolveUuidFrom(prof or {}, a)
-					local it = prof and uuid and prof.inventory and prof.inventory[uuid]
-					local sg = Instance.new("ScreenGui")
-					sg.Name = "InventoryDragGhost"
-					sg.DisplayOrder = 1000
-					sg.ResetOnSpawn = false
-					sg.IgnoreGuiInset = true
-					local f = Instance.new("Frame")
-					f.Size = UDim2.fromOffset(56, 56)
-					f.AnchorPoint = Vector2.new(0.5, 0.5)
-					f.BackgroundColor3 = Color3.fromRGB(40, 34, 34)
-					f.BorderSizePixel = 0
-					Instance.new("UICorner", f).CornerRadius = UDim.new(0, 8)
-					local t = Instance.new("TextLabel", f)
-					t.BackgroundTransparency = 1
-					t.Size = UDim2.new(1, -4, 1, -4)
-					t.Font = Enum.Font.GothamMedium
-					t.TextSize = 9
-					t.TextWrapped = true
-					t.TextColor3 = Color3.new(1, 1, 1)
-					t.Text = it and (it.name or it.itemId or "") or "?"
-					f.Parent = sg
-					sg.Parent = pg
-					state.ghost = sg
-				end
-			end
-			if state.ghost then
-				local fr = state.ghost:FindFirstChildWhichIsA("Frame")
-				if fr then
-					local m = UserInputService:GetMouseLocation()
-					fr.Position = UDim2.fromOffset(m.X, m.Y)
-				end
-			end
-		end)
-		state.connUp = UserInputService.InputEnded:Connect(function(input, _gp)
-			if input.UserInputType ~= Enum.UserInputType.MouseButton1 then
-				return
-			end
-			local a = state.active
-			if not a then
-				finishDrag()
-				return
-			end
-			-- Consume the drag session before dispatch so a duplicate InputEnded cannot performDrop twice.
-			state.active = nil
-			clearDragConns()
-			local now = UserInputService:GetMouseLocation()
-			local dist = (Vector2.new(now.X, now.Y) - Vector2.new(a.start.X, a.start.Y)).Magnitude
-			if not a.moved and dist < DRAG_THRESHOLD then
-				-- Click-only equip from bag removed: use drag to hotbar (1-9). Legacy equipped.* slots are not assigned from a plain left click.
-			else
-				local tk, ts = dropTargetAt(now.X, now.Y)
-				if tk then
-					performDrop(a, tk, ts)
-				end
-			end
-			destroyGhost()
-		end)
+	end)
+
+	guiObject.MouseButton1Click:Connect(function()
+		local hotbarIndex, bagSlot, bagUuid = resolveSlotIdentity(kind, guiObject)
+
+		local snap = state.getSnapshot and state.getSnapshot()
+		local profile = snap and snap.profile
+		if not profile then return end
+
+		local here = { kind = kind, uuid = bagUuid, slot = srcSlot, hotbarIndex = hotbarIndex, bagSlot = bagSlot }
+
+		if not held then
+			-- Nothing held yet (and no drag just happened -- the threshold-crossing branch
+			-- already populates `held` itself, see InputChanged above): only pick up if this
+			-- slot is actually occupied.
+			local uuid = resolveItemUuidAt(profile, kind, srcSlot, hotbarIndex, bagUuid)
+			if type(uuid) ~= "string" or uuid == "" then return end
+			here.uuid = uuid
+			held = here
+			showGhost()
+			return
+		end
+
+		-- Something already held: clicking its own source slot again cancels the pickup.
+		if sameSlot(held, here) then
+			clearHeld()
+			return
+		end
+
+		local targetSlot = hotbarIndex or bagSlot or srcSlot
+		performDrop(held, kind, targetSlot)
+		clearHeld()
+	end)
+
+	guiObject.MouseButton2Click:Connect(function()
+		if held then
+			clearHeld()
+		end
 	end)
 end
 

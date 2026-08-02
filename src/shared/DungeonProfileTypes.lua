@@ -37,6 +37,9 @@ DungeonProfileTypes.CHEST_SLOT_COUNT = DungeonProfileTypes.CHEST_GRID_COLUMNS * 
 -- Back-compat alias: one chest row width in slots (same as column count).
 DungeonProfileTypes.CHEST_PLAYER_ACCESSIBLE_COUNT = DungeonProfileTypes.CHEST_GRID_COLUMNS
 DungeonProfileTypes.CHEST_ROW_UNLOCK_COIN_COST = 1
+-- Bag: flat 27-slot array (3 rows x 9), matching DungeonMenuUI's BAG_SLOTS grid. Positional
+-- index into profile.inventory, exactly like hotbar[i] -- the dict itself is unchanged.
+DungeonProfileTypes.BAG_SLOT_COUNT = 27
 
 function DungeonProfileTypes.DefaultProfile()
 	return {
@@ -113,7 +116,14 @@ function DungeonProfileTypes.DefaultProfile()
 		},
 		inventory = {},
 		equipped = {},
-		hotbar = { nil, nil, nil, nil, nil, nil, nil, nil, nil },
+		hotbar = {}, -- sparse; slots 1-9 filled by ensureHotbar/Reconcile
+		bagSlots = (function()
+			local t = {}
+			for i = 1, DungeonProfileTypes.BAG_SLOT_COUNT do
+				t[i] = nil
+			end
+			return t
+		end)(),
 
 		hearthstone = {
 			active        = "cyren",  -- id of the currently bound location
@@ -265,6 +275,20 @@ function DungeonProfileTypes.GetRarityTierIndex(rarity)
 	return order[rarity] or 1
 end
 
+
+function DungeonProfileTypes.GetNextRarity(rarity)
+	local order = { "Common", "Uncommon", "Rare", "Epic", "Legendary" }
+	if type(rarity) ~= "string" then
+		return nil
+	end
+	for i, r in ipairs(order) do
+		if r == rarity and i < #order then
+			return order[i + 1]
+		end
+	end
+	return nil
+end
+
 function DungeonProfileTypes.ValidateOwnedItem(item)
 	if type(item) ~= "table" then
 		return false, "bad_item"
@@ -295,8 +319,30 @@ function DungeonProfileTypes.ValidateOwnedItem(item)
 	return true, nil
 end
 
+function DungeonProfileTypes.HotbarSlotUuid(hotbar, i)
+	if type(hotbar) ~= "table" then
+		return nil
+	end
+	i = math.floor(tonumber(i) or -1)
+	if i < 1 or i > 9 then
+		return nil
+	end
+	local v = hotbar[i]
+	if type(v) == "string" and v ~= "" then
+		return v
+	end
+	v = hotbar[tostring(i)]
+	if type(v) == "string" and v ~= "" then
+		return v
+	end
+	return nil
+end
+
 local function fillMissing(dst, defaults)
 	for k, v in pairs(defaults) do
+		if v == nil then
+			continue
+		end
 		if dst[k] == nil then
 			dst[k] = v
 		elseif type(v) == "table" and type(dst[k]) == "table" then
@@ -345,14 +391,32 @@ function DungeonProfileTypes.Reconcile(loaded)
 		loaded.equipped = {}
 	end
 	if type(loaded.hotbar) ~= "table" then
-		loaded.hotbar = { nil, nil, nil, nil, nil, nil, nil, nil, nil }
+		loaded.hotbar = {}
 	else
 		local hb = {}
 		for i = 1, 9 do
-			hb[i] = loaded.hotbar[i]
+			hb[i] = DungeonProfileTypes.HotbarSlotUuid(loaded.hotbar, i)
 		end
 		loaded.hotbar = hb
 	end
+	if type(loaded.bagSlots) ~= "table" then
+		local d = {}
+		for i = 1, DungeonProfileTypes.BAG_SLOT_COUNT do
+			d[i] = nil
+		end
+		loaded.bagSlots = d
+	else
+		local bs = {}
+		for i = 1, DungeonProfileTypes.BAG_SLOT_COUNT do
+			local v = loaded.bagSlots[i]
+			if v == nil then
+				v = loaded.bagSlots[tostring(i)]
+			end
+			bs[i] = v
+		end
+		loaded.bagSlots = bs
+	end
+
 	if type(loaded.chestInventory) ~= "table" then
 		loaded.chestInventory = {}
 	end

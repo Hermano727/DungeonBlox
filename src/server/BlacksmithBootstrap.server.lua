@@ -11,16 +11,21 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local NPCRegistry = require(ReplicatedStorage:WaitForChild("NPCRegistry"))
 
-local NPC_ID   = "blacksmith_01"
-local NPC_TYPE = "Blacksmith"
-local NPC_NAME = "Blacksmith"
+local NPC_ID_BASE = "blacksmith_01"
+local NPC_TYPE    = "Blacksmith"
+local NPC_NAME    = "Blacksmith"
 
-local function findModel()
-	local direct = workspace:FindFirstChild("Blacksmith")
-	if direct and direct:IsA("Model") then return direct end
-	local deep = workspace:FindFirstChild("Blacksmith", true)
-	if deep and deep:IsA("Model") then return deep end
-	return nil
+-- Wires every Model named "Blacksmith" anywhere in Workspace, not just the first one found.
+-- Sorted by full path so id assignment (blacksmith_01, blacksmith_02, ...) stays stable across restarts.
+local function findAllModels()
+	local found = {}
+	for _, inst in ipairs(workspace:GetDescendants()) do
+		if inst.Name == "Blacksmith" and inst:IsA("Model") then
+			table.insert(found, inst)
+		end
+	end
+	table.sort(found, function(a, b) return a:GetFullName() < b:GetFullName() end)
+	return found
 end
 
 local function ensureHeadGui(head, displayName)
@@ -105,10 +110,10 @@ local function setupProximity(root)
 	end
 end
 
-local function bootstrap(model)
+local function bootstrap(model, npcId)
 	if not model or not model:IsA("Model") then return end
 
-	model:SetAttribute("NpcId",   NPC_ID)
+	model:SetAttribute("NpcId",   npcId)
 	model:SetAttribute("NpcType", NPC_TYPE)
 	model:SetAttribute("NpcName", NPC_NAME)
 	model:SetAttribute("MaxActivationDistance",
@@ -116,7 +121,7 @@ local function bootstrap(model)
 
 	local root = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Torso")
 	if not (root and root:IsA("BasePart")) then
-		warn("[BlacksmithBootstrap] missing HumanoidRootPart/Torso on Blacksmith")
+		warn("[BlacksmithBootstrap] missing HumanoidRootPart/Torso on", model:GetFullName())
 		return
 	end
 	model.PrimaryPart = root
@@ -136,18 +141,20 @@ local function bootstrap(model)
 		local ok, err = pcall(ensureHeadGui, head, NPC_NAME)
 		if not ok then warn("[BlacksmithBootstrap] Head.gui failed:", err) end
 	else
-		warn("[BlacksmithBootstrap] missing Head on Blacksmith")
+		warn("[BlacksmithBootstrap] missing Head on", model:GetFullName())
 	end
 end
 
 local function tryBootstrap()
-	local m = findModel()
-	if not m then return end
-	local ok, err = pcall(bootstrap, m)
-	if ok then
-		print("[BlacksmithBootstrap] wired:", m:GetFullName())
-	else
-		warn("[BlacksmithBootstrap] bootstrap failed:", err)
+	local models = findAllModels()
+	for i, m in ipairs(models) do
+		local npcId = (i == 1) and NPC_ID_BASE or string.format("blacksmith_%02d", i)
+		local ok, err = pcall(bootstrap, m, npcId)
+		if ok then
+			print("[BlacksmithBootstrap] wired:", m:GetFullName(), "as", npcId)
+		else
+			warn("[BlacksmithBootstrap] bootstrap failed:", err)
+		end
 	end
 end
 
