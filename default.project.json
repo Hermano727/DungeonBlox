@@ -17,9 +17,6 @@
       },
       "$path": "src/server"
     },
-    "StarterPack": {
-      "$path": "src/starterpack"
-    },
     "StarterPlayer": {
       "StarterCharacterScripts": {
         "$path": "src/characterscripts"
