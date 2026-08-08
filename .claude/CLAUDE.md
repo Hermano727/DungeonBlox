@@ -114,7 +114,7 @@ NpcId convention: tutorial copy = `<type>_tutorial`, else first match = canonica
 
 Swap swing anim: edit `CombatAnimConfig.SWING_ANIM_ID` only. Must be R15-native or R6 (auto-converts); failed R15 delivery = silent no-op (no console error). `DEBUG=true` logs rig/anim/track per swing.
 
-Gotchas: never restore `SwingAnimId` tool attribute (reverts on play-stop, becomes stale). `CombatClient.InitAnimator` must try `FindFirstChildOfClass("Animator")` then `WaitForChild` fallback — never `FindFirstChildOfClass` alone (races Roblox's async `Animate` script, creates a phantom 2nd Animator that doesn't drive the character). Player chars are R15 (Game Settings->Avatar, not the toolbar Avatar tab); NPC/mob rigs are R6, separate.
+Gotchas: never restore `SwingAnimId` tool attribute (reverts on play-stop, becomes stale). `CombatClient.InitAnimator` must try `FindFirstChildOfClass("Animator")` then `WaitForChild` fallback — never `FindFirstChildOfClass` alone (races Roblox's async `Animate` script, creates a phantom 2nd Animator that doesn't drive the character). Player chars are R15 (Game Settings->Avatar, not the toolbar Avatar tab). **NPC rigs are R15 as of 2026-08** — the Avatar Type setting governs players only; NPCs are ordinary Models and may use any rig. Legacy toolbox NPCs are still R6; existing R6 animations auto-convert onto R15 (approximate, not broken). Bulk-spawned mobs are an open question — R15 is 15 parts/14 Motor6Ds vs 6/5, so measure before converting `SpawnerService` mobs.
 
 ## Networking (ReplicatedStorage)
 | Name | Type | Dir | Purpose |
@@ -191,9 +191,138 @@ Hard-won rules. Each exists because of a specific silent failure.
 ### Weapon authoring convention
 Author in Blender with **origin at the grip point** and **blade along +Z** (becomes +Y in Roblox after FBX axis conversion, matching the classic sword Handle convention). Scale in studs (a one-handed sword is ~3.5; the player character is 5.82).
 
-Roblox welds Tools by `Handle.CFrame` — the bounding-box centre — and **ignores `PivotOffset`**. So `Tool.Grip` must compensate: `CFrame.new(0, GripDrop, 0)` where `GripDrop` is the negative Y distance from bbox centre to grip. Store it in the mesh registry. Weapons authored this way need no hand-tuned Grip rotation — contrast `Low_tier_sword`, whose Grip is unrepeatable magic numbers from dragging in Studio.
+Roblox welds Tools by `Handle.CFrame` — the bounding-box centre — and **ignores `PivotOffset`**. So `Tool.Grip` must compensate: `CFrame.new(0, GripDrop, 0)` where `GripDrop` is the negative Y distance from bbox centre to grip. Store it in the mesh registry. Origin-at-grip authoring makes the *translation* repeatable (`GripDrop` from the mesh registry), but **rotation still needs per-weapon tuning** — the hand attachment carries its own orientation. `TrainingSword` landed at:
+
+```lua
+tool.Grip = CFrame.new(0, -1.295, 0)
+    * CFrame.Angles(math.rad(20), 0, math.rad(25))
+    * CFrame.Angles(0, math.rad(-15), 0)
+```
+
+Grip rotation axes, blade along the Handle's +Y:
+
+| Axis | Effect |
+|---|---|
+| X | pitch — swings the tip fore/aft |
+| Y | roll — spins the handle about the blade; tip does not move |
+| Z | yaw — sweeps the tip around the wrist axis |
+
+Multiply roll (Y) on the **right** so it turns about the blade's own local axis, or it drifts whenever X or Z change. Do **not** tune Grip against `StarterCharacter`'s rest pose — the arm hangs down there but is raised in most animations, so world-space angles mislead. Tune live in Play. Contrast `Low_tier_sword`, whose Grip is unrepeatable magic numbers from dragging in Studio.
 
 ### R15 character pipeline
 Full workflow lives in the `tripo-to-roblox-r15` skill. The two that bite hardest:
 - The armature object's **90 deg X rotation must stay UNAPPLIED**. Freezing it silently prevents Roblox from ever offering R15 as a Rig Type.
 - The **rest pose must match Roblox's** (arms angled down, not T-pose). Stock animations store rotations relative to rest, so a T-posed rig plays every animation ~50 deg off.
+
+---
+
+## Zone-based UI theming (design goal, not yet built)
+
+**The UI should re-theme itself by zone.** Same layout, same components, different palette — the inventory in a T1 area should not look like the inventory in a T5 area. Tier identity is carried by colour and material feel, not by different screens.
+
+Palette direction per tier follows the gear fiction:
+
+| Tier | Level | Gear fiction | Palette direction |
+|---|---|---|---|
+| T1 | 1 | leather / wooden | **nature: browns + greens**, warm, muted, organic |
+| T2 | 21 | — | TBD |
+| T3 | 41 | — | TBD |
+| T4 | 61 | — | TBD |
+| T5 | 81 | — | TBD |
+
+T1 is the reference implementation: earthy brown base, green accents, leather-and-timber feel. Grim-stylized, consistent with the existing tone — muted and slightly desaturated, not a bright fantasy palette.
+
+**Architecture when this gets built:**
+
+- One registry module, `RS/Assets/Themes/ZoneThemes`, same pattern as the icon/mesh registries. Keys `T1`..`T5`. Never inline `Color3.fromRGB(...)` in UI code.
+- Theme is selected by **zone**, and zone already has a home — `SSS/ZoneService` + `StarterPlayerScripts/ZoneClient`. Theme lookup keys off the zone the player is in, so no new state system is needed.
+- A theme is a flat table of *semantic* names (`PanelBg`, `SlotBg`, `SlotBorder`, `TextPrimary`, `TextMuted`, `AccentPositive`, `RarityCommon`...). Never geometry or layout — theming must not be able to move things.
+- Rarity colours stay **global**, not per-theme. A purple Elite drop must read as Elite in every zone.
+- Transitions between zones should tween the palette, not hard-cut, or the swap will read as a bug.
+
+**Do this after the React migration, not before.** In the current imperative UI every colour is set at `Instance.new` time across 44 client scripts, so re-theming means hunting every mutation site. In React the theme is a context provider and a zone change re-renders the tree — it is the single strongest practical argument for finishing the React port first.
+
+---
+
+## Version control / Rojo pipeline
+
+**Repo:** `~/Desktop/DungeonBlox`. Rojo project already set up — this is not a fresh bootstrap.
+
+**`src/` is the only source layout.** `default.project.json` maps:
+
+```
+src/shared           -> ReplicatedStorage
+src/server           -> ServerScriptService
+src/client           -> StarterPlayer.StarterPlayerScripts
+src/characterscripts -> StarterPlayer.StarterCharacterScripts
+src/starterpack      -> StarterPack
+```
+
+A duplicate `roblox/` tree (older dump of the same scripts) was deleted 2026-08. If it reappears, it is stale — do not read from it.
+
+**Toolchain is Rokit, not Aftman.** `rokit.toml` is the source of truth; Aftman is unmaintained (its author left the Roblox ecosystem). Rojo must be **>= 7.7.0 final** — syncback shipped there, and 7.7.0-rc.1 predates several syncback fixes.
+
+**Direction of truth:**
+
+- Disk owns **scripts and data** (`src/`).
+- Studio owns **geometry, terrain, instance trees** — Workspace, Lighting, StarterGui, ServerStorage, StarterPack tools. These are in `syncbackRules.ignoreTrees`.
+
+**Syncback before serve when disk is stale.** `rojo serve` pushes disk -> Studio and will happily overwrite newer Studio work. To pull Studio -> disk: `rojo syncback . --input place.rbxl`. Syncback only writes instances referenced in the project tree, so if something is missing from disk, the fix is usually the project file, not the command.
+
+**Never re-add these to the project tree** (template leftovers; Rojo *creates* them in the live game on connect):
+
+- a `Baseplate` Part under Workspace
+- `Lighting` `$properties` (the template sets `Technology: "Voxel"`, which downgrades lighting)
+- empty `$className: "Tool"` declarations in StarterPack (`Mace`, `Low_tier_sword`, `Wood Sword`, `Building Tools`)
+
+**UI framework target:** React-lua (`jsdotlua/react` + `react-roblox` @17.0.1) via Wally. Roact is deprecated. Migration is strangler-fig — one panel per commit, React and imperative UI coexist. Never let both React and imperative code own the same instance.
+
+### Rojo gotchas
+
+**Never have `X.lua` and a folder `X/` in the same directory.** Both map to the same instance and syncback hard-errors:
+
+```
+Instances that are direct children of an Instance that is made by a
+project file must have a unique name.
+The child 'WeaponData' of 'ReplicatedStorage' is duplicated on the file system.
+```
+
+A ModuleScript **with children** is a folder containing `init.lua`; a ModuleScript **without children** is a bare `.lua` file. Never both. Hit 2026-08 with `src/shared/WeaponData.lua` + `src/shared/WeaponData/` — the folder was a leftover from before `WeaponData.Weapons` became the single authority.
+
+**Deleting the files is not enough** — git doesn't track empty directories, but Rojo reads the filesystem, so an emptied folder still collides. Remove the directory itself.
+
+---
+
+## NPC rigs: R15, not R6
+
+Line 117 says *"NPC/mob rigs are R6, separate."* That recorded inherited toolbox models, not a rule. **The Avatar Type game setting governs player characters only** — NPCs are ordinary Models and can use any rig.
+
+As of 2026-08 new NPCs are built **R15**, same pipeline as the player character. A Tripo mesh gets segmented into 15 parts regardless, so forcing it back down to 6 throws away joints for nothing. Existing R6 NPC animations still play — Roblox auto-converts R6 onto R15 rigs (approximate, but not broken).
+
+Open question: **bulk-spawned mobs**. R15 is 15 parts and 14 Motor6Ds vs 6 and 5. Irrelevant for a dozen town NPCs, potentially significant for `SpawnerService` radius spawners at high counts. Measure before committing mobs to R15; named/interactive NPCs are R15 unconditionally.
+
+## Tripo generation settings (established 2026-08)
+
+- **Generate at ~20k**, then **Retopo to your final target** — do NOT generate high and decimate. Retopo rebuilds clean surface flow; Decimate collapses edges and leaves whatever falls out. Doing both destroys what retopo produced.
+- Target triangles by class: named NPC **8k–15k**, common mob **3k–6k**, boss **15k–25k**, prop/weapon **500–3k**.
+- Watch units: if the retopo field is in **faces/quads**, halve the triangle number.
+- **Texture 2K** in Tripo (exports at 1024, which is Roblox's mesh cap anyway).
+- **Skip Tripo's Segment** — it is the same failure mode as "generate in parts": independently generated topology per piece, boundaries that do not share vertices, unfixable seams.
+- **Skip Tripo's Animate** — produces a non-R15 rig you would only have to undo.
+- Generate the character with **empty open hands** and tools as separate props. AI generators sculpt a closed fist around a held object and you inherit a grip you cannot open.
+- Prompt for **A-pose, arms ~45 deg down**, not T-pose — closer to Roblox's R15 rest, so less pose-baking later.
+
+## Topology: quads are convenient, not required
+
+FBX export triangulates regardless of what retopo produced, and **Roblox triangulates everything on import** — the shipped result is identical either way. Do not run tris-to-quads to "fix" it.
+
+Quads only ever helped `Alt+Click` edge-loop select. The anti-seam property does **not** come from cutting along a neat loop — it comes from both halves being cut from *one mesh*, so boundary vertices are literally the same vertices. Any selection-based split preserves that.
+
+On triangulated meshes, cut with **planar bisect** at joint heights:
+
+```python
+bpy.ops.mesh.bisect(plane_co=(0, 0, JOINT_Z), plane_no=(0, 0, 1))
+# select one side, then mesh.separate(type='SELECTED')
+```
+
+Deterministic, scriptable across all 14 cuts, and a better match for R15 — Roblox joints pivot at fixed planes.
