@@ -408,13 +408,8 @@ function DungeonEquippedHotbar.syncFromProfile(player, profile)
 		spawned[uuid] = true
 	end
 
-	local hotbar = profile.hotbar
-	if type(hotbar) == "table" then
-		for i = 1, 9 do
-			trySpawn("HB" .. tostring(i), hotbarSlotUuid(hotbar, i))
-		end
-	end
-
+	-- No more freeform hotbar -- every spawnable Tool now comes from a fixed equip slot
+	-- (Helm/Chest/Legs/Boots/Shield armor + Weapon/Bow/Pickaxe/FishingSpear tools).
 	local equipped = profile.equipped
 	if type(equipped) == "table" then
 		for slot, uuid in pairs(equipped) do

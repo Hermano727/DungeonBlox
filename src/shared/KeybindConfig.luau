@@ -10,9 +10,8 @@
 --  Naming: PascalCase action names describing INTENT, not the key.
 --  "Dash" not "Q" - so rebinding is a one-line change here.
 --
---  KNOWN CONFLICT (2026-07): DevPlacer and HearthstoneDevMenu both listen
---  on F8. Both are admin-only tools so it has not surfaced in play, but
---  they will fire together. Reassign one when convenient.
+--  FIXED (2026-08): DevPlacer and HearthstoneDevMenu used to both listen on
+--  F8 and fire together. HearthstoneMenu moved to F7.
 
 local K = Enum.KeyCode
 
@@ -29,8 +28,9 @@ local Keybinds = {
 
 	-- Admin / dev tools
 	DevPlacer       = K.F8,
-	HearthstoneMenu = K.F8,       -- see KNOWN CONFLICT above
+	HearthstoneMenu = K.F7,
 	ItemGrantMenu   = K.F10,
+	UIDevTool = K.F6,  -- dev-gated (DevRoster) live-nudge tool for registered decorative UI art, see UIDevTuning (F9 is reserved by Studio's mic/voice panel)
 
 	-- DevPlacer sub-controls (only live while DevPlacer is open)
 	DevPlaceConfirm = K.Return,
@@ -38,18 +38,13 @@ local Keybinds = {
 	DevPlaceDelete  = K.Backspace,
 }
 
--- Hotbar slots 1-9. Defined once here; DungeonHotbarHud and
--- InventoryDragController previously each had their own copy.
-Keybinds.HotbarSlot = {
-	[K.One]   = 1,
-	[K.Two]   = 2,
-	[K.Three] = 3,
-	[K.Four]  = 4,
-	[K.Five]  = 5,
-	[K.Six]   = 6,
-	[K.Seven] = 7,
-	[K.Eight] = 8,
-	[K.Nine]  = 9,
+-- Tool-equip slots 1-4 (replaces the old freeform 9-slot hotbar): fixed mapping to the
+-- matching profile.equipped slot name. Pressing a key with nothing equipped there is a no-op.
+Keybinds.ToolSlot = {
+	[K.One]   = "Weapon",
+	[K.Two]   = "Bow",
+	[K.Three] = "Pickaxe",
+	[K.Four]  = "FishingSpear",
 }
 
 -- Dialogue option select. ORDERED array - DialogModule uses table.find()

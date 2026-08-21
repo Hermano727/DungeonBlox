@@ -493,25 +493,10 @@ placeItemInFirstEmptyBagSlot = function(profile, uuid)
 	-- de-facto bag-overflow behavior; not a regression).
 end
 
--- Hotbar-priority placement for newly-acquired items (grants, chest withdrawals): hotbar[1..9]
--- is filled first, then the bag, matching "fill the first empty slot" pickup behavior.
+-- First-empty-slot placement for newly-acquired items (grants, chest withdrawals). The
+-- hotbar is retired -- everything lands in the bag now (first empty slot, top-left to
+-- bottom-right); equipping is a separate, deliberate player action (drag/right-click).
 placeItemInFirstEmptySlot = function(profile, uuid)
-	if type(uuid) ~= "string" or uuid == "" then
-		return
-	end
-	local item = profile.inventory[uuid]
-	if type(item) ~= "table" then
-		return
-	end
-	if itemAllowsHotbar(item) then
-		ensureHotbar(profile)
-		for i = 1, 9 do
-			if hotbarSlotUuid(profile.hotbar, i) == nil then
-				profile.hotbar[i] = uuid
-				return
-			end
-		end
-	end
 	placeItemInFirstEmptyBagSlot(profile, uuid)
 end
 
@@ -1224,6 +1209,7 @@ end
 
 local function isValidEquipSlot(slot)
 	return slot == "Weapon"
+		or slot == "Bow"
 		or slot == "Armor"
 		or slot == "Helm"
 		or slot == "Chest"
@@ -1240,10 +1226,10 @@ end
 --[[
   Equip flow (exploit-safe):
     - Item UUID must exist in inventory (server-owned dictionary).
-    - Allowed slot derived from item type/tags/equipSlot hint.
-    - If target slot occupied, previous UUID is cleared (item remains in inventory).
-    - Weapons are never equip-panel items (Minecraft-style hotbar model): a weapon's only
-      "equipped" location is whichever hotbar slot it's placed in via SetHotbar/SwapHotbar.
+    - Allowed slot derived from item type/tags/equipSlot hint (Types.GetAllowedEquipSlot).
+    - If target slot occupied, previous UUID is cleared and returned to the first empty bag slot.
+    - 8 slots total: Helm/Chest/Legs/Boots/Shield (armor) + Weapon/Bow/Pickaxe/FishingSpear
+      (tools) -- no more freeform hotbar; a tool's only "equipped" location is this panel.
 ]]
 function DungeonProfileService.EquipItem(player, itemUuid, equipOpts)
 	local profile = DungeonProfileService.Load(player)
@@ -1260,9 +1246,6 @@ function DungeonProfileService.EquipItem(player, itemUuid, equipOpts)
 	local slot = Types.GetAllowedEquipSlot(item)
 	if not slot then
 		return false, "not_equippable"
-	end
-	if slot == "Weapon" then
-		return false, "weapon_not_equippable_panel"
 	end
 
 	if type(profile.equipped) == "table" and profile.equipped[slot] == itemUuid then

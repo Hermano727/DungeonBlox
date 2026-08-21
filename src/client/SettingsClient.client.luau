@@ -219,8 +219,11 @@ makeSlider("Music", 40, VolumeSettings.music, true, function(t)
 	end
 end)
 
-makeSlider("SFX", 40 + ROW_H, VolumeSettings.sfx, false, function(_t)
-	-- TODO: wire to SFX system
+local movementSfxGroup = SoundService:WaitForChild("Main"):WaitForChild("Character")
+
+makeSlider("SFX", 40 + ROW_H, VolumeSettings.sfx, true, function(t)
+	VolumeSettings.sfx = t
+	movementSfxGroup.Volume = t
 end)
 
 makeSlider("VFX", 40 + ROW_H * 2, VolumeSettings.vfx, false, function(_t)

@@ -44,6 +44,7 @@
 local MaterialIcons   = require(script.Parent.Assets.Icons.Materials.MaterialIcons)
 local KeyIcons        = require(script.Parent.Assets.Icons.Keys.KeyIcons)
 local ConsumableIcons = require(script.Parent.Assets.Icons.Consumables.ConsumableIcons)
+local ItemConfig      = require(script.Parent:WaitForChild("ItemConfig"))
 
 local Items = {
 
@@ -136,51 +137,54 @@ local Items = {
 	-- Regular (non-fish) food: TimeToEat > 0, no buffs by default.
 	Bread       = { Stackable = true, MaxStack = 100, Kind = "Food", Tier = 1, Rarity = "Common",   DisplayName = "Bread",       HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 40, TimeToEat = 2.0 },
 	CookedMeat  = { Stackable = true, MaxStack = 100, Kind = "Food", Tier = 1, Rarity = "Uncommon", DisplayName = "Cooked Meat", HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 60, TimeToEat = 3.0 },
-	WoodenPickaxe = { Stackable = false, MaxStack = 1, Kind = "Material", Tier = 1, Rarity = "Common", DisplayName = "Wooden Pickaxe", HotbarEquippable = true, ProtectedOnDeath = true, ToolPrefabName = "WoodenPickaxe" },
-	WoodenSpear   = { Stackable = false, MaxStack = 1, Kind = "Material", Tier = 1, Rarity = "Common", DisplayName = "Wooden Spear", HotbarEquippable = true, ProtectedOnDeath = true, ToolPrefabName = "WoodenSpear" },
+	WoodenPickaxe = { Icon = ItemConfig.TOOL_ICONS.Pickaxe, Stackable = false, MaxStack = 1, Kind = "Material", Tier = 1, Rarity = "Common", DisplayName = "Wooden Pickaxe", HotbarEquippable = true, ProtectedOnDeath = true, ToolPrefabName = "WoodenPickaxe" },
+	WoodenSpear   = { Icon = ItemConfig.TOOL_ICONS.FishingRod, Stackable = false, MaxStack = 1, Kind = "Material", Tier = 1, Rarity = "Common", DisplayName = "Wooden Fishing Rod", HotbarEquippable = true, ProtectedOnDeath = true, ToolPrefabName = "WoodenSpear" },
 
 	-- Weapons: each row maps to a WeaponData entry.
-	TrainingSword = { Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 1, Rarity = "Common", WeaponId = "TrainingSword", HotbarEquippable = true, ProtectedOnDeath = false, DisplayName = "Training Sword", ToolPrefabName = "TrainingSword" },
-	TrainingBow   = { Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 1, Rarity = "Common", WeaponId = "WoodenBow", HotbarEquippable = true, ProtectedOnDeath = false, DisplayName = "Training Bow" },
-	WoodenSword   = { Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 1, Rarity = "Common", WeaponId = "WoodenSword", HotbarEquippable = true, ProtectedOnDeath = false, ToolPrefabName = "Wood Sword" },
+	TrainingSword = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Sword, Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 1, Rarity = "Common", WeaponId = "TrainingSword", HotbarEquippable = true, ProtectedOnDeath = false, DisplayName = "Training Sword", ToolPrefabName = "TrainingSword" },
+	TrainingBow   = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Bow, Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 1, Rarity = "Common", WeaponId = "WoodenBow", HotbarEquippable = true, ProtectedOnDeath = false, DisplayName = "Training Bow" },
+	WoodenSword   = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Sword, Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 1, Rarity = "Common", WeaponId = "WoodenSword", HotbarEquippable = true, ProtectedOnDeath = false, DisplayName = "Wooden Sword", ToolPrefabName = "Wood Sword" },
 	Low_tier_sword = { Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 1, Rarity = "Common", WeaponId = "WoodenSword", HotbarEquippable = true, ProtectedOnDeath = false, DisplayName = "Low Tier Sword", ToolPrefabName = "Low_tier_sword" },
-	AdminSword    = { Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 99, Rarity = "Legendary", WeaponId = "AdminSword", HotbarEquippable = true, ProtectedOnDeath = false, DisplayName = "Admin Sword", ToolPrefabName = "Low_tier_sword" },
-	WoodenBow     = { Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 1, Rarity = "Common", WeaponId = "WoodenBow", HotbarEquippable = true, ProtectedOnDeath = false },
+	AdminSword    = { Icon = ItemConfig.ADMIN_SWORD_ICON, Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 99, Rarity = "Legendary", WeaponId = "AdminSword", HotbarEquippable = true, ProtectedOnDeath = false, DisplayName = "Admin Sword", ToolPrefabName = "Low_tier_sword" },
+	WoodenBow     = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Bow, Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 1, Rarity = "Common", WeaponId = "WoodenBow", HotbarEquippable = true, ProtectedOnDeath = false, DisplayName = "Wooden Bow" },
 
 	-- Starter / training armor (T1-tier catalog ids; rolled stats live on the item instance).
 	-- Untradeable = true: item cannot be listed on Auction House, salvaged, or dropped (see AuctionHouseService, TODO comments below).
-	TrainingHelm   = { Icon = "rbxassetid://71167376295923",  Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Helm",   Tier = 1, Rarity = "Common", Armor = 0, HotbarEquippable = false, ProtectedOnDeath = false, DisplayName = "Training Helm" },
-	TrainingChest  = { Icon = "rbxassetid://91334970387049",  Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Chest",  Tier = 1, Rarity = "Common", Armor = 0, HotbarEquippable = false, ProtectedOnDeath = false, DisplayName = "Training Chest" },
-	TrainingLegs   = { Icon = "rbxassetid://83129624279163",  Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Legs",   Tier = 1, Rarity = "Common", Armor = 0, HotbarEquippable = false, ProtectedOnDeath = false, DisplayName = "Training Legs" },
-	TrainingBoots  = { Icon = "rbxassetid://109900187251534", Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Boots",  Tier = 1, Rarity = "Common", Armor = 0, HotbarEquippable = false, ProtectedOnDeath = false, DisplayName = "Training Boots" },
-	TrainingShield = { Icon = "rbxassetid://106422620530635", Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Shield", Tier = 1, Rarity = "Common", Armor = 0, HotbarEquippable = false, ProtectedOnDeath = false, DisplayName = "Training Shield" },
+	-- Icons pulled from ItemConfig.GENERATED_ITEM_ICONS so training gear always matches the
+	-- same wooden/leather assets mob-dropped T1 gear uses (ItemDefinitions.GetIconForItem) --
+	-- one shared table, no drift.
+	TrainingHelm   = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Helm,   Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Helm",   Tier = 1, Rarity = "Common", Armor = 0, HotbarEquippable = false, ProtectedOnDeath = false, DisplayName = "Training Helmet" },
+	TrainingChest  = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Chest,  Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Chest",  Tier = 1, Rarity = "Common", Armor = 0, HotbarEquippable = false, ProtectedOnDeath = false, DisplayName = "Training Chestplate" },
+	TrainingLegs   = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Legs,   Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Legs",   Tier = 1, Rarity = "Common", Armor = 0, HotbarEquippable = false, ProtectedOnDeath = false, DisplayName = "Training Leggings" },
+	TrainingBoots  = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Boots,  Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Boots",  Tier = 1, Rarity = "Common", Armor = 0, HotbarEquippable = false, ProtectedOnDeath = false, DisplayName = "Training Boots" },
+	TrainingShield = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Shield, Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Shield", Tier = 1, Rarity = "Common", Armor = 0, HotbarEquippable = false, ProtectedOnDeath = false, DisplayName = "Training Shield" },
 
 	-- Starter profession tools (reuse T1 wooden tool prefabs).
-	TrainingPickaxe = { Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Material", Tier = 1, Rarity = "Common", HotbarEquippable = true, ProtectedOnDeath = true, ToolPrefabName = "WoodenPickaxe", DisplayName = "Training Pickaxe" },
-	TrainingSpear   = { Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Material", Tier = 1, Rarity = "Common", HotbarEquippable = true, ProtectedOnDeath = true, ToolPrefabName = "WoodenSpear", DisplayName = "Training Spear" },
+	TrainingPickaxe = { Icon = ItemConfig.TOOL_ICONS.Pickaxe, Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Material", Tier = 1, Rarity = "Common", HotbarEquippable = true, ProtectedOnDeath = true, ToolPrefabName = "WoodenPickaxe", DisplayName = "Training Pickaxe" },
+	TrainingSpear   = { Icon = ItemConfig.TOOL_ICONS.FishingRod, Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Material", Tier = 1, Rarity = "Common", HotbarEquippable = true, ProtectedOnDeath = true, ToolPrefabName = "WoodenSpear", DisplayName = "Training Fishing Rod" },
 	-- TODO: FUTURE (Drop system) check Untradeable before allowing drops
 	-- TODO: FUTURE (PvP loot system) check Untradeable before including item in death loot table
 
 	-- Armor pieces. Armor is RATING, not percentage.
-	LeatherHelm  = { Icon = "rbxassetid://71167376295923",  Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Helm",  Tier = 1, Rarity = "Common",   Armor = 5,  HotbarEquippable = false, ProtectedOnDeath = false },
+	LeatherHelm  = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Helm,  DisplayName = "Leather Helmet",     Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Helm",  Tier = 1, Rarity = "Common",   Armor = 5,  HotbarEquippable = false, ProtectedOnDeath = false },
 	IronHelm     = { Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Helm",  Tier = 2, Rarity = "Uncommon", Armor = 14, HotbarEquippable = false, ProtectedOnDeath = false },
 	SteelHelm    = { Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Helm",  Tier = 3, Rarity = "Rare", Armor = 28, HotbarEquippable = false, ProtectedOnDeath = false },
 	RuneHelm     = { Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Helm",  Tier = 4, Rarity = "Epic", Armor = 48, HotbarEquippable = false, ProtectedOnDeath = false },
 	VoidHelm     = { Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Helm",  Tier = 5, Rarity = "Legendary", Armor = 75, HotbarEquippable = false, ProtectedOnDeath = false },
 
-	LeatherChest = { Icon = "rbxassetid://91334970387049",  Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Chest", Tier = 1, Rarity = "Common",   Armor = 10, HotbarEquippable = false, ProtectedOnDeath = false },
+	LeatherChest = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Chest, DisplayName = "Leather Chestplate", Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Chest", Tier = 1, Rarity = "Common",   Armor = 10, HotbarEquippable = false, ProtectedOnDeath = false },
 	IronChest    = { Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Chest", Tier = 2, Rarity = "Uncommon", Armor = 24, HotbarEquippable = false, ProtectedOnDeath = false },
 	SteelChest   = { Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Chest", Tier = 3, Rarity = "Rare", Armor = 44, HotbarEquippable = false, ProtectedOnDeath = false },
 	RuneChest    = { Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Chest", Tier = 4, Rarity = "Epic", Armor = 72, HotbarEquippable = false, ProtectedOnDeath = false },
 	VoidChest    = { Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Chest", Tier = 5, Rarity = "Legendary", Armor = 110, HotbarEquippable = false, ProtectedOnDeath = false },
 
-	LeatherLegs  = { Icon = "rbxassetid://83129624279163",   Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Legs",  Tier = 1, Rarity = "Common",    Armor = 8,   HotbarEquippable = false, ProtectedOnDeath = false },
+	LeatherLegs  = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Legs,  DisplayName = "Leather Leggings",   Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Legs",  Tier = 1, Rarity = "Common",    Armor = 8,   HotbarEquippable = false, ProtectedOnDeath = false },
 	IronLegs     = {                                          Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Legs",  Tier = 2, Rarity = "Uncommon",  Armor = 20,  HotbarEquippable = false, ProtectedOnDeath = false },
 	SteelLegs    = {                                          Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Legs",  Tier = 3, Rarity = "Rare",      Armor = 36,  HotbarEquippable = false, ProtectedOnDeath = false },
 	RuneLegs     = {                                          Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Legs",  Tier = 4, Rarity = "Epic",      Armor = 60,  HotbarEquippable = false, ProtectedOnDeath = false },
 	VoidLegs     = {                                          Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Legs",  Tier = 5, Rarity = "Legendary", Armor = 92,  HotbarEquippable = false, ProtectedOnDeath = false },
 
-	LeatherBoots = { Icon = "rbxassetid://109900187251534",  Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Boots", Tier = 1, Rarity = "Common",    Armor = 5,   HotbarEquippable = false, ProtectedOnDeath = false },
+	LeatherBoots = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Boots, DisplayName = "Leather Boots",      Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Boots", Tier = 1, Rarity = "Common",    Armor = 5,   HotbarEquippable = false, ProtectedOnDeath = false },
 	IronBoots    = {                                          Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Boots", Tier = 2, Rarity = "Uncommon",  Armor = 14,  HotbarEquippable = false, ProtectedOnDeath = false },
 	SteelBoots   = {                                          Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Boots", Tier = 3, Rarity = "Rare",      Armor = 26,  HotbarEquippable = false, ProtectedOnDeath = false },
 	RuneBoots    = {                                          Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Boots", Tier = 4, Rarity = "Epic",      Armor = 44,  HotbarEquippable = false, ProtectedOnDeath = false },
@@ -379,6 +383,97 @@ end
 
 function ItemDefinitions.IsTierScrapItemId(itemId)
 	return type(itemId) == "string" and string.match(itemId, "^T[1-5]Scrap$") ~= nil
+end
+
+-- GetIconForItem -- like GetIcon, but also resolves itemId-less items. Procedurally generated
+-- mob drops (ItemGenerator -> ItemClass:toGrantTemplate()) never persist an itemId, only
+-- {type, tier, tags, equipSlot, ...}, so GetIcon(item.itemId) alone always came back "" for
+-- them -- the root cause of drops rendering with no icon. Falls back to
+-- ItemConfig.GENERATED_ITEM_ICONS[tier][kind], keyed by the weapon type (item.tags[1] -- the
+-- only place ItemClass stashes it, since equipSlot is the generic "Weapon" for every weapon
+-- type) or the armor slot (item.equipSlot, already slot-specific for armor).
+function ItemDefinitions.GetIconForItem(item)
+	if type(item) ~= "table" then
+		return ""
+	end
+
+	if type(item.itemId) == "string" and item.itemId ~= "" then
+		local icon = ItemDefinitions.GetIcon(item.itemId)
+		if icon ~= "" then
+			return icon
+		end
+	end
+
+	local tier = math.clamp(math.floor(tonumber(item.tier) or 1), 1, 5)
+	local tierIcons = ItemConfig.GENERATED_ITEM_ICONS[tier]
+	if not tierIcons then
+		return ""
+	end
+
+	local kind = nil
+	if item.type == "Weapon" then
+		kind = type(item.tags) == "table" and item.tags[1] or nil
+	elseif item.type == "Armor" then
+		if type(item.equipSlot) == "string" and tierIcons[item.equipSlot] then
+			kind = item.equipSlot
+		elseif type(item.tags) == "table" then
+			for _, tag in ipairs(item.tags) do
+				if tierIcons[tag] then
+					kind = tag
+					break
+				end
+			end
+		end
+	end
+
+	if type(kind) ~= "string" then
+		return ""
+	end
+	return tierIcons[kind] or ""
+end
+
+-- GetRarityForItem -- like GetIconForItem/GetDisplayNameForItem: procedurally generated items
+-- always carry their own `rarity` (ItemGenerator/ItemClass stamp it onto the granted
+-- template), but a catalog-granted item (an itemId-only owned record -- e.g. a dev-granted
+-- AdminSword) may not have `rarity` copied onto the owned record depending on how
+-- DungeonProfileService's grant-by-itemId path built it. Fall back to the catalog's own
+-- Rarity field so the UI never silently renders a Legendary catalog item with a plain/white
+-- border just because `item.rarity` itself came back nil.
+function ItemDefinitions.GetRarityForItem(item)
+	if type(item) ~= "table" then
+		return nil
+	end
+	if type(item.rarity) == "string" and item.rarity ~= "" then
+		return item.rarity
+	end
+	if type(item.itemId) == "string" and item.itemId ~= "" then
+		local def = Items[item.itemId]
+		if def and type(def.Rarity) == "string" then
+			return def.Rarity
+		end
+	end
+	return nil
+end
+
+-- GetDisplayNameForItem -- owned-item display name for UI (bag slot label, equip slot label,
+-- tooltip title). Procedurally generated items always carry their own `name` (ItemGenerator
+-- composes "<tier material> <kind>", e.g. "Wooden Sword"); catalog items fall back to their
+-- DisplayName, then their raw itemId.
+function ItemDefinitions.GetDisplayNameForItem(item)
+	if type(item) ~= "table" then
+		return "Item"
+	end
+	if type(item.name) == "string" and item.name ~= "" then
+		return item.name
+	end
+	if type(item.itemId) == "string" and item.itemId ~= "" then
+		local def = Items[item.itemId]
+		if def and type(def.DisplayName) == "string" then
+			return def.DisplayName
+		end
+		return item.itemId
+	end
+	return "Item"
 end
 
 return ItemDefinitions

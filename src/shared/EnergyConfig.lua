@@ -11,9 +11,9 @@ return {
 	PANT_WALK_SPEED    = 8,     -- WalkSpeed while panting (0 energy) until stamina is full
 	LOCKOUT_DURATION   = 3,     -- Deprecated: panting lasts until energy refills (kept for compatibility)
 	REGEN_IN_LOCKOUT   = false, -- Deprecated; panting uses normal regen to refill
-	SPRINT_SPEED       = 24,    -- WalkSpeed while sprinting
-	NORMAL_SPEED       = 16,    -- Default WalkSpeed
-	CROUCH_SPEED        = 7,     -- WalkSpeed while crouching
+	SPRINT_SPEED       = 14.4,  -- WalkSpeed while sprinting (was 24, -40%)
+	NORMAL_SPEED       = 9.6,   -- Default WalkSpeed (was 16, -40%)
+	CROUCH_SPEED        = 8,     -- WalkSpeed while crouching
 	CROUCH_CAM_OFFSET   = -0.8,  -- Additional Y camera offset on top of HipHeight drop
 	CROUCH_HIP_REDUCTION = 1.4,  -- How many studs to lower HipHeight (drives the physical duck)
 	CROUCH_ANIM_ID      = "",    -- rbxassetid://XXXXXXX  (leave empty to skip animation)

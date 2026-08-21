@@ -22,22 +22,13 @@ local DungeonMenuNet = require(playerScripts:WaitForChild("DungeonMenuNet"))
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Types = require(ReplicatedStorage:WaitForChild("DungeonProfileTypes"))
 
-local HOTBAR_SLOTS = 9
+-- 4 fixed tool-equip slots (replaces the old freeform 9-slot hotbar). Reuses the first 4
+-- of the pre-built Figma Hotbar frame's 9 slot boxes; the remaining 5 are hidden below.
+local TOOL_SLOTS = 4
+local SLOT_NAMES = { "Weapon", "Bow", "Pickaxe", "FishingSpear" }
+local SLOT_INDEX_BY_NAME = { Weapon = 1, Bow = 2, Pickaxe = 3, FishingSpear = 4 }
 
-local function hotbarSlotUuid(hb, i)
-	if type(hb) ~= "table" then return nil end
-	i = math.floor(tonumber(i) or -1)
-	if i < 1 or i > 9 then return nil end
-	local v = hb[i]
-	if type(v) == "string" and v ~= "" then return v end
-	v = hb[tostring(i)]
-	if type(v) == "string" and v ~= "" then return v end
-	return nil
-end
-
-
-
-local KEY_TO_SLOT = Keys.HotbarSlot
+local KEY_TO_SLOT_NAME = Keys.ToolSlot
 
 local function isCharacterMenuOpen()
 	local g = playerGui:FindFirstChild("SkillsPopupUI", true)
@@ -85,11 +76,12 @@ local function equipToolForUuid(uuid)
 end
 
 local function equipHotbarSlot(slotIndex)
-	if slotIndex < 1 or slotIndex > HOTBAR_SLOTS then return end
+	if slotIndex < 1 or slotIndex > TOOL_SLOTS then return end
 	local snap = DungeonMenuNet.getLastSnapshot()
 	local profile = snap and snap.profile
 	if not profile then return end
-	local uuid = Types.HotbarSlotUuid(profile.hotbar or {}, slotIndex)
+	local slotName = SLOT_NAMES[slotIndex]
+	local uuid = profile.equipped and profile.equipped[slotName]
 	if type(uuid) == "string" and uuid ~= "" then
 		equipToolForUuid(uuid)
 	else
@@ -153,8 +145,15 @@ table.sort(rawSlots, function(a, b)
 	if aScale ~= bScale then return aScale < bScale end
 	return a.Position.X.Offset < b.Position.X.Offset
 end)
-for i = 1, math.min(HOTBAR_SLOTS, #rawSlots) do
+for i = 1, math.min(9, #rawSlots) do
 	slotFrames[i] = rawSlots[i]
+end
+-- Hide the 5 leftover slot boxes (5-9) from the 9-wide Figma export -- only 4 tool
+-- slots exist now.
+for i = TOOL_SLOTS + 1, #slotFrames do
+	if slotFrames[i] then
+		slotFrames[i].Visible = false
+	end
 end
 
 -- ── Per-slot: ensure ItemLabel + SelectionStroke ─────────────────────────────
@@ -162,7 +161,7 @@ end
 local itemLabels       = {}
 local selectionStrokes = {}
 
-for i = 1, HOTBAR_SLOTS do
+for i = 1, TOOL_SLOTS do
 	local f = slotFrames[i]
 	if not f then
 		warn(("[DungeonHotbarHud] slot %d frame not found"):format(i))
@@ -217,7 +216,7 @@ end
 local selectedSlot = 0
 
 local function updateSelection()
-	for i = 1, HOTBAR_SLOTS do
+	for i = 1, TOOL_SLOTS do
 		if selectionStrokes[i] then
 			selectionStrokes[i].Enabled = (i == selectedSlot)
 		end
@@ -236,11 +235,11 @@ local function refreshHud(_snap)
 	local snap = DungeonMenuNet.getLastSnapshot()
 	local profile = snap and snap.profile
 	local inv = profile and profile.inventory or {}
-	local hb  = profile and profile.hotbar or {}
-	for i = 1, HOTBAR_SLOTS do
+	local equipped = profile and profile.equipped or {}
+	for i = 1, TOOL_SLOTS do
 		local il = itemLabels[i]
 		if not il then continue end
-		local uuid = Types.HotbarSlotUuid(hb, i)
+		local uuid = equipped[SLOT_NAMES[i]]
 		local it = (type(uuid) == "string" and uuid ~= "") and inv[uuid] or nil
 		if it then
 			local nm = itemDisplayName(it)
@@ -281,13 +280,15 @@ end)
 for _, child in ipairs(hotbarFrame:GetChildren()) do
 	if child:IsA("TextLabel") or child:IsA("TextButton") then
 		local n = tonumber(child.Text)
-		if n and n >= 1 and n <= 9 then
+		if n and n >= 1 and n <= TOOL_SLOTS then
 			child.InputBegan:Connect(function(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton1
 					or input.UserInputType == Enum.UserInputType.Touch then
 					selectSlot(n)
 				end
 			end)
+		elseif n and n > TOOL_SLOTS and n <= 9 then
+			child.Visible = false
 		end
 	end
 end
@@ -334,7 +335,8 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if UserInputService:GetFocusedTextBox() ~= nil then return end
 	if isCharacterMenuOpen() then return end
 	if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
-	local slot = KEY_TO_SLOT[input.KeyCode]
+	local slotName = KEY_TO_SLOT_NAME[input.KeyCode]
+	local slot = slotName and SLOT_INDEX_BY_NAME[slotName]
 	if slot then
 		selectSlot(slot)
 	end
@@ -348,8 +350,8 @@ UserInputService.InputChanged:Connect(function(input, gameProcessed)
 	if input.UserInputType ~= Enum.UserInputType.MouseWheel then return end
 	local dir = input.Position.Z > 0 and -1 or 1  -- scroll up = previous slot
 	local next = selectedSlot + dir
-	if next < 1 then next = HOTBAR_SLOTS end
-	if next > HOTBAR_SLOTS then next = 1 end
+	if next < 1 then next = TOOL_SLOTS end
+	if next > TOOL_SLOTS then next = 1 end
 	selectSlot(next)
 end)
 

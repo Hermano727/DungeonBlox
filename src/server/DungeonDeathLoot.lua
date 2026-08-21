@@ -24,15 +24,6 @@ local HungerData        = require(ServerScriptService:WaitForChild("HungerData")
 local DungeonDeathLoot = {}
 
 local function stripReferencesToMissing(profile)
-	if type(profile.hotbar) == "table" then
-		for i = 1, 9 do
-			local u = profile.hotbar[i]
-			if type(u) == "string" and u ~= "" and (not profile.inventory[u]) then
-				profile.hotbar[i] = nil
-			end
-		end
-	end
-
 	if type(profile.bagSlots) == "table" then
 		for i = 1, Types.BAG_SLOT_COUNT do
 			local u = profile.bagSlots[i]
@@ -66,12 +57,10 @@ function DungeonDeathLoot.applyToPlayer(player, deathPosition)
 	local droppedItems = {}
 	local inv = profile.inventory
 	local equippedSlotByUuid = DeathProtection.BuildEquippedSlotByUuid(profile)
-	local protectedWeaponUuid = DeathProtection.GetProtectedWeaponUuid(profile)
-	local protectedBowUuid = DeathProtection.GetProtectedBowUuid(profile)
 
 	if type(inv) == "table" then
 		for uuid, item in pairs(inv) do
-			if type(uuid) == "string" and not DeathProtection.ShouldKeepOnDeath(uuid, item, equippedSlotByUuid, protectedWeaponUuid, protectedBowUuid) then
+			if type(uuid) == "string" and not DeathProtection.ShouldKeepOnDeath(uuid, item, equippedSlotByUuid) then
 				table.insert(droppedItems, item)
 				inv[uuid] = nil
 			end
@@ -79,7 +68,6 @@ function DungeonDeathLoot.applyToPlayer(player, deathPosition)
 	end
 
 	stripReferencesToMissing(profile)
-	DeathProtection.ReorderHotbarAfterDeath(profile)
 
 	if type(profile.currencies) == "table" and type(profile.currencies.Coins) == "number" then
 		local loss = math.floor(profile.currencies.Coins * COIN_LOSS_PERCENT)

@@ -49,3 +49,10 @@ sourcemap.json
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# Root-level raw asset-pack files (not Rojo-managed source, just reference/import packs)
+/R15 Movement System.rbxm
+/Ultimate R6 Movement System.rbxm
+
+# Local Claude Code session settings (machine-specific, not shared config)
+.claude/settings.local.json

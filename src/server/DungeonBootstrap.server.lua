@@ -59,6 +59,7 @@ local rfBankRequest = ensureRemoteFunction("BankRequest")
 local rfBankSync = ensureRemoteFunction("BankSync")
 
 local DungeonProfile      = require(ServerScriptService:WaitForChild("DungeonProfileService"))
+local Types               = require(ReplicatedStorage:WaitForChild("DungeonProfileTypes"))
 local HearthstoneConfig   = require(ReplicatedStorage:WaitForChild("HearthstoneConfig"))
 local HearthstoneRegistry = require(ServerScriptService:WaitForChild("HearthstoneRegistry"))
 local HearthstoneService  = require(ServerScriptService:WaitForChild("HearthstoneService"))
@@ -160,9 +161,7 @@ end
 
 --[[
   RemoteFunction: DungeonInventoryAct (client -> server)
-    Args: { kind = "SetHotbar", slot = 1..9, uuid = string|nil }
-        | { kind = "SwapHotbar", a = number, b = number }
-        | { kind = "SetBagSlot", slot = 1..27, uuid = string }
+    Args: { kind = "SetBagSlot", slot = 1..BAG_SLOT_COUNT, uuid = string }
         | { kind = "SwapBagSlot", a = number, b = number }
         | { kind = "ChestDeposit", uuid = string, slot = 1..54 }
         | { kind = "ChestWithdraw", slot = 1..54 }
@@ -178,13 +177,7 @@ rfInventoryAct.OnServerInvoke = function(player, act)
 	if act.kind ~= "ApplyEnchantScroll" and act.kind ~= "ApplyProtectionScroll" and act.kind ~= "ApplyCraftingOrb" and not throttle(player.UserId) then
 		return false, "throttled"
 	end
-	if act.kind == "SetHotbar" then
-		act.slot = math.floor(tonumber(act.slot) or -1); return DungeonProfile.SetHotbarSlot(player, act.slot, act.uuid)
-	elseif act.kind == "ClearHotbarSlot" then
-		act.slot = math.floor(tonumber(act.slot) or -1); return DungeonProfile.ClearHotbarSlot(player, act.slot)
-	elseif act.kind == "SwapHotbar" then
-		act.a = math.floor(tonumber(act.a) or -1); act.b = math.floor(tonumber(act.b) or -1); return DungeonProfile.SwapHotbarSlots(player, act.a, act.b)
-	elseif act.kind == "SetBagSlot" then
+	if act.kind == "SetBagSlot" then
 		act.slot = math.floor(tonumber(act.slot) or -1); return DungeonProfile.SetBagSlot(player, act.slot, act.uuid)
 	elseif act.kind == "SwapBagSlot" then
 		act.a = math.floor(tonumber(act.a) or -1); act.b = math.floor(tonumber(act.b) or -1); return DungeonProfile.SwapBagSlot(player, act.a, act.b)
@@ -373,180 +366,60 @@ local function refreshDungeonFromBackpack(player)
 	syncDungeonBackpackAfterCharacter(player)
 end
 
+-- Slot -> Training item catalog id. Every one of these already exists in ItemDefinitions
+-- (Training* items, Untradeable, tool ones ProtectedOnDeath), reused as-is via GrantItemId.
+local TRAINING_GEAR_FOR_SLOT = {
+	Weapon       = "TrainingSword",
+	Bow          = "TrainingBow",
+	Pickaxe      = "TrainingPickaxe",
+	FishingSpear = "TrainingSpear",
+	Helm         = "TrainingHelm",
+	Chest        = "TrainingChest",
+	Legs         = "TrainingLegs",
+	Boots        = "TrainingBoots",
+	Shield       = "TrainingShield",
+}
+
+-- Tops up any EMPTY equip slot every respawn (not just once ever, unlike the old
+-- trainingGearSeeded-gated version). Since DungeonDeathProtection now protects anything
+-- currently equipped, dying never actually clears an equipped slot -- so the only way a
+-- slot is empty here is "never equipped anything yet" (first spawn) or "player unequipped
+-- it themselves". Either way, hand back a training-tier item so nobody respawns bare.
+-- Prefers an already-owned unequipped item of the right kind over minting a duplicate.
 function seedStarterIfEmpty(player)
 	local profile = DungeonProfile.Load(player)
-	if profile.flags.trainingGearSeeded then
-		return
+	if type(profile.equipped) ~= "table" then
+		profile.equipped = {}
 	end
 
-	-- Scan what the player already has so we don't duplicate items
-	local hasWeapon, hasArmor, hasPickaxe, hasFishingSpear = false, false, false, false
-	for _, item in pairs(profile.inventory) do
-		if type(item) == "table" then
-			if item.type == "Weapon" then hasWeapon = true end
-			if item.type == "Armor"  then hasArmor  = true end
-			if item.equipSlot == "Pickaxe"      then hasPickaxe      = true end
-			if item.equipSlot == "FishingSpear" then hasFishingSpear = true end
+	for slot, trainingItemId in pairs(TRAINING_GEAR_FOR_SLOT) do
+		if profile.equipped[slot] == nil then
+			local existingUuid = nil
+			for uuid, item in pairs(profile.inventory) do
+				if type(item) == "table" and Types.GetAllowedEquipSlot(item) == slot then
+					existingUuid = uuid
+					break
+				end
+			end
+			if existingUuid then
+				DungeonProfile.EquipItem(player, existingUuid)
+			else
+				local ok = DungeonProfile.GrantItemId(player, trainingItemId, 1)
+				if ok then
+					profile = DungeonProfile.Load(player)
+					for uuid, item in pairs(profile.inventory) do
+						if type(item) == "table" and item.itemId == trainingItemId and profile.equipped[slot] ~= uuid then
+							DungeonProfile.EquipItem(player, uuid)
+							break
+						end
+					end
+				end
+			end
+			profile = DungeonProfile.Load(player)
 		end
 	end
 
-	if not hasWeapon then
-		DungeonProfile.GrantItem(player, {
-			name = "Training Sword",
-			type = "Weapon",
-			rarity = "Common",
-			tier = 1, level = 1, enchantLevel = 0,
-			subStats = { dmgMin = 7, dmgMax = 8 },
-			durability = 1500, maxDurability = 1500,
-		}, 1)
-
-		DungeonProfile.GrantItem(player, {
-			name = "Training Bow",
-			type = "Weapon",
-			rarity = "Common",
-			tier = 1, level = 1, enchantLevel = 0,
-			subStats = { dmgMin = 9, dmgMax = 10 },
-			durability = 1500, maxDurability = 1500,
-		}, 1)
-	end
-
-	if not hasArmor then
-	DungeonProfile.GrantItem(player, {
-		name = "Training Helm",
-		type = "Armor",
-		rarity = "Common",
-		tier = 1,
-		level = 1,
-		enchantLevel = 0,
-		equipSlot = "Helm",
-		tags = { "Helm" },
-		subStats = { hp = 40, armor = 3, energy = 2.9 },
-		durability = 1500, maxDurability = 1500,
-	}, 1)
-
-	DungeonProfile.GrantItem(player, {
-		name = "Training Chest",
-		type = "Armor",
-		rarity = "Common",
-		tier = 1,
-		level = 1,
-		enchantLevel = 0,
-		equipSlot = "Chest",
-		tags = { "Chest" },
-		subStats = { hp = 40, armor = 3, energy = 2.9 },
-		durability = 1500, maxDurability = 1500,
-	}, 1)
-
-	DungeonProfile.GrantItem(player, {
-		name = "Training Legs",
-		type = "Armor",
-		rarity = "Common",
-		tier = 1,
-		level = 1,
-		enchantLevel = 0,
-		equipSlot = "Legs",
-		tags = { "Legs" },
-		subStats = { hp = 40, armor = 3, energy = 2.9 },
-		durability = 1500, maxDurability = 1500,
-	}, 1)
-
-	DungeonProfile.GrantItem(player, {
-		name = "Training Boots",
-		type = "Armor",
-		rarity = "Common",
-		tier = 1,
-		level = 1,
-		enchantLevel = 0,
-		equipSlot = "Boots",
-		tags = { "Boots" },
-		subStats = { hp = 40, armor = 3, energy = 2.9 },
-		durability = 1500, maxDurability = 1500,
-	}, 1)
-
-	DungeonProfile.GrantItem(player, {
-		name = "Training Shield",
-		type = "Armor",
-		rarity = "Common",
-		tier = 1,
-		level = 1,
-		enchantLevel = 0,
-		equipSlot = "Shield",
-		tags = { "Shield" },
-		subStats = { hp = 40, hps = 24 },
-		durability = 1500, maxDurability = 1500,
-	}, 1)
-	end -- hasArmor
-
-	if not hasPickaxe then
-	DungeonProfile.GrantItem(player, {
-		name = "Training Pickaxe",
-		type = "Material",
-		rarity = "Common",
-		tier = 1,
-		level = 1,
-		enchantLevel = 0,
-		subStats = { MiningLevel = 1 },
-		equipSlot = "Pickaxe",
-		durability = 1500, maxDurability = 1500,
-	}, 1)
-	end -- hasPickaxe
-
-	if not hasFishingSpear then
-	DungeonProfile.GrantItem(player, {
-		name = "Training Spear",
-		type = "Material",
-		rarity = "Common",
-		tier = 1,
-		level = 1,
-		enchantLevel = 0,
-		subStats = { FishingLevel = 1 },
-		equipSlot = "FishingSpear",
-		durability = 1500, maxDurability = 1500,
-	}, 1)
-	end -- hasFishingSpear
-
-	-- Auto-equip starter gear
-	profile = DungeonProfile.Load(player)
-	local toEquip = {
-		["Training Helm"]   = "Helm",
-		["Training Chest"]  = "Chest",
-		["Training Legs"]   = "Legs",
-		["Training Boots"]  = "Boots",
-		["Training Shield"] = "Shield",
-	}
-	-- Weapons/tools have no equip-panel slot (Minecraft-style hotbar model): GrantItem already
-	-- auto-placed the Training Sword/Bow/Pickaxe/Spear into the first empty hotbar slot at
-	-- grant time (placeItemInFirstEmptySlot in DungeonProfileService) -- no special-casing needed
-	-- here, only the armor auto-equip below.
-	--
-	-- Must go through DungeonProfile.EquipItem, not a raw profile.equipped[slot] = uuid
-	-- assignment: GrantItem's placement hook already put each armor uuid into the first empty
-	-- bag slot (armor isn't hotbar-eligible, so it always lands in the bag). EquipItem is what
-	-- clears that bag/hotbar reference when equipping -- a raw assignment leaves the uuid
-	-- referenced in both bagSlots AND equipped at once, showing the same item twice in the UI.
-	local toEquipUuid = {}
-	for uuid, item in pairs(profile.inventory) do
-		if type(item) == "table" and item.name and toEquip[item.name] then
-			toEquipUuid[toEquip[item.name]] = uuid
-			toEquip[item.name] = nil
-		end
-	end
-	for _, uuid in pairs(toEquipUuid) do
-		DungeonProfile.EquipItem(player, uuid)
-	end
-	profile = DungeonProfile.Load(player)
-
-	-- Explicit starter hotbar order, independent of grant order or which exact weapon item
-	-- ended up granted (e.g. a leftover backpack-imported sword instead of "Training Sword"
-	-- satisfying hasWeapon above): compact + bucket whatever's actually owned by TYPE (melee
-	-- weapon, bow, pickaxe, fishing spear), not by literal name. Shared with the post-death
-	-- reorder so there's one rule, not two that can drift apart. Future logins never run
-	-- this again (trainingGearSeeded gate above) -- after this, the player's own
-	-- rearrangement is preserved.
-	DeathProtection.CompactAndOrderHotbar(profile)
-	profile = DungeonProfile.Load(player)
-
-	-- Recompute currentHp so a fresh player starts at full HP
+	-- Recompute currentHp so a freshly re-geared player starts at full HP
 	local newMaxHp = profile.stats.combat.maxHp
 	for _, uuid in pairs(profile.equipped) do
 		local it = profile.inventory[uuid]
@@ -555,8 +428,6 @@ function seedStarterIfEmpty(player)
 		end
 	end
 	profile.runtime.currentHp = newMaxHp
-
-	profile.flags.trainingGearSeeded = true
 end
 
 local function onPlayerAdded(player)

@@ -216,4 +216,69 @@ ItemConfig.TIER_RARITY_WEIGHTS = {
 }
 ItemConfig.ELITE_RARITY_TIER_BOOST = 1
 
+------------------------------------------------------------------------
+-- Tier-scoped generation pools. Temporary restriction: Scythe/Axe/Mace have
+-- no icon art yet, so T1 weapon drops are Sword/Bow only until that art
+-- exists (reintroduce by just adding them back to WEAPON_TYPES_BY_TIER[1]).
+-- Any tier without its own override here falls back to the full
+-- WEAPON_TYPES/ARMOR_SLOTS pool.
+------------------------------------------------------------------------
+
+ItemConfig.WEAPON_TYPES_BY_TIER = {
+    [1] = { "Sword", "Bow" },
+}
+ItemConfig.ARMOR_SLOTS_BY_TIER = {
+    [1] = { "Helm", "Chest", "Legs", "Boots", "Shield" },
+}
+
+------------------------------------------------------------------------
+-- Procedural + catalog item naming/icon architecture.
+--
+-- TIER_WEAPON_MATERIAL / TIER_ARMOR_MATERIAL give each tier a material
+-- prefix (T1 = Wooden/Leather), matching the already-hand-authored T2-T5
+-- catalog names (IronHelm/SteelHelm/RuneHelm/VoidHelm already exist).
+-- WEAPON_KIND_LABEL / ARMOR_KIND_LABEL turn a weaponType/armorSlot into its
+-- display word ("Chest" -> "Chestplate"). ItemGenerator composes
+-- `material .. " " .. kindLabel` for procedural drop names; rarity is shown
+-- separately via the item's border color + tooltip badge, not baked into
+-- the name.
+--
+-- GENERATED_ITEM_ICONS is the single source of truth for which image asset
+-- a given tier+kind uses. Both ItemDefinitions' hand-authored catalog
+-- entries (Training*/Wooden*/Leather*) AND ItemDefinitions.GetIconForItem's
+-- fallback for itemId-less mob-dropped items read from this ONE table, so a
+-- training-gear icon and a mob-dropped icon of the same tier+kind can never
+-- drift apart -- "no curve balls with potential drop -> asset mapping."
+------------------------------------------------------------------------
+
+ItemConfig.TIER_WEAPON_MATERIAL = { [1] = "Wooden", [2] = "Iron", [3] = "Steel", [4] = "Rune", [5] = "Void" }
+ItemConfig.TIER_ARMOR_MATERIAL  = { [1] = "Leather", [2] = "Iron", [3] = "Steel", [4] = "Rune", [5] = "Void" }
+
+ItemConfig.WEAPON_KIND_LABEL = { Sword = "Sword", Scythe = "Scythe", Axe = "Axe", Mace = "Mace", Bow = "Bow" }
+ItemConfig.ARMOR_KIND_LABEL  = { Helm = "Helmet", Chest = "Chestplate", Legs = "Leggings", Boots = "Boots", Shield = "Shield" }
+
+-- [tier][kind] -> rbxassetid. Weapon kinds keyed by a WEAPON_TYPES id (Sword/Bow/...);
+-- armor kinds keyed by an ARMOR_SLOTS id (Helm/Chest/Legs/Boots/Shield).
+ItemConfig.GENERATED_ITEM_ICONS = {
+    [1] = {
+        Sword  = "rbxassetid://77680002167902",
+        Bow    = "rbxassetid://102552791823343",
+        Helm   = "rbxassetid://84010311919153",
+        Chest  = "rbxassetid://95963199323247",
+        Legs   = "rbxassetid://128669788193929",
+        Boots  = "rbxassetid://122126957029681",
+        Shield = "rbxassetid://112340687099581",
+    },
+}
+
+-- T1 profession tool icons (pickaxe/fishing rod). ItemGenerator never rolls these -- they're
+-- catalog-only starter/drop tools -- so they live separate from GENERATED_ITEM_ICONS, but are
+-- still one shared table so Training* and Wooden* always match.
+ItemConfig.TOOL_ICONS = {
+    Pickaxe    = "rbxassetid://87543815456373",
+    FishingRod = "rbxassetid://96915159262223",
+}
+
+ItemConfig.ADMIN_SWORD_ICON = "rbxassetid://112375884547005"
+
 return ItemConfig

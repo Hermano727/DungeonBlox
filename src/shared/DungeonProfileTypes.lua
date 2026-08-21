@@ -276,6 +276,37 @@ function DungeonProfileTypes.GetRarityTierIndex(rarity)
 end
 
 
+local function lighten(c: Color3, amt: number): Color3
+	return Color3.new(
+		c.R + (1 - c.R) * amt,
+		c.G + (1 - c.G) * amt,
+		c.B + (1 - c.B) * amt
+	)
+end
+
+local function darken(c: Color3, amt: number): Color3
+	return Color3.new(c.R * (1 - amt), c.G * (1 - amt), c.B * (1 - amt))
+end
+
+-- GetRarityGradient -- the same per-rarity color as GetRarityColor, but as a ColorSequence with
+-- two bright/near-white highlight spots traveling around it (0.32 and 0.82), instead of one
+-- flat color -- used by RarityBorder's UIGradient so item borders read as a shiny gradient
+-- outline, not a solid-color stroke.
+function DungeonProfileTypes.GetRarityGradient(rarity)
+	local base = DungeonProfileTypes.GetRarityColor(rarity)
+	local dim = darken(base, 0.35)
+	local bright = lighten(base, 0.65)
+	return ColorSequence.new({
+		ColorSequenceKeypoint.new(0.00, dim),
+		ColorSequenceKeypoint.new(0.18, base),
+		ColorSequenceKeypoint.new(0.32, bright),
+		ColorSequenceKeypoint.new(0.46, base),
+		ColorSequenceKeypoint.new(0.68, dim),
+		ColorSequenceKeypoint.new(0.82, bright),
+		ColorSequenceKeypoint.new(1.00, dim),
+	})
+end
+
 function DungeonProfileTypes.GetNextRarity(rarity)
 	local order = { "Common", "Uncommon", "Rare", "Epic", "Legendary" }
 	if type(rarity) ~= "string" then

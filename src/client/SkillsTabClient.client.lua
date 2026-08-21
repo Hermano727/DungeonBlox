@@ -51,10 +51,6 @@ local function getGuiFolder()
 	return playerGui
 end
 
-local combatTemplateGui = playerGui:WaitForChild("CombatXPUI")
-local miningTemplateGui = playerGui:WaitForChild("MiningXPUI")
-local fishingTemplateGui = playerGui:WaitForChild("FishingXPUI")
-
 local function getXPForLevel(level)
 	local lv = math.max(1, math.floor(tonumber(level) or 1))
 	return 5 * (2 ^ (lv - 1))
@@ -89,17 +85,13 @@ screenGui.Parent = playerGui
 
 local open = false
 local setOpenFn = nil
+-- Tab used to toggle this "Character" panel; the new InventoryHud React
+-- panel (Player Preview + Inv Slots + quick nav) owns Tab now (see
+-- StarterPlayerScripts.InventoryHud), so this listener no longer opens
+-- anything. Left in place (rather than deleted) because HearthstoneClient,
+-- DungeonMenuNet, InventoryDragController, and the day/night sync below all
+-- still get initialized by this script and are depended on elsewhere.
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if input.KeyCode == Keys.SkillsTab then
-		if setOpenFn then
-			setOpenFn(not open)
-		else
-			open = not open
-			screenGui.Enabled = open
-			if open then MenuMouse.acquire() else MenuMouse.release() end
-		end
-		return
-	end
 	if gameProcessed then return end
 	if input.KeyCode == Keys.CloseMenu and open then
 		if setOpenFn then setOpenFn(false) else screenGui.Enabled = false; open = false; MenuMouse.release() end
@@ -151,15 +143,91 @@ title.Text = "Character"
 title.ZIndex = 3
 title.Parent = panel
 
-local combatRow = combatTemplateGui:WaitForChild("MainFrame"):Clone()
+-- Built in code, not cloned from a StarterGui template -- the old
+-- CombatXPUI/MiningXPUI/FishingXPUI ScreenGuis were removed 2026-08 when
+-- XpHud (React) took over the floating HUD bars. This is a SEPARATE use of
+-- the same MainFrame/XPBackground/XPFill/LevelLabel/XPLabel structure
+-- (read by updateBar() above) embedded inside the Character menu's skills
+-- row, so it still needs its own bar instances -- just built directly
+-- instead of cloned.
+local function buildXpBarFrame(skillName, accentColor)
+	local mainFrame = Instance.new("Frame")
+	mainFrame.Name = "MainFrame"
+	mainFrame.BackgroundColor3 = Color3.fromRGB(24, 20, 17)
+	mainFrame.BorderSizePixel = 0
+	Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 4)
+	local stroke = Instance.new("UIStroke", mainFrame)
+	stroke.Thickness = 1
+	stroke.Color = Color3.fromRGB(64, 52, 40)
+
+	local skillLabel = Instance.new("TextLabel")
+	skillLabel.Name = "SkillName"
+	skillLabel.BackgroundTransparency = 1
+	skillLabel.Size = UDim2.new(1, -16, 0, 14)
+	skillLabel.Position = UDim2.fromOffset(8, 2)
+	skillLabel.Font = Enum.Font.GothamBold
+	skillLabel.TextSize = 11
+	skillLabel.TextColor3 = accentColor
+	skillLabel.TextXAlignment = Enum.TextXAlignment.Left
+	skillLabel.Text = skillName
+	skillLabel.Parent = mainFrame
+
+	local levelLabel = Instance.new("TextLabel")
+	levelLabel.Name = "LevelLabel"
+	levelLabel.BackgroundTransparency = 1
+	levelLabel.Size = UDim2.new(0.5, -8, 0, 14)
+	levelLabel.Position = UDim2.fromOffset(8, 16)
+	levelLabel.Font = Enum.Font.Gotham
+	levelLabel.TextSize = 12
+	levelLabel.TextColor3 = Color3.fromRGB(232, 222, 205)
+	levelLabel.TextXAlignment = Enum.TextXAlignment.Left
+	levelLabel.Text = "Level 1"
+	levelLabel.Parent = mainFrame
+
+	local xpLabel = Instance.new("TextLabel")
+	xpLabel.Name = "XPLabel"
+	xpLabel.BackgroundTransparency = 1
+	xpLabel.Size = UDim2.new(0.5, -8, 0, 14)
+	xpLabel.Position = UDim2.new(0.5, 0, 0, 16)
+	xpLabel.Font = Enum.Font.Gotham
+	xpLabel.TextSize = 11
+	xpLabel.TextColor3 = Color3.fromRGB(150, 138, 120)
+	xpLabel.TextXAlignment = Enum.TextXAlignment.Right
+	xpLabel.Text = "0 / 5 XP"
+	xpLabel.Parent = mainFrame
+
+	local xpBackground = Instance.new("Frame")
+	xpBackground.Name = "XPBackground"
+	xpBackground.BackgroundColor3 = Color3.fromRGB(12, 10, 9)
+	xpBackground.BorderSizePixel = 0
+	xpBackground.Size = UDim2.new(1, -16, 0, 8)
+	xpBackground.Position = UDim2.fromOffset(8, 34)
+	xpBackground.Parent = mainFrame
+	Instance.new("UICorner", xpBackground).CornerRadius = UDim.new(0, 3)
+
+	local xpFill = Instance.new("Frame")
+	xpFill.Name = "XPFill"
+	xpFill.BackgroundColor3 = accentColor
+	xpFill.BorderSizePixel = 0
+	xpFill.Size = UDim2.new(0, 0, 1, -4)
+	xpFill.Position = UDim2.fromOffset(0, 2)
+	xpFill.Parent = xpBackground
+	Instance.new("UICorner", xpFill).CornerRadius = UDim.new(0, 3)
+
+	return mainFrame
+end
+
+-- Palette matches XpHud.luau's SKILLS table so the two bar systems read as
+-- one visual language.
+local combatRow = buildXpBarFrame("Combat", Color3.fromRGB(150, 52, 40))
 combatRow.Name = "CombatRow"
 combatRow.Visible = true
 
-local miningRow = miningTemplateGui:WaitForChild("MainFrame"):Clone()
+local miningRow = buildXpBarFrame("Mining", Color3.fromRGB(120, 104, 78))
 miningRow.Name = "MiningRow"
 miningRow.Visible = true
 
-local fishingRow = fishingTemplateGui:WaitForChild("MainFrame"):Clone()
+local fishingRow = buildXpBarFrame("Fishing", Color3.fromRGB(64, 104, 118))
 fishingRow.Name = "FishingRow"
 fishingRow.Visible = true
 

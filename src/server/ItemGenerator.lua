@@ -202,10 +202,10 @@ function ItemGenerator.generate(options)
 
     if not weaponType and not armorSlot then
         if math.random() < 0.5 then
-            local pool = Config.WEAPON_TYPES
+            local pool = Config.WEAPON_TYPES_BY_TIER[tier] or Config.WEAPON_TYPES
             weaponType = pool[math.random(1, #pool)]
         else
-            local pool = Config.ARMOR_SLOTS
+            local pool = Config.ARMOR_SLOTS_BY_TIER[tier] or Config.ARMOR_SLOTS
             armorSlot  = pool[math.random(1, #pool)]
         end
     end
@@ -253,9 +253,20 @@ function ItemGenerator.generate(options)
         substats = rollArmorSubstats(tier, rarity)
     end
 
-    -- Build a human-readable name
-    local kindLabel = weaponType or (armorSlot .. " Armor")
-    local name = string.format("%s %s (T%d)", rarity, kindLabel, tier)
+    -- Build a human-readable name: "<tier material> <kind>", e.g. "Wooden Sword" /
+    -- "Leather Chestplate" -- matches the same T1 wooden/leather assets the training gear
+    -- catalog entries use (ItemConfig.GENERATED_ITEM_ICONS), and mirrors the already
+    -- hand-authored T2-T5 catalog naming (IronHelm/SteelHelm/...). Rarity is intentionally
+    -- NOT in the name anymore -- it's shown separately via the rarity border + tooltip badge.
+    local material, kindLabel
+    if isWeapon then
+        material  = Config.TIER_WEAPON_MATERIAL[tier] or ("T" .. tostring(tier))
+        kindLabel = Config.WEAPON_KIND_LABEL[weaponType] or weaponType
+    else
+        material  = Config.TIER_ARMOR_MATERIAL[tier] or ("T" .. tostring(tier))
+        kindLabel = Config.ARMOR_KIND_LABEL[armorSlot] or armorSlot
+    end
+    local name = material .. " " .. kindLabel
 
     return ItemClass.new({
         name       = name,
