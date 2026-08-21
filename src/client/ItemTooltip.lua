@@ -16,6 +16,8 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
+local Types = require(ReplicatedStorage:WaitForChild("DungeonProfileTypes"))
+local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
 local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
 
 -- Label map for every substat id produced by ItemGenerator / ItemClass
@@ -62,13 +64,11 @@ local PCT_STATS     = {
     coinFind=true, block=true, reflect=true, dodge=true, elemRes=true,
 }
 
-local RARITY_COLORS = {
-    Common    = Color3.fromRGB(205, 210, 220),
-    Uncommon  = Color3.fromRGB(70,  205, 105),
-    Rare      = Color3.fromRGB(80,  170, 255),
-    Epic      = Color3.fromRGB(200, 120, 255),
-    Legendary = Color3.fromRGB(255, 175,  85),
-}
+-- Rarity colors used to live here as a second literal copy of DungeonProfileTypes'
+-- RARITY_COLORS table -- byte-for-byte identical values, just pasted twice. Retuning a
+-- rarity color meant remembering to edit both files (or silently drifting out of sync).
+-- Types.GetRarityColor is the one canonical source DungeonMenuUI and the InventoryHud
+-- React panels already read from; this module now defers to it too.
 
 local COLOR_PRIMARY   = Color3.new(1, 1, 1)
 local COLOR_SUBSTAT   = Color3.fromRGB(255, 215, 100)
@@ -126,7 +126,10 @@ local function addRow(text, color, size, bold, order)
     local l = Instance.new("TextLabel", frame)
     l.BackgroundTransparency = 1
     l.Size             = UDim2.new(1, 0, 0, size + 5)
-    l.Font             = bold and Enum.Font.GothamBold or Enum.Font.GothamMedium
+    -- Routed through the shared UIFonts table (BodyBold/BodyMedium == GothamBold/GothamMedium,
+    -- so this is a no-op visually) rather than hardcoding Enum.Font here -- if the body font
+    -- family ever changes, this tooltip picks it up automatically instead of being missed.
+    l.Font             = bold and UIFonts.BodyBold or UIFonts.BodyMedium
     l.TextSize         = size
     l.TextColor3       = color
     l.TextXAlignment   = Enum.TextXAlignment.Left
@@ -278,7 +281,7 @@ local function renderItem(item)
     clearRows()
 
     local n      = 1
-    local rCol   = RARITY_COLORS[item.rarity] or COLOR_PRIMARY
+    local rCol   = Types.GetRarityColor(item.rarity)
     local subs   = type(item.subStats) == "table" and item.subStats or {}
 
     -- Name

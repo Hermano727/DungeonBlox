@@ -280,4 +280,34 @@ function MobData.FindMobById(mobId)
     return nil
 end
 
+-- Sanity-check every mob entry at load time so a hand-authored copy/paste
+-- error (a MobID field that doesn't match its own table key, or a missing
+-- required stat) surfaces immediately in the output window instead of
+-- silently producing a broken mob later. Purely diagnostic -- never mutates
+-- or removes an entry, so it's safe to leave running as the table grows.
+local REQUIRED_FIELDS = {
+    "Name", "Level", "BaseHP", "BaseDamage", "BaseScore", "LootPool", "MobID",
+    "Armor", "AggroRange", "ReturnDistance", "AttackRange", "AttackCooldown", "MoveSpeed",
+}
+
+local function validateMobEntry(tier, key, entry)
+    if entry.MobID ~= key then
+        warn(string.format(
+            "[MobData] Tier %d entry %q has MobID %q (does not match its table key -- likely a copy/paste mistake)",
+            tier, key, tostring(entry.MobID)
+        ))
+    end
+    for _, field in ipairs(REQUIRED_FIELDS) do
+        if entry[field] == nil then
+            warn(string.format("[MobData] Tier %d %q is missing required field %q", tier, key, field))
+        end
+    end
+end
+
+for tier = 1, 5 do
+    for key, entry in pairs(MobData[tier]) do
+        validateMobEntry(tier, key, entry)
+    end
+end
+
 return MobData

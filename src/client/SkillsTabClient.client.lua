@@ -18,6 +18,7 @@ local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"
 local Types = require(ReplicatedStorage:WaitForChild("DungeonProfileTypes"))
 local ItemTooltip = require(playerScripts:WaitForChild("ItemTooltip"))
 local DayNightConfig = require(ReplicatedStorage:WaitForChild("DayNightConfig"))
+local SkillXPShared = require(ReplicatedStorage:WaitForChild("SkillXPShared"))
 
 -- Roblox CoreGui binds Tab to the player list; disable it so Tab reaches this script.
 pcall(function()
@@ -51,9 +52,14 @@ local function getGuiFolder()
 	return playerGui
 end
 
+-- Same growth curve as SkillXPShared.GetXPForLevel (this popup reads
+-- server-authoritative profile.stats.<skill>.level/xp, not the client-only
+-- SkillXPShared table, so it can't just call into that skill's live state --
+-- but the requirement curve itself is one shared formula, delegated here
+-- rather than re-hardcoding the base/exponent and risking the two drifting).
 local function getXPForLevel(level)
 	local lv = math.max(1, math.floor(tonumber(level) or 1))
-	return 5 * (2 ^ (lv - 1))
+	return SkillXPShared.GetXPForLevel(lv)
 end
 
 local function updateBar(mainFrame, level, xp)

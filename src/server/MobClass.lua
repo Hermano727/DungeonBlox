@@ -50,14 +50,11 @@ ensureMobCollisionGroup()
 local MobData = require(ReplicatedStorage:WaitForChild("MobData"))
 local DamageService = require(script.Parent:WaitForChild("DamageService"))
 local MobAnimController = require(script.Parent:WaitForChild("MobAnimController"))
+local MobHPBarUI = require(script.Parent:WaitForChild("MobHPBarUI"))
+local MobGroundUtils = require(script.Parent:WaitForChild("MobGroundUtils"))
 
 -- Counter for generating unique IDs
 local mobIdCounter = 0
-
--- HP Bar colors
-local HP_BAR_COLOR_FULL = Color3.fromRGB(0, 255, 0)    -- Green at full health
-local HP_BAR_COLOR_MID = Color3.fromRGB(255, 255, 0)     -- Yellow at half health
-local HP_BAR_COLOR_LOW = Color3.fromRGB(255, 0, 0)      -- Red at low health
 
 -- Constructor. `class` lets a subclass (e.g. HoppingMobClass) reuse all of
 -- this initialization while registering instances under its own metatable,
@@ -170,17 +167,10 @@ function MobClass:SpawnModel()
 end
 
 -- Height from the model's true geometric bottom (feet) up to its
--- PrimaryPart, measured on the model in its current pose (translation does
--- not affect this, so it is safe to call before or after positioning).
+-- PrimaryPart. Thin wrapper -- see MobGroundUtils for the actual raycast-free
+-- bounding-box math, shared with anything else that needs it.
 function MobClass:GetFeetToRootHeight(model)
-    local primaryPart = model.PrimaryPart or model:FindFirstChild("HumanoidRootPart")
-    if not primaryPart then
-        return nil
-    end
-
-    local boxCFrame, boxSize = model:GetBoundingBox()
-    local bottomY = boxCFrame.Position.Y - (boxSize.Y / 2)
-    return primaryPart.Position.Y - bottomY
+    return MobGroundUtils.GetFeetToRootHeight(model)
 end
 
 -- Raycast straight down from above `position` to find the nearest surface,
@@ -189,25 +179,7 @@ end
 -- way once Humanoid.HipHeight, set in ConfigureModel, is correct).
 -- Falls back to `position` unchanged if nothing is hit (e.g. a void).
 function MobClass:ResolveGroundedSpawnPosition(model, position)
-    local feetToRootHeight = self._feetToRootHeight
-    if not feetToRootHeight then
-        return position
-    end
-
-    local rayParams = RaycastParams.new()
-    rayParams.FilterType = Enum.RaycastFilterType.Exclude
-    rayParams.FilterDescendantsInstances = {model}
-
-    local hit = workspace:Raycast(
-        position + Vector3.new(0, 50, 0),
-        Vector3.new(0, -150, 0),
-        rayParams
-    )
-    if not hit then
-        return position
-    end
-
-    return Vector3.new(hit.Position.X, hit.Position.Y + feetToRootHeight, hit.Position.Z)
+    return MobGroundUtils.ResolveGroundedSpawnPosition(model, position, self._feetToRootHeight)
 end
 
 function MobClass:ConfigureModel(model)
@@ -288,20 +260,7 @@ function MobClass:FindGroundY(x, z, fallbackY)
     if not self.Model then
         return fallbackY
     end
-
-    local rayParams = RaycastParams.new()
-    rayParams.FilterType = Enum.RaycastFilterType.Exclude
-    rayParams.FilterDescendantsInstances = {self.Model}
-
-    local hit = workspace:Raycast(
-        Vector3.new(x, fallbackY + 10, z),
-        Vector3.new(0, -50, 0),
-        rayParams
-    )
-    if hit then
-        return hit.Position.Y
-    end
-    return fallbackY
+    return MobGroundUtils.FindGroundY(self.Model, x, z, fallbackY)
 end
 
 -- Rotate in place to face a world point, without moving. Used while
@@ -469,97 +428,15 @@ function MobClass:ApplyKnockback(attackerPosition)
     self.Model:PivotTo(CFrame.new(newPos) * CFrame.Angles(0, yaw, 0))
 end
 
--- Create HP bar above mob
+-- Create HP bar above mob. Actual UI construction lives in MobHPBarUI so
+-- this file stays focused on AI/combat/spawning, not BillboardGui layout.
 function MobClass:CreateHPBar()
-    if not self.Model then return nil end
-    
-    -- Find the head or primary part to attach the HP bar
-    local head = self.Model:FindFirstChild("Head")
-    if not head then
-        head = self.Model.PrimaryPart or self.Model:FindFirstChildWhichIsA("BasePart")
-    end
-    if not head then return nil end
-    
-    -- Create BillboardGui for the name/level + HP bar
-    local billboardGui = Instance.new("BillboardGui")
-    billboardGui.Name = "HPBar"
-    billboardGui.Size = UDim2.new(5, 0, 0.75, 0)
-    billboardGui.StudsOffset = Vector3.new(0, 3, 0)
-    billboardGui.Adornee = head
-    billboardGui.AlwaysOnTop = true
-    billboardGui.Parent = self.Model
-
-    -- Name/Level label above the health bar
-    local titleLabel = Instance.new("TextLabel")
-    titleLabel.Name = "NameTag"
-    titleLabel.Size = UDim2.new(1, 0, 0.25, 0)
-    titleLabel.Position = UDim2.new(0, 0, 0, 0)
-    titleLabel.BackgroundTransparency = 1
-    titleLabel.Font = Enum.Font.GothamBold
-    titleLabel.TextSize = 14
-    titleLabel.TextColor3 = Color3.fromRGB(255, 220, 150)
-    titleLabel.TextStrokeTransparency = 0.3
-
-    local mobName = (self.Stats and self.Stats.Name) or self.MobID
-    titleLabel.Text = "Level " .. tostring(self.Level) .. " " .. tostring(mobName)
-    Instance.new("UIStroke", titleLabel).Color = Color3.fromRGB(80, 60, 20)
-    titleLabel.Parent = billboardGui
-    
-    -- Create background frame (dark background)
-    local background = Instance.new("Frame")
-    background.Name = "Background"
-    background.Size = UDim2.new(1, 0, 0.45, 0)
-    background.Position = UDim2.new(0, 0, 0.25, 0)
-    background.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-    background.BorderSizePixel = 2
-    background.BorderColor3 = Color3.fromRGB(20, 20, 20)
-    background.Parent = billboardGui
-    
-    -- Create health bar fill (green by default)
-    local healthBar = Instance.new("Frame")
-    healthBar.Name = "HealthBar"
-    healthBar.Size = UDim2.new(1, 0, 1, 0)
-    healthBar.Position = UDim2.new(0, 0, 0, 0)
-    healthBar.BackgroundColor3 = HP_BAR_COLOR_FULL
-    healthBar.BorderSizePixel = 0
-    healthBar.Parent = background
-    
-    -- Create corner radius for rounded look
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 4)
-    corner.Parent = background
-    
-    local healthCorner = Instance.new("UICorner")
-    healthCorner.CornerRadius = UDim.new(0, 4)
-    healthCorner.Parent = healthBar
-    
-    return billboardGui
+    return MobHPBarUI.Create(self)
 end
 
--- Update HP bar display
+-- Update HP bar display to match CurrentHealth/MaxHealth.
 function MobClass:UpdateHPBar()
-    if not self.HPBar then return end
-    
-    local healthBar = self.HPBar:FindFirstChild("Background", true)
-    if healthBar then
-        healthBar = healthBar:FindFirstChild("HealthBar")
-    end
-    if not healthBar then return end
-    
-    -- Calculate health percentage
-    local healthPercent = self.CurrentHealth / self.MaxHealth
-    
-    -- Update bar size
-    healthBar.Size = UDim2.new(healthPercent, 0, 1, 0)
-    
-    -- Update color based on health percentage
-    if healthPercent > 0.5 then
-        -- Green to Yellow transition
-        healthBar.BackgroundColor3 = HP_BAR_COLOR_FULL:Lerp(HP_BAR_COLOR_MID, (1 - healthPercent) * 2)
-    else
-        -- Yellow to Red transition
-        healthBar.BackgroundColor3 = HP_BAR_COLOR_MID:Lerp(HP_BAR_COLOR_LOW, (0.5 - healthPercent) * 2)
-    end
+    MobHPBarUI.Update(self)
 end
 
 -- Take damage method

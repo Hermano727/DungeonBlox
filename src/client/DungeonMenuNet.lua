@@ -15,6 +15,18 @@ local rfInventoryAct = ReplicatedStorage:WaitForChild("DungeonInventoryAct")
 local DungeonMenuNet = {}
 
 local lastSnapshot = nil
+-- Two subscription mechanisms, not one, because they were added at different times for
+-- different callers and neither is safe to fold into the other without changing timing:
+--   listener            - single legacy callback (DungeonMenuNet.setListener), fired
+--                          SYNCHRONOUSLY inside fireSnapshotListeners. Used by the Gui-based
+--                          SkillsTabClient/DungeonMenuUI screen.
+--   snapshotListeners    - array of callbacks (DungeonMenuNet.addSnapshotListener), each fired
+--                          via task.defer so a React re-render triggered from one listener can't
+--                          reenter this module mid-update. Used by the InventoryHud React tree
+--                          (a hook can subscribe more than once, unlike the single `listener`).
+-- If you're tempted to unify these into one list, note the sync-vs-deferred difference is a
+-- real behavioral change for whichever caller currently relies on it -- verify both callers
+-- tolerate deferred delivery before merging.
 local listener = nil
 local snapshotListeners = {}
 
@@ -33,12 +45,20 @@ local function fireSnapshotListeners(payload)
 	end
 end
 
+-- A `_seq` value is only trustworthy when it's a finite positive number -- `s == s` rules out
+-- NaN (NaN ~= NaN under IEEE 754), which a malformed payload could otherwise smuggle past a
+-- bare `type(s) == "number"` check. Was three separate copies of this exact test scattered
+-- through this file; pulled into one place so the rule can't drift between call sites.
+local function isValidSeq(v)
+	return type(v) == "number" and v == v and v > 0
+end
+
 local function readSeq(snapshot)
 	if type(snapshot) ~= "table" then
 		return 0
 	end
 	local s = snapshot._seq
-	if type(s) == "number" and s == s and s > 0 then
+	if isValidSeq(s) then
 		return s
 	end
 	return 0
@@ -109,7 +129,7 @@ local function tryApplyChestUnlockPatch(patch)
 	local nUr = math.floor(tonumber(patch.chestUnlockedRows) or 1)
 	local curUr = math.floor(tonumber(p.chestUnlockedRows) or 1)
 	if curUr >= nUr then
-		if type(patch._seq) == "number" and patch._seq == patch._seq and patch._seq > 0 then
+		if isValidSeq(patch._seq) then
 			local curSeq = readSeq(lastSnapshot)
 			if patch._seq > curSeq then
 				lastSnapshot._seq = patch._seq
@@ -125,7 +145,7 @@ local function tryApplyChestUnlockPatch(patch)
 			p.currencies[k] = v
 		end
 	end
-	if type(patch._seq) == "number" and patch._seq == patch._seq and patch._seq > 0 then
+	if isValidSeq(patch._seq) then
 		lastSnapshot._seq = patch._seq
 	end
 	fireSnapshotListeners(lastSnapshot)

@@ -5,6 +5,15 @@
 --   3. Hook into character spawns
 --   4. Equip default kit on fresh profiles
 --   5. Replicate inventory + combat snapshot to the client
+--
+-- NOTE: this bootstraps the OLDER of DungeonBlox's two parallel profile
+-- systems (PlayerDataManager/DataSchema -- see the header comment at the top
+-- of shared/DataSchema.lua for the full map). DungeonProfileService is
+-- bootstrapped separately and owns currencies/equipment/the visible
+-- inventory UI; this file's profile is still the sole owner of HP/MaxHP/
+-- Armor and RPG stats, so both systems genuinely run per-player at once.
+-- This file is confirmed live (it is the thing that actually starts
+-- PlayerDataManager for every player), not legacy cruft sitting unused.
 
 local Players             = game:GetService("Players")
 local ServerScriptService = game:GetService("ServerScriptService")

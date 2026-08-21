@@ -473,15 +473,119 @@ end
 
 local StarterPack = game:GetService("StarterPack")
 
-local function grantStarterPackWoodenPickaxe(player)
-    if playerHasPhysicalPickaxe(player) then
+---------------------------------------------------------------------------
+-- Generic "starter tool + gather quest" pattern
+--
+-- Miner (pickaxe/coal) and Fisherman (spear/fish) are the exact same shape:
+--   1. A "greet" action grants a starter tool once, if the player doesn't
+--      already own one (physically equipped/backpacked, or in the dungeon
+--      inventory) -- gated by a one-shot "greeting done" profile flag.
+--   2. A "quest" action starts a fetch-N-of-X contract exactly once; repeat
+--      calls just report progress (progress is bumped elsewhere -- by the
+--      mining/fishing systems -- and completion/payout also happen elsewhere;
+--      this handler only starts the contract and narrates its state).
+-- This used to be two full copies of the same ~200 lines with only names,
+-- flag keys, and dialogue strings swapped -- GATHER_QUESTS below is the one
+-- place that now needs to change to retune either quest's text or add a
+-- third gathering NPC (e.g. a future Woodcutter).
+---------------------------------------------------------------------------
+
+local GATHER_QUESTS = {
+    Miner = {
+        npcType         = "Miner",
+        logLabel        = "Miner",              -- prefix used in warn() on grant failure
+        toolItemId      = "WoodenPickaxe",       -- both the GrantItemId itemId AND the StarterPack template name
+        toolNames       = { "WoodenPickaxe", "Pickaxe", "Wooden Pickaxe" },
+        toolEquipSlot   = "Pickaxe",
+        toolScriptName  = "MiningScript",
+        greetFlagKey    = "minerPickaxeGreetingDone",
+        greetToolResultKey = "gavePickaxe",
+        greetErr        = "pickaxe_unavailable",
+        questFlagKey    = "minerCoalQuest",
+        alreadyDoneMsg  = "You already brought me that coal — much obliged.",
+        alreadyTakenMsg = "You already took that coal contract once. The guild doesn't hand out duplicates.",
+        progressMsg     = "You're on it: %d / %d coal collected. I'll pay %d coins when it's done.",
+        startMsg        = "I need five lumps of coal from the veins out there. Bring them in through proper mining — I'll pay you %d coins when you've got all five.",
+    },
+    Fisherman = {
+        npcType         = "Fisherman",
+        logLabel        = "Fisher",
+        toolItemId      = "WoodenSpear",
+        toolNames       = { "WoodenSpear", "Spear" },
+        toolEquipSlot   = "FishingSpear",
+        toolScriptName  = "FishClient",
+        greetFlagKey    = "fisherSpearGreetingDone",
+        greetToolResultKey = "gaveSpear",
+        greetErr        = "spear_unavailable",
+        questFlagKey    = "fisherFishQuest",
+        alreadyDoneMsg  = "You already brought me those fish — much obliged.",
+        alreadyTakenMsg = "You already took that fishing contract once. The guild doesn't hand out duplicates.",
+        progressMsg     = "You're on it: %d / %d fish landed. I'll pay %d coins when it's done.",
+        startMsg        = "Head to open water with that spear and land five fish for the camp kitchen. I'll pay you %d coins when you've got all five.",
+    },
+}
+
+local function toolLooksLikeGatherTool(cfg, t)
+    if not t or not t:IsA("Tool") then
+        return false
+    end
+    for _, n in ipairs(cfg.toolNames) do
+        if t.Name == n then
+            return true
+        end
+    end
+    if t:GetAttribute("DungeonEquipSlot") == cfg.toolEquipSlot then
+        return true
+    end
+    if t:FindFirstChild(cfg.toolScriptName) then
+        return true
+    end
+    return false
+end
+
+local function playerHasPhysicalGatherTool(cfg, player)
+    local char = player.Character
+    if char then
+        for _, c in ipairs(char:GetChildren()) do
+            if toolLooksLikeGatherTool(cfg, c) then
+                return true
+            end
+        end
+    end
+    local bp = player:FindFirstChildOfClass("Backpack")
+    if bp then
+        for _, c in ipairs(bp:GetChildren()) do
+            if toolLooksLikeGatherTool(cfg, c) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function profileHasGatherToolInventory(cfg, profile)
+    for _, it in pairs(profile.inventory or {}) do
+        if type(it) == "table" then
+            if it.equipSlot == cfg.toolEquipSlot then
+                return true
+            end
+            if it.itemId == cfg.toolItemId then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function grantStarterPackGatherTool(cfg, player)
+    if playerHasPhysicalGatherTool(cfg, player) then
         return true
     end
     local bp = player:FindFirstChildOfClass("Backpack") or player:WaitForChild("Backpack", 15)
     if not bp then
         return false
     end
-    local tmpl = StarterPack:FindFirstChild("WoodenPickaxe")
+    local tmpl = StarterPack:FindFirstChild(cfg.toolItemId)
     if not tmpl or not tmpl:IsA("Tool") then
         return false
     end
@@ -490,75 +594,25 @@ local function grantStarterPackWoodenPickaxe(player)
     return true
 end
 
-local function toolLooksLikePickaxe(t)
-    if not t or not t:IsA("Tool") then
-        return false
-    end
-    local n = t.Name
-    if n == "WoodenPickaxe" or n == "Pickaxe" or n == "Wooden Pickaxe" then
-        return true
-    end
-    if t:GetAttribute("DungeonEquipSlot") == "Pickaxe" then
-        return true
-    end
-    if t:FindFirstChild("MiningScript") then
-        return true
-    end
-    return false
-end
-
-local function playerHasPhysicalPickaxe(player)
-    local char = player.Character
-    if char then
-        for _, c in ipairs(char:GetChildren()) do
-            if toolLooksLikePickaxe(c) then
-                return true
-            end
-        end
-    end
-    local bp = player:FindFirstChildOfClass("Backpack")
-    if bp then
-        for _, c in ipairs(bp:GetChildren()) do
-            if toolLooksLikePickaxe(c) then
-                return true
-            end
-        end
-    end
-    return false
-end
-
-local function profileHasPickaxeInventory(profile)
-    for _, it in pairs(profile.inventory or {}) do
-        if type(it) == "table" then
-            if it.equipSlot == "Pickaxe" then
-                return true
-            end
-            if it.itemId == "WoodenPickaxe" then
-                return true
-            end
-        end
-    end
-    return false
-end
-
--- Miner coal quest: always grant another WoodenPickaxe via GrantItemId (same as TradeOre receive), even if the player already owns one.
-local function ensureMinerPickaxeForQuest(player, dProfile)
+-- Gather quests always grant another copy of the tool via GrantItemId (same as
+-- TradeOre receive), even if the player already owns one.
+local function ensureGatherToolForQuest(cfg, player, dProfile)
     local raidWas = dProfile.flags.inRaid == true
     if raidWas then
         dProfile.flags.inRaid = false
     end
-    local okRecv, errRecv = DungeonProfile.GrantItemId(player, "WoodenPickaxe", 1)
+    local okRecv, errRecv = DungeonProfile.GrantItemId(player, cfg.toolItemId, 1)
     if raidWas then
         dProfile.flags.inRaid = true
     end
     if not okRecv then
-        warn("[NPCService] Miner quest GrantItemId(WoodenPickaxe) failed:", errRecv)
-        grantStarterPackWoodenPickaxe(player)
+        warn("[NPCService] " .. cfg.logLabel .. " quest GrantItemId(" .. cfg.toolItemId .. ") failed:", errRecv)
+        grantStarterPackGatherTool(cfg, player)
     end
 end
 
-local function handleTalkMinerGreet(player, _npcId, npcType, _params)
-    if npcType ~= "Miner" then
+local function handleGatherGreet(cfg, player, _npcId, npcType, _params)
+    if npcType ~= cfg.npcType then
         return { ok = false, err = "bad_npc" }
     end
 
@@ -570,35 +624,35 @@ local function handleTalkMinerGreet(player, _npcId, npcType, _params)
     if type(dProfile.flags) ~= "table" then
         dProfile.flags = {}
     end
-    if dProfile.flags.minerPickaxeGreetingDone == nil then
-        dProfile.flags.minerPickaxeGreetingDone = false
+    if dProfile.flags[cfg.greetFlagKey] == nil then
+        dProfile.flags[cfg.greetFlagKey] = false
     end
 
-    if dProfile.flags.minerPickaxeGreetingDone then
-        return { ok = true, gavePickaxe = false }
+    if dProfile.flags[cfg.greetFlagKey] then
+        return { ok = true, [cfg.greetToolResultKey] = false }
     end
 
-    local needGrant = not profileHasPickaxeInventory(dProfile) and not playerHasPhysicalPickaxe(player)
+    local needGrant = not profileHasGatherToolInventory(cfg, dProfile) and not playerHasPhysicalGatherTool(cfg, player)
 
     if not needGrant then
-        dProfile.flags.minerPickaxeGreetingDone = true
+        dProfile.flags[cfg.greetFlagKey] = true
         DungeonProfile.PushProfile(player)
-        return { ok = true, gavePickaxe = false }
+        return { ok = true, [cfg.greetToolResultKey] = false }
     end
 
-    local granted = grantStarterPackWoodenPickaxe(player)
+    local granted = grantStarterPackGatherTool(cfg, player)
     if not granted then
-        return { ok = false, err = "pickaxe_unavailable" }
+        return { ok = false, err = cfg.greetErr }
     end
 
-    dProfile.flags.minerPickaxeGreetingDone = true
+    dProfile.flags[cfg.greetFlagKey] = true
     DungeonProfile.PushProfile(player)
 
-    return { ok = true, gavePickaxe = true }
+    return { ok = true, [cfg.greetToolResultKey] = true }
 end
 
-local function handleTalkMinerCoalQuest(player, _npcId, npcType, _params)
-    if npcType ~= "Miner" then
+local function handleGatherQuest(cfg, player, _npcId, npcType, _params)
+    if npcType ~= cfg.npcType then
         return { ok = false, err = "bad_npc" }
     end
 
@@ -610,10 +664,10 @@ local function handleTalkMinerCoalQuest(player, _npcId, npcType, _params)
     if type(dProfile.flags) ~= "table" then
         dProfile.flags = {}
     end
-    local q = dProfile.flags.minerCoalQuest
+    local q = dProfile.flags[cfg.questFlagKey]
     if type(q) ~= "table" then
         q = { active = false, completed = false, started = false, target = 5, progress = 0, rewardCoins = 10, rewardPaid = false }
-        dProfile.flags.minerCoalQuest = q
+        dProfile.flags[cfg.questFlagKey] = q
     end
     if q.started == nil then
         q.started = (q.completed == true) or (q.active == true)
@@ -629,28 +683,22 @@ local function handleTalkMinerCoalQuest(player, _npcId, npcType, _params)
     q.target = target
 
     if q.completed then
-        return { ok = true, msg = "You already brought me that coal — much obliged." }
+        return { ok = true, msg = cfg.alreadyDoneMsg }
     end
 
     if q.started == true and q.active ~= true then
-        return {
-            ok = true,
-            msg = "You already took that coal contract once. The guild doesn't hand out duplicates.",
-        }
+        return { ok = true, msg = cfg.alreadyTakenMsg }
     end
 
     if q.active then
         local p = math.min(target, math.floor(tonumber(q.progress) or 0))
         local rc = math.max(0, math.floor(tonumber(q.rewardCoins) or 10))
-        return {
-            ok = true,
-            msg = string.format("You're on it: %d / %d coal collected. I'll pay %d coins when it's done.", p, target, rc),
-        }
+        return { ok = true, msg = string.format(cfg.progressMsg, p, target, rc) }
     end
 
     local firstStart = q.started ~= true
     if firstStart then
-        ensureMinerPickaxeForQuest(player, dProfile)
+        ensureGatherToolForQuest(cfg, player, dProfile)
     end
 
     q.started = true
@@ -661,209 +709,23 @@ local function handleTalkMinerCoalQuest(player, _npcId, npcType, _params)
     q.rewardPaid = false
     DungeonProfile.PushProfile(player)
 
-    return {
-        ok = true,
-        msg = string.format(
-            "I need five lumps of coal from the veins out there. Bring them in through proper mining — I'll pay you %d coins when you've got all five.",
-            q.rewardCoins
-        ),
-    }
+    return { ok = true, msg = string.format(cfg.startMsg, q.rewardCoins) }
 end
 
-local function toolLooksLikeSpear(t)
-    if not t or not t:IsA("Tool") then
-        return false
-    end
-    local n = t.Name
-    if n == "WoodenSpear" or n == "Spear" then
-        return true
-    end
-    if t:GetAttribute("DungeonEquipSlot") == "FishingSpear" then
-        return true
-    end
-    if t:FindFirstChild("FishClient") then
-        return true
-    end
-    return false
+local function handleTalkMinerGreet(player, npcId, npcType, params)
+    return handleGatherGreet(GATHER_QUESTS.Miner, player, npcId, npcType, params)
 end
 
-local function playerHasPhysicalSpear(player)
-    local char = player.Character
-    if char then
-        for _, c in ipairs(char:GetChildren()) do
-            if toolLooksLikeSpear(c) then
-                return true
-            end
-        end
-    end
-    local bp = player:FindFirstChildOfClass("Backpack")
-    if bp then
-        for _, c in ipairs(bp:GetChildren()) do
-            if toolLooksLikeSpear(c) then
-                return true
-            end
-        end
-    end
-    return false
+local function handleTalkMinerCoalQuest(player, npcId, npcType, params)
+    return handleGatherQuest(GATHER_QUESTS.Miner, player, npcId, npcType, params)
 end
 
-local function profileHasSpearInventory(profile)
-    for _, it in pairs(profile.inventory or {}) do
-        if type(it) == "table" then
-            if it.equipSlot == "FishingSpear" then
-                return true
-            end
-            if it.itemId == "WoodenSpear" then
-                return true
-            end
-        end
-    end
-    return false
+local function handleTalkFishermanGreet(player, npcId, npcType, params)
+    return handleGatherGreet(GATHER_QUESTS.Fisherman, player, npcId, npcType, params)
 end
 
-local function grantStarterPackWoodenSpear(player)
-    if playerHasPhysicalSpear(player) then
-        return true
-    end
-    local bp = player:FindFirstChildOfClass("Backpack") or player:WaitForChild("Backpack", 15)
-    if not bp then
-        return false
-    end
-    local tmpl = StarterPack:FindFirstChild("WoodenSpear")
-    if not tmpl or not tmpl:IsA("Tool") then
-        return false
-    end
-    local tool = tmpl:Clone()
-    tool.Parent = bp
-    return true
-end
-
-local function ensureFisherSpearForQuest(player, dProfile)
-    local raidWas = dProfile.flags.inRaid == true
-    if raidWas then
-        dProfile.flags.inRaid = false
-    end
-    local okRecv, errRecv = DungeonProfile.GrantItemId(player, "WoodenSpear", 1)
-    if raidWas then
-        dProfile.flags.inRaid = true
-    end
-    if not okRecv then
-        warn("[NPCService] Fisher quest GrantItemId(WoodenSpear) failed:", errRecv)
-        grantStarterPackWoodenSpear(player)
-    end
-end
-
-local function handleTalkFishermanGreet(player, _npcId, npcType, _params)
-    if npcType ~= "Fisherman" then
-        return { ok = false, err = "bad_npc" }
-    end
-
-    local dProfile = getDungeonProfile(player)
-    if not dProfile then
-        return { ok = false, err = "no_profile" }
-    end
-
-    if type(dProfile.flags) ~= "table" then
-        dProfile.flags = {}
-    end
-    if dProfile.flags.fisherSpearGreetingDone == nil then
-        dProfile.flags.fisherSpearGreetingDone = false
-    end
-
-    if dProfile.flags.fisherSpearGreetingDone then
-        return { ok = true, gaveSpear = false }
-    end
-
-    local needGrant = not profileHasSpearInventory(dProfile) and not playerHasPhysicalSpear(player)
-
-    if not needGrant then
-        dProfile.flags.fisherSpearGreetingDone = true
-        DungeonProfile.PushProfile(player)
-        return { ok = true, gaveSpear = false }
-    end
-
-    local granted = grantStarterPackWoodenSpear(player)
-    if not granted then
-        return { ok = false, err = "spear_unavailable" }
-    end
-
-    dProfile.flags.fisherSpearGreetingDone = true
-    DungeonProfile.PushProfile(player)
-
-    return { ok = true, gaveSpear = true }
-end
-
-local function handleTalkFishermanFishQuest(player, _npcId, npcType, _params)
-    if npcType ~= "Fisherman" then
-        return { ok = false, err = "bad_npc" }
-    end
-
-    local dProfile = getDungeonProfile(player)
-    if not dProfile then
-        return { ok = false, err = "no_profile" }
-    end
-
-    if type(dProfile.flags) ~= "table" then
-        dProfile.flags = {}
-    end
-    local q = dProfile.flags.fisherFishQuest
-    if type(q) ~= "table" then
-        q = { active = false, completed = false, started = false, target = 5, progress = 0, rewardCoins = 10, rewardPaid = false }
-        dProfile.flags.fisherFishQuest = q
-    end
-    if q.started == nil then
-        q.started = (q.completed == true) or (q.active == true)
-    end
-    if q.rewardCoins == nil then
-        q.rewardCoins = 10
-    end
-    if q.rewardPaid == nil then
-        q.rewardPaid = false
-    end
-
-    local target = math.max(1, math.floor(tonumber(q.target) or 5))
-    q.target = target
-
-    if q.completed then
-        return { ok = true, msg = "You already brought me those fish — much obliged." }
-    end
-
-    if q.started == true and q.active ~= true then
-        return {
-            ok = true,
-            msg = "You already took that fishing contract once. The guild doesn't hand out duplicates.",
-        }
-    end
-
-    if q.active then
-        local p = math.min(target, math.floor(tonumber(q.progress) or 0))
-        local rc = math.max(0, math.floor(tonumber(q.rewardCoins) or 10))
-        return {
-            ok = true,
-            msg = string.format("You're on it: %d / %d fish landed. I'll pay %d coins when it's done.", p, target, rc),
-        }
-    end
-
-    local firstStart = q.started ~= true
-    if firstStart then
-        ensureFisherSpearForQuest(player, dProfile)
-    end
-
-    q.started = true
-    q.active = true
-    q.progress = 0
-    q.completed = false
-    q.rewardCoins = math.max(0, math.floor(tonumber(q.rewardCoins) or 10))
-    q.rewardPaid = false
-    DungeonProfile.PushProfile(player)
-
-    return {
-        ok = true,
-        msg = string.format(
-            "Head to open water with that spear and land five fish for the camp kitchen. I'll pay you %d coins when you've got all five.",
-            q.rewardCoins
-        ),
-    }
+local function handleTalkFishermanFishQuest(player, npcId, npcType, params)
+    return handleGatherQuest(GATHER_QUESTS.Fisherman, player, npcId, npcType, params)
 end
 
 ---------------------------------------------------------------------------

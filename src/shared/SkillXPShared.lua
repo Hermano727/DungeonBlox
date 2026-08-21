@@ -1,6 +1,8 @@
 -- SkillXPShared
 -- Client-side XP state shared between HUD scripts and the Tab skills popup.
 
+local Players = game:GetService("Players")
+
 local SkillXPShared = {}
 
 SkillXPShared.BASE_XP_REQUIREMENT = 5
@@ -41,6 +43,42 @@ function SkillXPShared.Notify()
 	for _, cb in ipairs(listeners) do
 		task.defer(cb)
 	end
+end
+
+-- Add XP to a named skill track, rolling over as many level-ups as the gain
+-- warrants, then stamps the Last<Skill>XPGain attribute XpHud.luau reads to
+-- decide which floating bar to show/raise, and notifies subscribers (the
+-- Skills tab panel, etc).
+--
+-- skillKey must be the exact key of one of the tables above ("Combat",
+-- "Mining", "Fishing") -- CombatXPClient/FishingXPClient/MiningScript used to
+-- each hand-roll this same while-loop independently (add XP, pop levels
+-- while XP >= requirement, print, stamp attribute, notify); this is that
+-- logic in one place so the three skills can't drift out of sync with each
+-- other's level-up behavior.
+function SkillXPShared.AddXP(skillKey, amount)
+	local state = SkillXPShared[skillKey]
+	if type(state) ~= "table" then
+		warn("[SkillXPShared] AddXP: unknown skill '" .. tostring(skillKey) .. "'")
+		return
+	end
+
+	state.XP = state.XP + (tonumber(amount) or 0)
+	local xpNeeded = SkillXPShared.GetXPForLevel(state.Level)
+
+	while state.XP >= xpNeeded do
+		state.XP = state.XP - xpNeeded
+		state.Level = state.Level + 1
+		xpNeeded = SkillXPShared.GetXPForLevel(state.Level)
+		print(skillKey .. " level up! Now level " .. state.Level)
+	end
+
+	local player = Players.LocalPlayer
+	if player then
+		player:SetAttribute("Last" .. skillKey .. "XPGain", tick())
+	end
+
+	SkillXPShared.Notify()
 end
 
 -- Place Combat / Mining / Fishing XP bars in the same bottom-left slot (world HUD).

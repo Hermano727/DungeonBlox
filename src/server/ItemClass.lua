@@ -116,8 +116,11 @@ function ItemClass:toGrantTemplate()
         level        = self.level,
         enchantLevel = 0,
         subStats     = subStatsDict,
-        -- Armor pieces use their specific slot (Helm/Chest/Legs/Boots), not generic "Armor"
-        equipSlot    = self.weaponType and "Weapon" or (self.armorSlot or "Armor"),
+        -- Armor pieces use their specific slot (Helm/Chest/Legs/Boots/Shield), already
+        -- correct as-is. Weapons used to hardcode "Weapon" here for every weaponType,
+        -- including Bow -- see ItemConfig.WEAPON_TYPE_EQUIP_SLOT (shared with the catalog
+        -- grant path in src/shared/Items/WeaponItem.lua so both agree on slots).
+        equipSlot    = self.weaponType and (Config.WEAPON_TYPE_EQUIP_SLOT[self.weaponType] or "Weapon") or (self.armorSlot or "Armor"),
         tags         = tags,
         toolPrefabName = toolPrefabName,
     }

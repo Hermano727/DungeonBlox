@@ -36,7 +36,6 @@ local ERR = {
 	too_far = "Move closer to the altar.",
 	in_raid = "Cannot use the altar during a dungeon run.",
 	not_gear = "Only weapons and armor can be offered.",
-	tier_mismatch = "This altar only accepts T" .. tostring(currentAltarTier) .. " gear.",
 	already_upgraded = "That item was already ascended once.",
 	max_rarity = "That item is already Legendary.",
 	rarity_mismatch = "Sacrifices must match the center item's rarity.",
@@ -520,7 +519,15 @@ upgradeBtn.MouseButton1Click:Connect(function()
 		DungeonMenuNet.requestSync()
 		rebuild()
 	else
-		local msg = ERR[res.err] or ("Failed: " .. tostring(res.err))
+		-- tier_mismatch isn't in the ERR table because its text depends on
+		-- currentAltarTier, which changes per altar the player opens (a
+		-- static string here would always say "T1" even at a T3+ altar).
+		local msg
+		if res.err == "tier_mismatch" then
+			msg = string.format("This altar only accepts T%d gear.", currentAltarTier)
+		else
+			msg = ERR[res.err] or ("Failed: " .. tostring(res.err))
+		end
 		setStatus(msg, Color3.fromRGB(255, 120, 120))
 	end
 end)
@@ -536,9 +543,7 @@ UserInputService.InputBegan:Connect(function(input, gp)
 end)
 
 local function resolveAltarPrompt(prompt)
-	if not prompt or not prompt.Name ~= "AltarPrompt" then
-		if not prompt or prompt.Name ~= "AltarPrompt" then return nil end
-	end
+	if not prompt or prompt.Name ~= "AltarPrompt" then return nil end
 	local model = prompt:FindFirstAncestorOfClass("Model")
 	if not model then return nil end
 	local tier = math.floor(tonumber(model:GetAttribute("AltarTier")) or 1)

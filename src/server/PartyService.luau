@@ -12,6 +12,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local PartyConfig = require(ReplicatedStorage:WaitForChild("PartyConfig"))
+local RemoteUtils = require(ReplicatedStorage:WaitForChild("RemoteUtils"))
 
 local PartyService = {}
 
@@ -33,43 +34,11 @@ local PartyRequest
 local PartyInviteReceived
 local PartyStateSync
 
-local function ensureFolder(parent, name)
-	local f = parent:FindFirstChild(name)
-	if not f then
-		f = Instance.new("Folder")
-		f.Name = name
-		f.Parent = parent
-	end
-	return f
-end
-
-local function ensureRemoteEvent(parent, name)
-	local e = parent:FindFirstChild(name)
-	if e and e:IsA("RemoteEvent") then
-		return e
-	end
-	if e then
-		e:Destroy()
-	end
-	local ev = Instance.new("RemoteEvent")
-	ev.Name = name
-	ev.Parent = parent
-	return ev
-end
-
-local function ensureRemoteFunction(parent, name)
-	local rf = parent:FindFirstChild(name)
-	if rf and rf:IsA("RemoteFunction") then
-		return rf
-	end
-	if rf then
-		rf:Destroy()
-	end
-	rf = Instance.new("RemoteFunction")
-	rf.Name = name
-	rf.Parent = parent
-	return rf
-end
+-- Folder/remote ensuring now lives in shared RemoteUtils (see that module's
+-- header) so this is no longer its own copy of the pattern.
+local ensureFolder = RemoteUtils.EnsureFolder
+local ensureRemoteEvent = RemoteUtils.EnsureRemoteEvent
+local ensureRemoteFunction = RemoteUtils.EnsureRemoteFunction
 
 local function throttle(userId)
 	local now = os.clock()

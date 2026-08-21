@@ -8,8 +8,6 @@
     Visual markers are recreated on startup under Workspace.Spawners/DevMobMarkers.
 
     All events are silently dropped for non-dev players.
-
-    Add your Roblox UserId(s) to DEV_USERIDS below.
 ]]
 
 local CollectionService = game:GetService("CollectionService")
@@ -17,22 +15,10 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players           = game:GetService("Players")
 local ServerScriptService = game:GetService("ServerScriptService")
 
--- !! Add every developer's UserId here !!
-local DEV_USERIDS = {
-	706604079,
-	62963717,
-	446429007,
-	49263337
-    -- e.g. 123456789
-}
-
-local function isDev(player)
-    for _, id in ipairs(DEV_USERIDS) do
-        if player.UserId == id then return true end
-    end
-    -- Also allow in solo Studio sessions (place owner / team create)
-    return game:GetService("RunService"):IsStudio()
-end
+-- Dev roster lives in ReplicatedStorage.DevRoster (shared with DayNightService,
+-- DevClient, and HearthstoneConfig so the list can't drift between them).
+local DevRoster = require(ReplicatedStorage:WaitForChild("DevRoster"))
+local isDev = DevRoster.IsDev
 
 ---------------------------------------------------------------------------
 -- RemoteEvent / RemoteFunction setup
@@ -58,6 +44,7 @@ local evPlace    = makeEvent("DevPlaceSpawner")
 local evDelete   = makeEvent("DevDeleteSpawner")
 local rfList     = makeFunc("DevListSpawners")
 local rfPlaceZone = makeFunc("DevPlaceZone")
+local rfSetZoneMusic = makeFunc("DevSetZoneMusic")
 
 local MobDevSpawnStore = require(ServerScriptService:WaitForChild("MobDevSpawnStore"))
 local NpcDevSpawnStore = require(ServerScriptService:WaitForChild("NpcDevSpawnStore"))
@@ -198,11 +185,17 @@ end
 -- Part factory
 ---------------------------------------------------------------------------
 
-local function makeMobSpawnerPart(attrs, position, spawnId)
+-- Shared shape/physics/tag setup for both marker kinds below -- the only
+-- things that ever differed between makeMobSpawnerPart and
+-- makeNpcSpawnerPart were size, color, which per-kind attributes to stamp,
+-- the label text/color, and which folder to parent into. Factoring that out
+-- keeps a third marker kind (if one's ever added) from having to copy the
+-- Part-property boilerplate a third time.
+local function newSpawnerMarkerPart(diameter, color, position, spawnerType, spawnId)
     local part            = Instance.new("Part")
     part.Name             = "SpawnerMarker"
     part.Shape            = Enum.PartType.Cylinder
-    part.Size             = Vector3.new(1, attrs.ActivationRadius * 2, attrs.ActivationRadius * 2)
+    part.Size             = Vector3.new(1, diameter, diameter)
     part.CFrame           = CFrame.new(position) * CFrame.Angles(0, 0, math.rad(90))
     part.Anchored         = true
     part.CanCollide       = false
@@ -210,8 +203,24 @@ local function makeMobSpawnerPart(attrs, position, spawnId)
     part.CanTouch         = false
     part.CastShadow       = false
     part.Transparency     = 0.80
-    part.Color            = Color3.fromRGB(220, 60, 60)   -- red = mob
+    part.Color            = color
     part.Material         = Enum.Material.Neon
+
+    part:SetAttribute("SpawnerType", spawnerType)
+    if type(spawnId) == "string" and spawnId ~= "" then
+        part:SetAttribute("DevSpawnId", spawnId)
+    end
+
+    CollectionService:AddTag(part, "SpawnerMarker")
+    return part
+end
+
+local function makeMobSpawnerPart(attrs, position, spawnId)
+    local part = newSpawnerMarkerPart(
+        attrs.ActivationRadius * 2,
+        Color3.fromRGB(220, 60, 60),   -- red = mob
+        position, "Mob", spawnId
+    )
 
     part:SetAttribute("MobId",            attrs.MobId)
     part:SetAttribute("Count",            attrs.Count)
@@ -219,12 +228,6 @@ local function makeMobSpawnerPart(attrs, position, spawnId)
     part:SetAttribute("ActivationRadius", attrs.ActivationRadius)
     part:SetAttribute("ZoneName",         attrs.ZoneName or "Default")
     part:SetAttribute("Active",           true)
-    part:SetAttribute("SpawnerType",      "Mob")
-    if type(spawnId) == "string" and spawnId ~= "" then
-        part:SetAttribute("DevSpawnId", spawnId)
-    end
-
-    CollectionService:AddTag(part, "SpawnerMarker")
 
     local label = string.format("MOB  %s  x%d", attrs.MobId, attrs.Count)
     applyLabel(part, label, Color3.fromRGB(255, 140, 140))
@@ -234,29 +237,15 @@ local function makeMobSpawnerPart(attrs, position, spawnId)
 end
 
 local function makeNpcSpawnerPart(attrs, position, spawnId)
-    local part            = Instance.new("Part")
-    part.Name             = "SpawnerMarker"
-    part.Shape            = Enum.PartType.Cylinder
-    part.Size             = Vector3.new(1, 6, 6)
-    part.CFrame           = CFrame.new(position) * CFrame.Angles(0, 0, math.rad(90))
-    part.Anchored         = true
-    part.CanCollide       = false
-    part.CanQuery         = false
-    part.CanTouch         = false
-    part.CastShadow       = false
-    part.Transparency     = 0.80
-    part.Color            = Color3.fromRGB(60, 140, 220)   -- blue = NPC
-    part.Material         = Enum.Material.Neon
+    local part = newSpawnerMarkerPart(
+        6,
+        Color3.fromRGB(60, 140, 220),  -- blue = NPC
+        position, "NPC", spawnId
+    )
 
     part:SetAttribute("NpcId",   attrs.NpcId)
     part:SetAttribute("NpcType", attrs.NpcType)
     part:SetAttribute("NpcName", attrs.NpcName)
-    part:SetAttribute("SpawnerType", "NPC")
-    if type(spawnId) == "string" and spawnId ~= "" then
-        part:SetAttribute("DevSpawnId", spawnId)
-    end
-
-    CollectionService:AddTag(part, "SpawnerMarker")
 
     local label = string.format("NPC  %s\n%s", attrs.NpcName, attrs.NpcType)
     applyLabel(part, label, Color3.fromRGB(140, 200, 255))
@@ -309,6 +298,7 @@ local function placeZoneFromClientData(data, position)
 		radius           = cleanedPoints and nil or (tonumber(data.Radius) or 60),
 		isEliteZone      = data.IsEliteZone == true,
 		eliteMobId       = type(data.EliteMobId) == "string" and data.EliteMobId or "",
+		musicId          = type(data.MusicId) == "string" and data.MusicId or "",
 	}
 	local ok, zOrErr = ZoneService.AddZone(attrs, position)
 	if not ok then
@@ -470,6 +460,7 @@ rfList.OnServerInvoke = function(player)
             Part        = nil,
             SpawnId     = nil,
             ZoneId      = z.id,
+            MusicId     = z.musicId or "",
         })
     end
 
@@ -549,6 +540,24 @@ rfPlaceZone.OnServerInvoke = function(player, data)
 		return { ok = false, error = "bad_data" }
 	end
 	return placeZoneFromClientData(data, data.Position)
+end
+
+-- Sets/clears the looped soundtrack on an EXISTING zone without redrawing it.
+rfSetZoneMusic.OnServerInvoke = function(player, data)
+	if not isDev(player) then
+		return { ok = false, error = "not_dev" }
+	end
+	if type(data) ~= "table" or type(data.ZoneId) ~= "string" or data.ZoneId == "" then
+		return { ok = false, error = "bad_data" }
+	end
+	local musicId = type(data.MusicId) == "string" and data.MusicId or ""
+	local ok, zOrErr = ZoneService.SetZoneMusic(data.ZoneId, musicId)
+	if not ok then
+		return { ok = false, error = tostring(zOrErr) }
+	end
+	print(string.format("[DevService] %s set zone music for %s -> %s",
+		player.Name, zOrErr.name, musicId == "" and "(none)" or musicId))
+	return { ok = true, zone = zOrErr }
 end
 
 task.defer(function()

@@ -4,24 +4,13 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+local MountRiderGuiCleanup = require(ReplicatedStorage:WaitForChild("MountRiderGuiCleanup"))
+
 local player = Players.LocalPlayer
 
 local function cleanupRiderGuiAndJump()
 	local pg = player:FindFirstChildOfClass("PlayerGui")
-	if pg then
-		for _, c in ipairs(pg:GetChildren()) do
-			if c:IsA("LocalScript") and c.Name == "LocalControlScript" then
-				local hv = c:FindFirstChild("Horse")
-				if hv and hv:IsA("ObjectValue") then
-					c:Destroy()
-				end
-			end
-		end
-		local hg = pg:FindFirstChild("HorseGui")
-		if hg then
-			hg:Destroy()
-		end
-	end
+	MountRiderGuiCleanup.Clean(pg)
 
 	local char = player.Character
 	local hum = char and char:FindFirstChildOfClass("Humanoid")

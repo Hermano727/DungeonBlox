@@ -14,11 +14,39 @@ local HearthstoneRegistry = {}
 local cache = {}  -- { [id] = { id, name, cost, position: Vector3 } }
 local ds
 
+-- Precomputed once at require-time: seed ids never change at runtime, so
+-- AddLocation/RemoveLocation no longer each rebuild this set from scratch
+-- on every single call.
+local seedIds = {}
+for _, seed in ipairs(HearthstoneConfig.SEED_LOCATIONS) do
+    seedIds[seed.id] = true
+end
+
 local function getDS()
     if not ds then
         ds = DataStoreService:GetDataStore(HearthstoneConfig.DATASTORE_KEY)
     end
     return ds
+end
+
+-- Shared by AddLocation/RemoveLocation: serializes every non-seed cache
+-- entry into the flat px/py/pz shape DataStore expects. Seeds are never
+-- persisted since HearthstoneConfig.SEED_LOCATIONS already reseeds them
+-- for free on every server start.
+local function buildSaveTable()
+    local toSave = {}
+    for lid, loc in pairs(cache) do
+        if not seedIds[lid] then
+            toSave[lid] = {
+                name = loc.name,
+                cost = loc.cost,
+                px   = loc.position.X,
+                py   = loc.position.Y,
+                pz   = loc.position.Z,
+            }
+        end
+    end
+    return toSave
 end
 
 function HearthstoneRegistry.Load()
@@ -85,26 +113,8 @@ function HearthstoneRegistry.AddLocation(id, name, cost, position)
 
     cache[id] = { id = id, name = name, cost = cost, position = position }
 
-    -- Build the save table from non-seed entries only.
-    local seedIds = {}
-    for _, seed in ipairs(HearthstoneConfig.SEED_LOCATIONS) do
-        seedIds[seed.id] = true
-    end
-    local toSave = {}
-    for lid, loc in pairs(cache) do
-        if not seedIds[lid] then
-            toSave[lid] = {
-                name = loc.name,
-                cost = loc.cost,
-                px   = loc.position.X,
-                py   = loc.position.Y,
-                pz   = loc.position.Z,
-            }
-        end
-    end
-
     local ok, err = pcall(function()
-        getDS():SetAsync("locations", toSave)
+        getDS():SetAsync("locations", buildSaveTable())
     end)
     if not ok then
         warn("[HearthstoneRegistry] DataStore write failed: " .. tostring(err))
@@ -117,29 +127,13 @@ end
 function HearthstoneRegistry.RemoveLocation(id)
     if type(id) ~= "string" or id == "" then return false, "bad_id" end
 
-    local seedIds = {}
-    for _, seed in ipairs(HearthstoneConfig.SEED_LOCATIONS) do
-        seedIds[seed.id] = true
-    end
     if seedIds[id] then return false, "cannot_delete_seed" end
     if not cache[id] then return false, "not_found" end
 
     cache[id] = nil
 
-    local toSave = {}
-    for lid, loc in pairs(cache) do
-        if not seedIds[lid] then
-            toSave[lid] = {
-                name = loc.name,
-                cost = loc.cost,
-                px   = loc.position.X,
-                py   = loc.position.Y,
-                pz   = loc.position.Z,
-            }
-        end
-    end
     local ok, err = pcall(function()
-        getDS():SetAsync("locations", toSave)
+        getDS():SetAsync("locations", buildSaveTable())
     end)
     if not ok then
         warn("[HearthstoneRegistry] DataStore delete failed: " .. tostring(err))

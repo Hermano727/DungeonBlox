@@ -12,6 +12,8 @@ local Workspace = game:GetService("Workspace")
 
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
 local DungeonProfile = require(ServerScriptService:WaitForChild("DungeonProfileService"))
+local RemoteUtils = require(ReplicatedStorage:WaitForChild("RemoteUtils"))
+local MountRiderGuiCleanup = require(ReplicatedStorage:WaitForChild("MountRiderGuiCleanup"))
 local ServerStorage = game:GetService("ServerStorage")
 
 local MOUNT_FOLDER_NAME = "DungeonHorseMounts"
@@ -20,32 +22,13 @@ local lastRequest = {} -- [userId] = os.clock()
 local riderCleanupRemote -- set at bottom when GameEvents remotes are created
 local RATE = 0.25
 
+-- Folder ensuring now lives in shared RemoteUtils (see that module's header).
 local function ensureGameEventsFolder()
-	local f = ReplicatedStorage:FindFirstChild("GameEvents")
-	if f and f:IsA("Folder") then
-		return f
-	end
-	if f then
-		f:Destroy()
-	end
-	f = Instance.new("Folder")
-	f.Name = "GameEvents"
-	f.Parent = ReplicatedStorage
-	return f
+	return RemoteUtils.EnsureFolder(ReplicatedStorage, "GameEvents")
 end
 
 local function getMountFolder()
-	local f = Workspace:FindFirstChild(MOUNT_FOLDER_NAME)
-	if f and f:IsA("Folder") then
-		return f
-	end
-	if f then
-		f:Destroy()
-	end
-	f = Instance.new("Folder")
-	f.Name = MOUNT_FOLDER_NAME
-	f.Parent = Workspace
-	return f
+	return RemoteUtils.EnsureFolder(Workspace, MOUNT_FOLDER_NAME)
 end
 
 local function destroyMountForPlayer(player)
@@ -62,20 +45,7 @@ local function destroyMountForPlayer(player)
 
 	-- Remove cloned horse ride UI/script before destroying the mount so the ride loop cannot error mid-frame.
 	local pg = player:FindFirstChildOfClass("PlayerGui")
-	if pg then
-		for _, c in ipairs(pg:GetChildren()) do
-			if c:IsA("LocalScript") and c.Name == "LocalControlScript" then
-				local hv = c:FindFirstChild("Horse")
-				if hv and hv:IsA("ObjectValue") then
-					c:Destroy()
-				end
-			end
-		end
-		local hg = pg:FindFirstChild("HorseGui")
-		if hg then
-			hg:Destroy()
-		end
-	end
+	MountRiderGuiCleanup.Clean(pg)
 
 	if m and m.Parent then
 		m:Destroy()
@@ -338,28 +308,8 @@ local function hookPlayer(player)
 end
 
 local gameEvents = ensureGameEventsFolder()
-local mountRequest = gameEvents:FindFirstChild("MountRequest")
-if mountRequest and not mountRequest:IsA("RemoteEvent") then
-	mountRequest:Destroy()
-	mountRequest = nil
-end
-if not mountRequest then
-	mountRequest = Instance.new("RemoteEvent")
-	mountRequest.Name = "MountRequest"
-	mountRequest.Parent = gameEvents
-end
-
-local rc = gameEvents:FindFirstChild("MountRiderCleanup")
-if rc and not rc:IsA("RemoteEvent") then
-	rc:Destroy()
-	rc = nil
-end
-if not rc then
-	rc = Instance.new("RemoteEvent")
-	rc.Name = "MountRiderCleanup"
-	rc.Parent = gameEvents
-end
-riderCleanupRemote = rc
+local mountRequest = RemoteUtils.EnsureRemoteEvent(gameEvents, "MountRequest")
+riderCleanupRemote = RemoteUtils.EnsureRemoteEvent(gameEvents, "MountRiderCleanup")
 
 mountRequest.OnServerEvent:Connect(onMountRequest)
 

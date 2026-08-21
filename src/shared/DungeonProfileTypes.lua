@@ -5,6 +5,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
+local ItemConfig = require(ReplicatedStorage:WaitForChild("ItemConfig"))
 
 local DungeonProfileTypes = {}
 
@@ -161,6 +162,8 @@ local VALID_RARITIES = {
 
 local VALID_SLOTS = {
 	Weapon      = true,
+	Bow         = true, -- was missing: every weapon used to collapse onto "Weapon" alone,
+	                     -- including bows -- see ItemConfig.WEAPON_TYPE_EQUIP_SLOT.
 	Armor       = true,
 	Helm        = true,
 	Chest       = true,
@@ -217,6 +220,15 @@ function DungeonProfileTypes.ValidateItemTemplate(t)
 	return true, nil
 end
 
+-- Every item created via src/shared/Items/ItemFactory.lua (catalog grants) or
+-- src/server/ItemClass.lua (procedural drops) already carries the correct `equipSlot` --
+-- this function's job is just to read it back. The branches below this point are a legacy
+-- safety net for items saved before that factory existed (see Reconcile's
+-- migrateLegacyEquipSlots, which proactively fixes those up on load) and should not
+-- normally fire for anything granted going forward. They warn when they DO fire so a
+-- future regression that stops stamping equipSlot gets caught immediately instead of
+-- silently degrading back into the old "every weapon/armor piece fights over one slot"
+-- bug.
 function DungeonProfileTypes.GetAllowedEquipSlot(item)
 	if type(item) ~= "table" then
 		return nil
@@ -225,18 +237,16 @@ function DungeonProfileTypes.GetAllowedEquipSlot(item)
 		return item.equipSlot
 	end
 	if item.type == "Weapon" then
+		warn("[DungeonProfileTypes] GetAllowedEquipSlot: weapon item without a valid equipSlot, falling back to generic 'Weapon' -- itemId=", item.itemId)
 		return "Weapon"
 	end
 	if item.type == "Armor" then
-		-- Prefer specific slot from tags or equipSlot; fall back to generic Armor
-		if item.equipSlot and VALID_SLOTS[item.equipSlot] then
-			return item.equipSlot
-		end
 		if type(item.tags) == "table" then
 			for _, tag in ipairs(item.tags) do
 				if VALID_SLOTS[tag] then return tag end
 			end
 		end
+		warn("[DungeonProfileTypes] GetAllowedEquipSlot: armor item without a valid equipSlot, falling back to generic 'Armor' -- itemId=", item.itemId)
 		return "Armor"
 	end
 	if item.type == "Consumable" then
@@ -407,6 +417,94 @@ local function evacuateInaccessibleChestSlots(loaded)
 	end
 end
 
+-- Returns the correct equipSlot for a catalog (itemId-based) owned item, using the same
+-- source-of-truth tables src/shared/Items/WeaponItem.lua and ArmorItem.lua read. Only
+-- covers itemId-based items -- procedural, itemId-less drops always threaded their
+-- weaponType/armorSlot through correctly (once src/server/ItemClass.lua's one-line
+-- equipSlot fix landed), so they were never affected by this bug.
+local function deriveCatalogEquipSlot(itemId)
+	local def = ItemDefinitions.Get(itemId)
+	if not def then
+		return nil
+	end
+	if def.Kind == "Armor" or def.Kind == "Material" then
+		return def.Slot
+	end
+	if def.Kind == "Weapon" then
+		local kind = (def.WeaponId and ItemConfig.WEAPON_ID_KIND[def.WeaponId]) or "Sword"
+		return ItemConfig.WEAPON_TYPE_EQUIP_SLOT[kind] or "Weapon"
+	end
+	if def.Kind == "Consumable" then
+		return "Potion"
+	end
+	return nil
+end
+
+local function placeInFirstEmptyBagSlot(loaded, uuid)
+	local slots = loaded.bagSlots
+	if type(slots) ~= "table" then
+		return false
+	end
+	for i = 1, DungeonProfileTypes.BAG_SLOT_COUNT do
+		if slots[i] == nil then
+			slots[i] = uuid
+			return true
+		end
+	end
+	return false -- bag full; item stays owned but unplaced, same as today's overflow behavior
+end
+
+-- One-time-per-load fixup for profiles saved before ItemFactory existed. GrantItemId used
+-- to never stamp `equipSlot` on catalog grants at all, so every armor piece collapsed onto
+-- a single shared "Armor" bucket that isn't even a real equip-panel slot, and every weapon
+-- (Sword AND Bow alike) collapsed onto "Weapon" -- see WeaponItem.lua/ArmorItem.lua for the
+-- full story. This re-derives the correct slot for every affected owned item and re-homes
+-- anything actually sitting in the wrong `equipped` slot key. Never deletes an item --
+-- worst case something that was wrongly "equipped" lands back in the bag instead, exactly
+-- like a normal unequip would.
+local function migrateLegacyEquipSlots(loaded)
+	local inv = loaded.inventory
+	local equipped = loaded.equipped
+	if type(inv) ~= "table" or type(equipped) ~= "table" then
+		return
+	end
+
+	for _, item in pairs(inv) do
+		if type(item) == "table" and type(item.itemId) == "string" and item.itemId ~= "" then
+			if item.equipSlot == nil or item.equipSlot == "Armor" then
+				local correct = deriveCatalogEquipSlot(item.itemId)
+				if correct then
+					item.equipSlot = correct
+				end
+			end
+		end
+	end
+
+	local function rehome(fromSlot)
+		local uuid = equipped[fromSlot]
+		if type(uuid) ~= "string" or uuid == "" then
+			return
+		end
+		local item = inv[uuid]
+		local correctSlot = item and item.equipSlot
+		if type(correctSlot) ~= "string" or correctSlot == fromSlot then
+			return
+		end
+		equipped[fromSlot] = nil
+		local displacedUuid = equipped[correctSlot]
+		equipped[correctSlot] = uuid
+		if type(displacedUuid) == "string" and displacedUuid ~= "" and displacedUuid ~= uuid then
+			placeInFirstEmptyBagSlot(loaded, displacedUuid)
+		end
+	end
+
+	-- Only these two keys could ever have been the wrong "phantom" bucket under the old
+	-- code -- "Armor" was never a real PlayerPreview slot, and "Weapon" is only wrong when
+	-- what's actually sitting there is a Bow.
+	rehome("Armor")
+	rehome("Weapon")
+end
+
 function DungeonProfileTypes.Reconcile(loaded)
 	if type(loaded) ~= "table" then
 		loaded = {}
@@ -568,6 +666,12 @@ function DungeonProfileTypes.Reconcile(loaded)
 
 	normalizeOwnedItems(loaded.inventory)
 	normalizeOwnedItems(loaded.chestInventory)
+
+	-- Must run after bagSlots is normalized above (rehome may need to place a displaced
+	-- item into it) and after normalizeOwnedItems (so item.itemId is populated for legacy
+	-- display-name-only items before we try to look up their catalog def).
+	migrateLegacyEquipSlots(loaded)
+
 	return loaded
 end
 

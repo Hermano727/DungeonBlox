@@ -100,6 +100,13 @@ local HELPERS = {
 	T = T,
 }
 
+-- Exposed so other hand-rolled shop UIs (e.g. MerchantClient, which predates this
+-- module and has bespoke layout ShopClientBase.create() doesn't support) can reuse
+-- the shared dark-wood palette and pure UI helpers instead of re-declaring their own
+-- copies. buildContent callbacks should keep using the `helpers` argument passed to
+-- them; this is for clients that don't go through shop.create() at all.
+ShopClientBase.Helpers = HELPERS
+
 -- ─── Standard item card (2-column grid cell) ──────────────────────────────────
 -- Exposed so clients can call it directly without re-implementing.
 function ShopClientBase.buildCard(scroll, entry, lo, npcId, npcRequest, cachedCoinsRef, onSuccess)

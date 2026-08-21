@@ -11,11 +11,11 @@ local UserInputService = game:GetService("UserInputService")
 
 local MenuMouse = require(ReplicatedStorage:WaitForChild("CursorUtils"))
 local PartyConfig = require(ReplicatedStorage:WaitForChild("PartyConfig"))
+local PartyRequestUtil = require(ReplicatedStorage:WaitForChild("PartyRequestUtil"))
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
-local PartyRequest = ReplicatedStorage:WaitForChild("PartyRequest")
 local gameEvents = ReplicatedStorage:WaitForChild("GameEvents")
 local PartyInviteReceived = gameEvents:WaitForChild("PartyInviteReceived")
 local PartyStateSync = gameEvents:WaitForChild("PartyStateSync")
@@ -27,15 +27,11 @@ local nameTags = {} -- [userId] = BillboardGui
 local alignmentTags = {} -- [userId] = BillboardGui
 local hpRefreshAccum = 0
 
+-- Delegates to the shared wrapper (see PartyRequestUtil) so this and the
+-- InventoryHud PartyPanel don't each keep their own copy of the same
+-- pcall+InvokeServer plumbing.
 local function request(action, arg)
-	local ok, success, err = pcall(function()
-		return PartyRequest:InvokeServer(action, arg)
-	end)
-	if not ok then
-		warn("[PartyClient] request failed:", success)
-		return false, "invoke_failed"
-	end
-	return success, err
+	return PartyRequestUtil.Request(action, arg)
 end
 
 ------------------------------------------------------------------------

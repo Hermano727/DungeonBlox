@@ -168,6 +168,33 @@ local function createPickupPrompt(anchor, actionText, objectText)
 	return prompt
 end
 
+-- Both mob drops and death-loot bundles are "a floating Neon ball anchor,
+-- parented under a Model named by lootId, inside a per-kind Workspace folder".
+-- Factoring that shared construction out here means the orb's physical shape
+-- (collision flags, anchoring, etc.) only needs to be right in one place.
+local function createLootOrb(folderName, lootId, position, size)
+	local lootFolder = getLootFolder(folderName)
+
+	local model = Instance.new("Model")
+	model.Name = lootId
+	model.Parent = lootFolder
+
+	local anchor = Instance.new("Part")
+	anchor.Name = "Pickup"
+	anchor.Size = size
+	anchor.Shape = Enum.PartType.Ball
+	anchor.Material = Enum.Material.Neon
+	anchor.Anchored = true
+	anchor.CanCollide = false
+	anchor.CanTouch = false
+	anchor.CanQuery = true
+	anchor.Position = position
+	anchor.Parent = model
+	model.PrimaryPart = anchor
+
+	return model, anchor
+end
+
 local function cloneTable(tbl)
 	if type(tbl) ~= "table" then
 		return tbl
@@ -227,8 +254,14 @@ local function disconnectLoot(lootId)
 	activeLoot[lootId] = nil
 end
 
+-- folderName is optional: every entry now remembers which folder it was
+-- spawned into, so callers that forget to pass it (or a future third loot
+-- kind that lands in a new folder) still resolve to the right place instead
+-- of silently leaving an orphaned model behind. An explicit folderName
+-- argument still wins when given, preserving today's call sites exactly.
 function DungeonWorldLootService.RemoveLoot(lootId, folderName)
-	folderName = folderName or DEATH_LOOT_FOLDER
+	local entry = activeLoot[lootId]
+	folderName = folderName or (entry and entry.folderName) or DEATH_LOOT_FOLDER
 	local folder = getLootFolder(folderName)
 	local model = folder:FindFirstChild(lootId)
 	if model then
@@ -346,26 +379,8 @@ function DungeonWorldLootService.SpawnMobDrop(originPosition, ownerUserId, dropS
 	end
 
 	local lootId = "MobLoot_" .. HttpService:GenerateGUID(false)
-	local lootFolder = getLootFolder(MOB_LOOT_FOLDER)
-
-	local model = Instance.new("Model")
-	model.Name = lootId
-	model.Parent = lootFolder
-
 	local basePosition = originPosition + scatterOffset(scatterIndex) + Vector3.new(0, 1.4, 0)
-
-	local anchor = Instance.new("Part")
-	anchor.Name = "Pickup"
-	anchor.Size = orbSize
-	anchor.Shape = Enum.PartType.Ball
-	anchor.Material = Enum.Material.Neon
-	anchor.Anchored = true
-	anchor.CanCollide = false
-	anchor.CanTouch = false
-	anchor.CanQuery = true
-	anchor.Position = basePosition
-	anchor.Parent = model
-	model.PrimaryPart = anchor
+	local model, anchor = createLootOrb(MOB_LOOT_FOLDER, lootId, basePosition, orbSize)
 
 	attachAura(anchor, auraColor)
 	attachLabel(anchor, labelText, auraColor)
@@ -375,6 +390,7 @@ function DungeonWorldLootService.SpawnMobDrop(originPosition, ownerUserId, dropS
 
 	local entry = {
 		kind = kind,
+		folderName = MOB_LOOT_FOLDER,
 		ownerUserId = ownerUserId,
 		amount = dropSpec.amount,
 		coinFind = dropSpec.coinFind,
@@ -435,27 +451,8 @@ function DungeonWorldLootService.SpawnDeathLoot(originPosition, droppedItems)
 	end
 
 	local lootId = "DeathLoot_" .. HttpService:GenerateGUID(false)
-	local lootFolder = getLootFolder(DEATH_LOOT_FOLDER)
-
-	local model = Instance.new("Model")
-	model.Name = lootId
-	model.Parent = lootFolder
-
 	local basePosition = originPosition + Vector3.new((math.random() - 0.5) * 4, 1.5, (math.random() - 0.5) * 4)
-
-	local anchor = Instance.new("Part")
-	anchor.Name = "Pickup"
-	anchor.Size = Vector3.new(2, 2, 2)
-	anchor.Shape = Enum.PartType.Ball
-	anchor.Material = Enum.Material.Neon
-	anchor.Anchored = true
-	anchor.CanCollide = false
-	anchor.CanTouch = false
-	anchor.CanQuery = true
-	anchor.Position = basePosition
-	anchor.Parent = model
-
-	model.PrimaryPart = anchor
+	local model, anchor = createLootOrb(DEATH_LOOT_FOLDER, lootId, basePosition, Vector3.new(2, 2, 2))
 
 	attachAura(anchor, Color3.fromRGB(245, 186, 72))
 	attachLabel(anchor, "Dropped Loot", Color3.fromRGB(245, 186, 72))
@@ -464,6 +461,7 @@ function DungeonWorldLootService.SpawnDeathLoot(originPosition, droppedItems)
 
 	activeLoot[lootId] = {
 		kind = "death_bundle",
+		folderName = DEATH_LOOT_FOLDER,
 		items = droppedItems,
 		promptConnection = nil,
 		floatConnection = startFloat(model, anchor, basePosition),

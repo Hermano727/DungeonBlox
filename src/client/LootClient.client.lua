@@ -9,19 +9,18 @@ local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService      = game:GetService("TweenService")
 
+local Types = require(ReplicatedStorage:WaitForChild("DungeonProfileTypes"))
+
 local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 ------------------------------------------------------------------------
--- Rarity colors (mirrors DungeonProfileTypes.RARITY_COLORS)
+-- Rarity colors come straight from DungeonProfileTypes.GetRarityColor(),
+-- the same source DungeonWorldLootService uses for the world-pickup aura
+-- color. This file used to keep its own hand-copied color table (still
+-- correct, but only by luck of nobody having edited one copy without the
+-- other yet) -- reading the shared table directly removes that footgun.
 ------------------------------------------------------------------------
-local RARITY_COLORS = {
-    Common    = Color3.fromRGB(205, 210, 220),
-    Uncommon  = Color3.fromRGB(70,  205, 105),
-    Rare      = Color3.fromRGB(80,  170, 255),
-    Epic      = Color3.fromRGB(200, 120, 255),
-    Legendary = Color3.fromRGB(255, 175, 85),
-}
 
 ------------------------------------------------------------------------
 -- Banner container (top-right, stacks downward)
@@ -73,7 +72,7 @@ local function spawnBanner(data)
             displayText = string.format("+%d Coins", amount)
         end
     else
-        rarityColor = RARITY_COLORS[data.rarity] or Color3.new(1, 1, 1)
+        rarityColor = Types.GetRarityColor(data.rarity)
         local typeIcon = data.type == "Weapon" and "[W]" or "[A]"
         displayText = typeIcon .. " " .. tostring(data.name or "Item")
     end

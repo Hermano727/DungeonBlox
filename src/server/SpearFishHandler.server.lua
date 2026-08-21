@@ -8,6 +8,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local DungeonProfile = require(ServerScriptService:WaitForChild("DungeonProfileService"))
 local QuestProgress = require(ServerScriptService:WaitForChild("QuestProgressService"))
 local PartyService = require(ServerScriptService:WaitForChild("PartyService"))
+local FishingConfig = require(ReplicatedStorage:WaitForChild("FishingConfig"))
 local SpearFishHook = ReplicatedStorage:WaitForChild("SpearFishHook")
 local SpearFishTug = ReplicatedStorage:WaitForChild("SpearFishTug")
 local SpearFishCancel = ReplicatedStorage:WaitForChild("SpearFishCancel")
@@ -16,14 +17,6 @@ local FishingXPEvent = ReplicatedStorage:WaitForChild("FishingXPEvent")
 local MAX_HOOK_DISTANCE = 45
 local TUG_CLICK_DELTA = 0.05 -- flat progress per successful fish click
 local XP_PER_FISH = 5
-
--- Weighted random catch table. All entries must reference Food/SubKind="Fish" ItemDefinitions.
-local FISH_DROP_TABLE = {
-	{ id = "Fish",       weight = 60, tier = 1 },
-	{ id = "SwiftFish",  weight = 18, tier = 2 },
-	{ id = "LuckyFish",  weight = 18, tier = 2 },
-	{ id = "GoldenFish", weight = 4,  tier = 4 },
-}
 
 local sessions = {}
 
@@ -39,21 +32,8 @@ local VALID_SPEAR_TOOL_NAMES = {
 	["Training Spear"] = true,
 }
 
-local function rollFishEntry()
-	local total = 0
-	for _, e in ipairs(FISH_DROP_TABLE) do
-		total = total + e.weight
-	end
-	local r = math.random() * total
-	local cum = 0
-	for _, e in ipairs(FISH_DROP_TABLE) do
-		cum = cum + e.weight
-		if r <= cum then
-			return e
-		end
-	end
-	return FISH_DROP_TABLE[1]
-end
+-- Weighted catch roll + table now live in shared/FishingConfig (see that file's header for why).
+local rollFishEntry = FishingConfig.RollFishEntry
 
 local function rollFishId()
 	return rollFishEntry().id

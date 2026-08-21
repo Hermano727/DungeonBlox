@@ -10,19 +10,15 @@ local TweenService = game:GetService("TweenService")
 
 local SUMMON_RUNE_COLOR = Color3.fromRGB(168, 84, 255)
 
-local MobClass = require(ServerScriptService:WaitForChild("MobClass"))
-local HoppingMobClass = require(ServerScriptService:WaitForChild("HoppingMobClass"))
+local MobClassRegistry = require(ServerScriptService:WaitForChild("MobClassRegistry"))
 local MobData = require(ReplicatedStorage:WaitForChild("MobData"))
 
--- Factory: picks the right MobClass subclass for a given MobID based on its
--- MobData entry, so new movement styles only need a new subclass + one more
--- branch here, not changes to the spawn pipeline itself.
+-- Factory: MobClassRegistry decides which MobClass subclass to instantiate
+-- for a given MobID (see that module for the selection rules -- currently
+-- the same JumpHeight-based heuristic this file used to hardcode). Adding a
+-- future movement style is a registry entry there, not another branch here.
 local function createMob(mobId, spawnPosition, spawnerRef, level)
-    local baseStats = MobData.FindMobById(mobId)
-    if baseStats and (baseStats.JumpHeight or 0) > 0 then
-        return HoppingMobClass.new(mobId, spawnPosition, spawnerRef, level)
-    end
-    return MobClass.new(mobId, spawnPosition, spawnerRef, level)
+    return MobClassRegistry.Create(mobId, spawnPosition, spawnerRef, level)
 end
 
 -- Spawn placement: scatter mobs in a group instead of stacking them on the

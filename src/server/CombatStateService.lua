@@ -39,15 +39,19 @@ local function dp()
 	return _dp
 end
 
+-- Stateless leaf module (pure functions over a profile table, no other
+-- dependencies) -- safe to require eagerly, unlike DungeonProfileService
+-- above which needs the lazy/deferred pattern for boot-order reasons.
+local DungeonStatsService = require(ServerScriptService:WaitForChild("DungeonStatsService"))
+
+-- Same maxHp formula DungeonStatsService.BuildSnapshot uses for the
+-- character-sheet UI (base + summed "hp" subStat across equipped gear) --
+-- delegating the equipped-item sum to DungeonStatsService.SumEquippedSubStat
+-- keeps this one-tick-per-player-per-heartbeat check as cheap as the old
+-- hand-rolled loop while guaranteeing it can't drift from the UI's number.
 local function computeMaxHp(profile)
 	local base = (profile.stats and profile.stats.combat and profile.stats.combat.maxHp) or 100
-	local bonus = 0
-	for _, uuid in pairs(profile.equipped or {}) do
-		local it = profile.inventory[uuid]
-		if it and it.subStats and type(it.subStats.hp) == "number" then
-			bonus = bonus + it.subStats.hp
-		end
-	end
+	local bonus = DungeonStatsService.SumEquippedSubStat(profile, "hp")
 	return math.max(1, base + bonus)
 end
 

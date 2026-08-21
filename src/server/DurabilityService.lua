@@ -8,7 +8,14 @@ local Players             = game:GetService("Players")
 local ReplicatedStorage   = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
+local ItemConfig = require(ReplicatedStorage:WaitForChild("ItemConfig"))
+
 local TIER_MAX_DUR = { 1500, 1750, 2000, 2250, 2500 }
+
+-- Canonical armor-slot list, shared with ItemConfig and LootService, instead
+-- of each durability path keeping its own hand-copied { "Helm", "Chest", ... }
+-- array. Adding/removing an armor slot now only means editing ItemConfig.
+local ARMOR_SLOTS = ItemConfig.ARMOR_SLOTS
 
 local DurabilityService = {}
 
@@ -119,8 +126,7 @@ end
 function DurabilityService.armorHit(player)
 	local profile = dp().Get(player)
 	if not profile then return end
-	local armorSlots = { "Helm", "Chest", "Legs", "Boots", "Shield" }
-	for _, slot in ipairs(armorSlots) do
+	for _, slot in ipairs(ARMOR_SLOTS) do
 		local uuid = (profile.equipped or {})[slot]
 		if uuid then
 			reduceDurability(player, profile, uuid, 1)
@@ -138,8 +144,7 @@ function DurabilityService.applyDeathPenalty(profile, player)
 	local penaltySet = {}
 
 	-- Equipped armor
-	local combatSlots = { "Shield", "Helm", "Chest", "Legs", "Boots" }
-	for _, slot in ipairs(combatSlots) do
+	for _, slot in ipairs(ARMOR_SLOTS) do
 		local uuid = (profile.equipped or {})[slot]
 		if uuid then penaltySet[uuid] = true end
 	end

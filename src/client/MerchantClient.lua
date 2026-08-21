@@ -18,6 +18,7 @@ local MenuMouse       = require(ReplicatedStorage:WaitForChild("CursorUtils"))
 local NPCRegistry     = require(ReplicatedStorage:WaitForChild("NPCRegistry"))
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
 local DungeonMenuNet  = require(script.Parent:WaitForChild("DungeonMenuNet"))
+local ShopClientBase  = require(script.Parent:WaitForChild("ShopClientBase"))
 
 local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -35,26 +36,13 @@ local activeTier   = 1
 local tierDDOpen   = false
 local rebuild      -- forward declaration
 
--- Palette
-local T = {
-	Panel       = Color3.fromRGB(100, 55, 38),
-	PanelDark   = Color3.fromRGB(68,  34, 20),
-	PanelInner  = Color3.fromRGB(84,  47, 30),
-	SidebarAct  = Color3.fromRGB(68, 120, 68),
-	SidebarInact= Color3.fromRGB(118, 70, 48),
-	TierBtn     = Color3.fromRGB(68, 120, 68),
-	CloseBtn    = Color3.fromRGB(185, 62, 52),
-	CardBg      = Color3.fromRGB(76,  42, 26),
-	CardBorder  = Color3.fromRGB(48,  26, 14),
-	TextPrimary = Color3.fromRGB(255, 240, 218),
-	TextSecond  = Color3.fromRGB(198, 176, 144),
-	Gold        = Color3.fromRGB(255, 215, 100),
-	Buy         = Color3.fromRGB(42,  88, 145),
-	Trade       = Color3.fromRGB(42, 110, 55),
-	Salvage     = Color3.fromRGB(108, 54, 26),
-	StatusOk    = Color3.fromRGB(140, 255, 140),
-	StatusErr   = Color3.fromRGB(255, 120, 120),
-}
+-- Palette: shares the same dark-wood theme as every other NPC shop window, defined
+-- once in ShopClientBase so the two never drift apart. Merchant has two extra colors
+-- (tier dropdown button, salvage button) other shops don't need.
+local T = {}
+for k, v in pairs(ShopClientBase._T) do T[k] = v end
+T.TierBtn = Color3.fromRGB(68, 120, 68)
+T.Salvage = Color3.fromRGB(108, 54, 26)
 
 local RARITY_W  = { Common=1, Uncommon=2, Rare=3, Epic=4, Legendary=5 }
 local SCRAP_AMT = { Common=4, Uncommon=8, Rare=12, Epic=16, Legendary=20 }
@@ -85,38 +73,14 @@ local ERR = {
 	bad_npc            = "This merchant cannot salvage gear.",
 }
 
--- Tiny helpers
-local function cr(inst, r) Instance.new("UICorner", inst).CornerRadius = UDim.new(0, r or 8) end
-local function sk(inst, t, c) local s=Instance.new("UIStroke",inst); s.Thickness=t or 1.5; s.Color=c or T.CardBorder end
-local function lbl(parent, props)
-	local l=Instance.new("TextLabel")
-	l.BackgroundTransparency=1
-	l.TextColor3    = props.color  or T.TextPrimary
-	l.Font          = props.bold   and Enum.Font.GothamBold or Enum.Font.GothamMedium
-	l.TextSize      = props.size   or 13
-	l.TextXAlignment= props.xa     or Enum.TextXAlignment.Left
-	l.TextYAlignment= props.ya     or Enum.TextYAlignment.Top
-	l.TextWrapped   = props.wrap   or false
-	l.Text          = props.text   or ""
-	l.Size          = props.sz     or UDim2.new(1,0,0,20)
-	l.Position      = props.pos    or UDim2.new(0,0,0,0)
-	l.ZIndex        = props.z      or 5
-	l.Parent        = parent
-	return l
-end
-local function getIcon(itemId)
-	local def = itemId and ItemDefinitions.Get(itemId)
-	return (def and type(def.Icon)=="string" and def.Icon~="") and def.Icon or ""
-end
-local function getDesc(itemId)
-	local def = itemId and ItemDefinitions.Get(itemId)
-	return (def and type(def.Description)=="string") and def.Description or ""
-end
-local function fmtPrice(price, currency)
-	if currency=="Coins" then return tostring(price).." Coins" end
-	local def=ItemDefinitions.Get(currency)
-	return tostring(price).." "..(def and def.DisplayName or currency)
-end
+-- Tiny helpers: identical to every other shop window, so reuse ShopClientBase's
+-- copies instead of maintaining a third (MerchantShopClient/DungeoneerClient already
+-- share these via ShopClientBase.create()'s `helpers` argument; MerchantClient
+-- predates that factory and builds its own window, so it pulls the pure helpers
+-- straight off ShopClientBase.Helpers instead).
+local H = ShopClientBase.Helpers
+local cr, sk, lbl = H.cr, H.sk, H.lbl
+local getIcon, getDesc, fmtPrice = H.getIcon, H.getDesc, H.fmtPrice
 
 -- ScreenGui
 local gui=Instance.new("ScreenGui")

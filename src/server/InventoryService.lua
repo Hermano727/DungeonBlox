@@ -3,6 +3,41 @@
 -- (Move slot A to slot B, Use slot N). The server looks up what is actually
 -- in those slots from sessionData and decides whether the action is legal.
 -- The client is never trusted with item identity.
+--
+-- SECOND PROFILE SYSTEM (audited 2026-08-21): this module is the mutation
+-- layer for DungeonBlox's OLDER, slot-indexed inventory (PlayerDataManager /
+-- DataSchema.Inventory), which coexists with the current DungeonProfileService
+-- inventory that InventoryHud's UI actually renders. Full picture is in the
+-- header comment at the top of shared/DataSchema.lua. Two things to know
+-- before touching this file:
+--
+--   1. The InventoryReplicate/InventoryRequest RemoteEvents this module fires
+--      and listens on have NO client-side listener anywhere in src/client
+--      anymore (confirmed by grep across the whole client tree) -- the current
+--      UI (InventoryHud -> DungeonMenuUI/DungeonMenuNet) talks to
+--      DungeonProfileService instead. Replicate() below still runs correctly,
+--      it just replicates into a void: no LocalScript is listening. This
+--      module's *outward-facing remote plumbing* is effectively dead; its
+--      *data mutation functions* (AddItem/RemoveItem/RecomputeArmor/
+--      GetEquippedWeapon) are NOT dead -- see point 2.
+--
+--   2. AddItem/RemoveItem are called directly (not via the remotes) by
+--      PlayerBootstrap.server.lua (starter kit + catch-up grants) and by
+--      NPCService.server.lua's buy/sell flow, which deliberately reads and
+--      writes BOTH this legacy Inventory AND DungeonProfileService's
+--      inventory (see NPCService's countLegacySlots/countDungeonStacks/
+--      removeItemAcrossStores) so a player's items don't go missing depending
+--      on which store they landed in historically. RecomputeArmor is also
+--      the ONLY thing that ever updates Combat.Armor, which DamageService
+--      reads for every hit's damage mitigation -- but RecomputeArmor is only
+--      ever called from this legacy path (starter-kit equip), never from the
+--      live DungeonProfileService-backed equip UI. That is a real gameplay
+--      bug (armor mitigation goes stale after the first equip change of the
+--      session) that this audit found but did NOT fix, since the fix belongs
+--      in DamageService.lua / DungeonBootstrap.server.lua, both outside this
+--      pass's scope.
+--
+-- Net: do not delete this file. It still owns real, live gameplay state.
 
 local HttpService       = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")

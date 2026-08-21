@@ -218,6 +218,7 @@ local GrimCampConfig = {
 			colorMid = "#FFB432",
 			colorEnd = "#FF3200",
 			sizeStart = 0.15,
+			sizeMid = 0.1, -- matches the tuned value GrimCampfireEffects already used; added here so the script has no leftover literal
 			sizeEnd = 0,
 			lifetime = { 1, 3 },
 			rate = 30,
@@ -288,5 +289,25 @@ local GrimCampConfig = {
 		}
 	}
 }
+
+-- Converts a "#RRGGBB" string (as used throughout this config's color
+-- palettes) into a Color3. Scripts that consume campfireEffects/aestheticGuide
+-- colors should go through this rather than hand-rolling their own
+-- Color3.fromRGB(...) copies of the same numbers — see GrimCampfireEffects
+-- for the worked example. Falls back to white on a malformed string so a
+-- typo'd hex code never silently becomes a black/invisible effect.
+function GrimCampConfig.HexToColor3(hex)
+	if type(hex) ~= "string" then
+		return Color3.new(1, 1, 1)
+	end
+	local clean = hex:gsub("^#", "")
+	local r = tonumber(clean:sub(1, 2), 16)
+	local g = tonumber(clean:sub(3, 4), 16)
+	local b = tonumber(clean:sub(5, 6), 16)
+	if not r or not g or not b then
+		return Color3.new(1, 1, 1)
+	end
+	return Color3.fromRGB(r, g, b)
+end
 
 return GrimCampConfig

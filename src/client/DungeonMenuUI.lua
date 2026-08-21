@@ -1,6 +1,38 @@
 --[[
   Builds + redraws the Character menu inventory/equipped UI region.
   SkillsTabClient owns Tab/dim/backdrop; this module owns the dungeon panels only.
+
+  STATUS (checked 2026-08-21): this Gui-based screen is currently UNREACHABLE in normal play.
+  SkillsTabClient's Tab handler was rewired to do nothing (Tab now opens the React InventoryHud
+  panel instead -- see the comment on its InputBegan connection), and nothing else in the
+  codebase ever calls SkillsTabClient's local setOpen(true) / setOpenFn(true). DungeonMenuUI.
+  redraw() is only reached from inside `if open then ... end` guards, so it never actually runs
+  right now either -- createLayout() below still builds this screen's Instance tree once at
+  startup (it's just parented under an Enabled=false ScreenGui named "SkillsPopupUI"), but the
+  redraw path that would populate it with live data is dead code at runtime.
+
+  This is NOT safe to delete, though -- other client scripts still depend on side effects of
+  createLayout() running:
+    - HearthstoneClient.init(refs) (called from SkillsTabClient) parents its real Tele/Swap
+      buttons into hearthstoneRefs from this module. The InventoryHud React HearthstonePanel is
+      explicitly a "no teleport wiring yet, just the grid layout for review" mockup per its own
+      header comment -- so the ACTUAL working hearthstone teleport buttons currently live inside
+      this same unreachable screen. Functionally, players likely cannot hearthstone-teleport
+      right now via any UI path.
+    - StatsOverlayClient.client.lua finds this module's "PlayerStatsBox" instance by name and
+      parents its own "View Stats" button into it -- meaning that button is ALSO inside the
+      unreachable screen and can't currently be seen or clicked.
+    - DungeonHotbarHud, InventoryDragController, and QuestTrackerClient all still look up the
+      "SkillsPopupUI" ScreenGui by name to check whether the character menu is open (it never
+      is, so those checks are permanently false -- harmless, but worth knowing if you're
+      debugging why a "menu open" branch never fires).
+    - DungeonMenuNet (this same folder) is NOT legacy -- it's the shared data layer the new
+      InventoryHud React panels read from too. Don't assume "used by DungeonMenuUI" means "safe
+      to remove"; check every requirer first (see file header there).
+  Flagging this loudly rather than silently reconnecting Tab or moving Hearthstone/View-Stats
+  into the new HUD myself: that's a real product decision (is the legacy screen meant to come
+  back, or should Hearthstone/View-Stats be rebuilt as InventoryHud panels?) that needs the
+  project owner's call, not a guess made overnight with no one able to playtest it.
 ]]
 
 local Players           = game:GetService("Players")
@@ -504,6 +536,19 @@ local function itemCount(item)
 	return nil
 end
 
+-- Pure durability -> {text, color} mapping. Used by syncDurabilityLabel (equip slots + bag
+-- slots) AND by the hotbar redraw loop further down, which used to hand-roll an identical copy
+-- of this exact ratio/threshold logic inline -- the red/yellow/grey cutoffs (0.3, 0.5) now only
+-- ever live in one place, so retuning them can't accidentally miss one of the two call sites.
+local function durabilityTextAndColor(it)
+	local dur=it.durability or 0
+	local ratio=it.maxDurability>0 and dur/it.maxDurability or 0
+	local text=it.broken and "BROKEN" or (dur.."/"..it.maxDurability)
+	local color=it.broken and Color3.fromRGB(255,60,60)
+		or (ratio<0.3 and Color3.fromRGB(255,80,80) or (ratio<0.5 and Color3.fromRGB(255,200,50) or Color3.fromRGB(120,120,120)))
+	return text, color, ratio
+end
+
 local function syncDurabilityLabel(parent,it)
 	local old=parent:FindFirstChild("DurLabel")
 	if not it or not it.maxDurability then if old then old:Destroy() end; return end
@@ -514,11 +559,7 @@ local function syncDurabilityLabel(parent,it)
 		dl.BackgroundTransparency=1; dl.Font=Enum.Font.GothamBold
 		dl.TextSize=7; dl.TextXAlignment=Enum.TextXAlignment.Center; dl.ZIndex=8
 	end
-	local dur=it.durability or 0
-	local ratio=it.maxDurability>0 and dur/it.maxDurability or 0
-	dl.Text=it.broken and "BROKEN" or (dur.."/"..it.maxDurability)
-	dl.TextColor3=it.broken and Color3.fromRGB(255,60,60)
-		or (ratio<0.3 and Color3.fromRGB(255,80,80) or (ratio<0.5 and Color3.fromRGB(255,200,50) or Color3.fromRGB(120,120,120)))
+	dl.Text, dl.TextColor3 = durabilityTextAndColor(it)
 end
 
 function DungeonMenuUI.redraw(refs,snapshot,ctx)
@@ -700,11 +741,8 @@ function DungeonMenuUI.redraw(refs,snapshot,ctx)
 							dl.BackgroundTransparency=1; dl.Font=Enum.Font.GothamBold
 							dl.TextSize=7; dl.TextXAlignment=Enum.TextXAlignment.Center; dl.ZIndex=6
 						end
-						local dur=it.durability or 0
-						local ratio=it.maxDurability>0 and dur/it.maxDurability or 0
-						dl.Text=it.broken and "BROKEN" or (dur.."/"..it.maxDurability)
-						dl.TextColor3=it.broken and Color3.fromRGB(255,60,60)
-							or (ratio<0.3 and Color3.fromRGB(255,80,80) or (ratio<0.5 and Color3.fromRGB(255,200,50) or Color3.fromRGB(120,120,120)))
+						local text,color,ratio=durabilityTextAndColor(it)
+						dl.Text=text; dl.TextColor3=color
 						b.BackgroundColor3=(it.broken or ratio<0.3) and Color3.fromRGB(40,18,18)
 							or (ratio<0.5 and Color3.fromRGB(38,30,14) or Color3.fromRGB(36,28,28))
 					end

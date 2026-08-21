@@ -29,65 +29,24 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local DungeonProfile = require(ServerScriptService:WaitForChild("DungeonProfileService"))
+local ConsumableRequestUtil = require(ReplicatedStorage:WaitForChild("ConsumableRequestUtil"))
+local PotionConfig = require(ReplicatedStorage:WaitForChild("PotionConfig"))
 
--- itemId -> { healPerSecond, duration (seconds healed), maxCharges, regenInterval (seconds per charge) }
-local POTION_CONFIG = {
-	MinorPotion  = { healPerSecond = 30, duration = 5, maxCharges = 3, regenInterval = 40 },
-	MediumPotion = { healPerSecond = 60, duration = 5, maxCharges = 3, regenInterval = 40 },
-}
+-- itemId -> { healPerSecond, duration (seconds healed), maxCharges, regenInterval (seconds per
+-- charge), displayName }. Lives in shared/PotionConfig now (see that file's header) so
+-- PotionClient's HUD can read the same maxCharges/displayName instead of hardcoding its own copy.
+local POTION_CONFIG = PotionConfig.Tiers
 
 -- [userId] = { [itemId] = { count = n, nextReadyAt = clockOrNil } }
 local chargeState = {}
 -- [userId] = array of { healPerSecond = n, expiresAt = clock }
 local activeHeals = {}
 
-local function ensureGameEventsFolder()
-	local f = ReplicatedStorage:FindFirstChild("GameEvents")
-	if f and f:IsA("Folder") then
-		return f
-	end
-	if f then
-		f:Destroy()
-	end
-	f = Instance.new("Folder")
-	f.Name = "GameEvents"
-	f.Parent = ReplicatedStorage
-	return f
-end
+local gameEventsFolder = ConsumableRequestUtil.EnsureGameEventsFolder()
 
-local gameEventsFolder = ensureGameEventsFolder()
-
-local function ensureRemoteEvent(name)
-	local ev = gameEventsFolder:FindFirstChild(name)
-	if ev and not ev:IsA("RemoteEvent") then
-		ev:Destroy()
-		ev = nil
-	end
-	if not ev then
-		ev = Instance.new("RemoteEvent")
-		ev.Name = name
-		ev.Parent = gameEventsFolder
-	end
-	return ev
-end
-
-local function ensureRemoteFunction(name)
-	local rf = gameEventsFolder:FindFirstChild(name)
-	if rf and not rf:IsA("RemoteFunction") then
-		rf:Destroy()
-		rf = nil
-	end
-	if not rf then
-		rf = Instance.new("RemoteFunction")
-		rf.Name = name
-		rf.Parent = gameEventsFolder
-	end
-	return rf
-end
-
-local DrinkPotionRequest = ensureRemoteEvent("DrinkPotionRequest")
-local PotionChargesSync = ensureRemoteEvent("PotionChargesSync")
-local RequestPotionCharges = ensureRemoteFunction("RequestPotionCharges")
+local DrinkPotionRequest = ConsumableRequestUtil.EnsureRemoteEvent(gameEventsFolder, "DrinkPotionRequest")
+local PotionChargesSync = ConsumableRequestUtil.EnsureRemoteEvent(gameEventsFolder, "PotionChargesSync")
+local RequestPotionCharges = ConsumableRequestUtil.EnsureRemoteFunction(gameEventsFolder, "RequestPotionCharges")
 
 local function getChargeTable(userId)
 	local t = chargeState[userId]
@@ -120,9 +79,13 @@ local function snapshotCharges(userId)
 	local now = os.clock()
 	local out = {}
 	for itemId, e in pairs(t) do
+		local cfg = POTION_CONFIG[itemId]
 		out[itemId] = {
 			count = e.count,
 			secondsUntilNext = e.nextReadyAt and math.max(0, e.nextReadyAt - now) or nil,
+			-- Sent so PotionClient never has to assume a fixed charge cap (previously a
+			-- hardcoded "/3" in the HUD label) -- it can read the real per-tier max instead.
+			maxCharges = cfg and cfg.maxCharges or nil,
 		}
 	end
 	return out
@@ -139,28 +102,21 @@ RequestPotionCharges.OnServerInvoke = function(player)
 	return snapshotCharges(player.UserId)
 end
 
-local function findHotbarSlotForUuid(profile, uuid)
-	if type(profile.hotbar) ~= "table" then return nil end
-	for i = 1, 9 do
-		if profile.hotbar[i] == uuid then
-			return i
-		end
-	end
-	return nil
-end
-
 -- Even instant-feeling drinks should not be spammable faster than this.
 local MIN_DRINK_INTERVAL = 0.2
-local lastDrinkByUid = {}
+local drinkLimiter = ConsumableRequestUtil.NewRateLimiter(MIN_DRINK_INTERVAL)
 
 DrinkPotionRequest.OnServerEvent:Connect(function(player, itemUuid)
 	if not player or not player.Parent then return end
 	if type(itemUuid) ~= "string" or itemUuid == "" then return end
 
-	local now = os.clock()
-	if (lastDrinkByUid[player.UserId] or 0) + MIN_DRINK_INTERVAL > now then
+	if not drinkLimiter:Check(player.UserId) then
 		return
 	end
+
+	-- Used below for both the charge-regen timer start and the heal-tick expiry; the
+	-- limiter above keeps its own internal clock, so this is a fresh read, not reused from it.
+	local now = os.clock()
 
 	local profile = DungeonProfile.Get(player) or DungeonProfile.Load(player)
 	if not profile then return end
@@ -173,7 +129,7 @@ DrinkPotionRequest.OnServerEvent:Connect(function(player, itemUuid)
 	if not entry then return end -- not a known potion
 
 	-- Item must be in the player's hotbar (i.e. they actually had it equipped/selected to drink).
-	if not findHotbarSlotForUuid(profile, itemUuid) then
+	if not ConsumableRequestUtil.FindHotbarSlotForUuid(profile, itemUuid) then
 		return
 	end
 
@@ -185,8 +141,6 @@ DrinkPotionRequest.OnServerEvent:Connect(function(player, itemUuid)
 	if not ok then
 		return
 	end
-
-	lastDrinkByUid[player.UserId] = now
 
 	entry.count -= 1
 	if entry.nextReadyAt == nil then
@@ -270,7 +224,7 @@ end)
 Players.PlayerRemoving:Connect(function(player)
 	chargeState[player.UserId] = nil
 	activeHeals[player.UserId] = nil
-	lastDrinkByUid[player.UserId] = nil
+	drinkLimiter:Clear(player.UserId)
 end)
 
 print("[PotionService] ready")

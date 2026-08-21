@@ -17,10 +17,16 @@ local gameEvents = ReplicatedStorage:WaitForChild("GameEvents", 10)
 local chargesSync = gameEvents and gameEvents:WaitForChild("PotionChargesSync", 10)
 local requestCharges = gameEvents and gameEvents:WaitForChild("RequestPotionCharges", 10)
 
-local POTION_LABELS = {
-	MinorPotion = "Minor",
-	MediumPotion = "Medium",
-}
+-- Row order + display labels + fallback max-charge count all come from the same shared
+-- PotionConfig PotionService reads, instead of a hand-copied list that used to live only here
+-- (previously: adding a new potion tier server-side required remembering to also add it to this
+-- client list, or it would silently never show up in the HUD).
+local PotionConfig = require(ReplicatedStorage:WaitForChild("PotionConfig"))
+local order = PotionConfig.Order
+local POTION_LABELS = {}
+for itemId, tierCfg in pairs(PotionConfig.Tiers) do
+	POTION_LABELS[itemId] = tierCfg.displayName or itemId
+end
 
 ---------------------------------------------------------------------------
 -- Charge HUD (minimal: tier label, count, seconds until next charge)
@@ -42,7 +48,6 @@ holder.Size = UDim2.fromOffset(160, 50)
 holder.Parent = gui
 
 local rows = {}
-local order = { "MinorPotion", "MediumPotion" }
 for i, itemId in ipairs(order) do
 	local row = Instance.new("TextLabel")
 	row.Name = itemId
@@ -54,7 +59,7 @@ for i, itemId in ipairs(order) do
 	row.TextSize = 13
 	row.TextColor3 = Color3.fromRGB(220, 220, 220)
 	row.TextXAlignment = Enum.TextXAlignment.Left
-	row.Text = "  " .. POTION_LABELS[itemId] .. " x?/3"
+	row.Text = "  " .. POTION_LABELS[itemId] .. " x?/?"
 	row.Visible = false
 	row.Parent = holder
 	rows[itemId] = row
@@ -72,10 +77,16 @@ local function renderRow(itemId)
 	end
 	row.Visible = true
 	local label = POTION_LABELS[itemId] or itemId
+	-- Prefer the server-pushed maxCharges (added to the sync payload so this HUD never has to
+	-- assume a fixed cap); fall back to the shared config, then a hardcoded 3 only if somehow
+	-- neither is available (e.g. a payload from before this field existed).
+	local maxCharges = data.maxCharges
+		or (PotionConfig.Tiers[itemId] and PotionConfig.Tiers[itemId].maxCharges)
+		or 3
 	if data.secondsUntilNext and data.secondsUntilNext > 0 then
-		row.Text = string.format("  %s x%d/3  (%ds)", label, data.count, math.ceil(data.secondsUntilNext))
+		row.Text = string.format("  %s x%d/%d  (%ds)", label, data.count, maxCharges, math.ceil(data.secondsUntilNext))
 	else
-		row.Text = string.format("  %s x%d/3", label, data.count)
+		row.Text = string.format("  %s x%d/%d", label, data.count, maxCharges)
 	end
 end
 

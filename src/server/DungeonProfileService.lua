@@ -14,6 +14,7 @@ local StatsService = require(ServerScriptService:WaitForChild("DungeonStatsServi
 local EnergyData = require(ServerScriptService:WaitForChild("EnergyData"))
 local Hotbar = require(ServerScriptService:WaitForChild("DungeonEquippedHotbar"))
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
+local ItemFactory = require(ReplicatedStorage:WaitForChild("Items"):WaitForChild("ItemFactory"))
 local EnchantScrollApply = require(ReplicatedStorage:WaitForChild("EnchantScrollApply"))
 local ProtectionScrollApply = require(ReplicatedStorage:WaitForChild("ProtectionScrollApply"))
 local CraftingOrbApply = require(ReplicatedStorage:WaitForChild("CraftingOrbApply"))
@@ -282,18 +283,9 @@ local function clampCount(count)
 	return math.clamp(math.floor(count), 1, 100)
 end
 
-local function mapKindToLegacyItemType(kind)
-	if kind == "Weapon" then
-		return "Weapon"
-	elseif kind == "Armor" then
-		return "Armor"
-	elseif kind == "Consumable" then
-		return "Consumable"
-	elseif kind == "Food" then
-		return "Food"
-	end
-	return "Material"
-end
+-- mapKindToLegacyItemType used to be needed here to build owned-item `type` fields by
+-- hand; both call sites now go through ItemFactory.CreateOwnedItem (src/shared/Items/),
+-- whose Item base class does this same Kind -> type mapping itself. Removed as dead code.
 
 local function mergeStackableIntoInventory(player, profile, itemId, count)
 	local def = ItemDefinitions.Get(itemId)
@@ -324,22 +316,16 @@ local function mergeStackableIntoInventory(player, profile, itemId, count)
 			break
 		end
 		if not merged then
-			local uuid = HttpService:GenerateGUID(false)
 			local take = math.min(maxStack, remaining)
-			local it = {
-				uuid = uuid,
-				itemId = itemId,
-				count = take,
-				name = def.DisplayName or itemId,
-				type = mapKindToLegacyItemType(def.Kind),
-				rarity = def.Rarity or "Common",
-				tier = def.Tier,
-				enchantLevel = 0,
-				subStats = {},
-				toolPrefabName = def.ToolPrefabName,
-			}
-			profile.inventory[uuid] = it
-			placeItemInFirstEmptySlot(profile, uuid)
+			-- ItemFactory stamps equipSlot correctly per Kind (see src/shared/Items/) --
+			-- the old inline table here never set it at all, which is how e.g. training
+			-- armor lost its specific Helm/Chest/Legs/Boots/Shield slot identity.
+			local it = ItemFactory.CreateOwnedItem(itemId, { count = take })
+			if not it then
+				break
+			end
+			profile.inventory[it.uuid] = it
+			placeItemInFirstEmptySlot(profile, it.uuid)
 			remaining = remaining - take
 		end
 	end
@@ -544,28 +530,18 @@ function DungeonProfileService.GrantItemId(player, itemId, count)
 		end
 	else
 		for _ = 1, n do
-			local uuid = HttpService:GenerateGUID(false)
-			local it = {
-				uuid = uuid,
-				itemId = itemId,
-				count = 1,
-				name = def.DisplayName or itemId,
-				type = mapKindToLegacyItemType(def.Kind),
-				rarity = def.Rarity or "Common",
-				tier = def.Tier,
-				enchantLevel = 0,
-				subStats = {},
-				toolPrefabName = def.ToolPrefabName,
-			}
-			if def.Kind == "Weapon" then
-				local WeaponData = require(ReplicatedStorage:WaitForChild("WeaponData"))
-				local wid = (type(def.WeaponId) == "string" and def.WeaponId ~= "") and def.WeaponId or itemId
-				local st = WeaponData.GetStats(wid)
-				local d = math.max(1, math.floor(tonumber(st.Damage) or 1))
-				it.subStats = { dmgMin = d, dmgMax = d }
+			-- ItemFactory (src/shared/Items/) replaces this inline table: it stamps
+			-- equipSlot correctly per Kind (Weapon/Armor/Material/Consumable) and, for
+			-- weapons, rolls the same dmgMin/dmgMax from WeaponData this used to do by
+			-- hand. The old version never set equipSlot at all -- every weapon collapsed
+			-- onto "Weapon" (Bow included) and every armor piece onto a generic "Armor"
+			-- bucket that isn't even a real equip-panel slot.
+			local it = ItemFactory.CreateOwnedItem(itemId)
+			if not it then
+				break
 			end
-			profile.inventory[uuid] = it
-			placeItemInFirstEmptySlot(profile, uuid)
+			profile.inventory[it.uuid] = it
+			placeItemInFirstEmptySlot(profile, it.uuid)
 		end
 	end
 

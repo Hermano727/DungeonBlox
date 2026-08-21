@@ -33,6 +33,31 @@ ItemConfig.WEAPON_DROP_PREFAB_BY_TYPE = {
 ItemConfig.ARMOR_SLOTS         = { "Helm", "Chest", "Legs", "Boots", "Shield" }
 
 ------------------------------------------------------------------------
+-- Weapon kind -> equip-panel slot. Every weapon kind shares the single
+-- "Weapon" slot except Bow, which gets its own -- PlayerPreview.lua's 8-slot
+-- layout, DungeonBootstrap's TRAINING_GEAR_FOR_SLOT, and
+-- KeybindConfig.Keybinds.ToolSlot already all assume Bow is independent of
+-- Weapon; this table (plus WEAPON_ID_KIND below) is what makes item
+-- generation/granting agree with them. Add a new non-default-slot weapon
+-- kind here, nowhere else -- both src/shared/Items/WeaponItem.lua (catalog
+-- grants) and src/server/ItemClass.lua (procedural drops) read this same
+-- table so the two item-creation paths can't drift apart again.
+------------------------------------------------------------------------
+ItemConfig.WEAPON_TYPE_EQUIP_SLOT = {
+    Sword = "Weapon", Scythe = "Weapon", Axe = "Weapon", Mace = "Weapon", Bow = "Bow",
+}
+
+-- Catalog weapon entries (TrainingSword, TrainingBow, ...) don't carry an explicit weapon
+-- "kind" field of their own -- only WeaponId (keys into WeaponData for combat stats).
+-- This maps WeaponId -> kind string so a catalog grant can look up
+-- WEAPON_TYPE_EQUIP_SLOT the same way a procedural drop does via its weaponType. Default
+-- kind for any WeaponId not listed here is "Sword" -- correct for every catalog weapon
+-- that exists today; only bow-family WeaponIds need an entry.
+ItemConfig.WEAPON_ID_KIND = {
+    WoodenBow = "Bow",
+}
+
+------------------------------------------------------------------------
 -- ARMOR BASE STATS (spec values; apply to all slot types)
 -- HP/s = floor(hp * 0.5) per spec; computed in ItemGenerator.
 ------------------------------------------------------------------------

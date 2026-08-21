@@ -159,9 +159,12 @@ local Items = {
 	TrainingBoots  = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Boots,  Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Boots",  Tier = 1, Rarity = "Common", Armor = 0, HotbarEquippable = false, ProtectedOnDeath = false, DisplayName = "Training Boots" },
 	TrainingShield = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Shield, Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Shield", Tier = 1, Rarity = "Common", Armor = 0, HotbarEquippable = false, ProtectedOnDeath = false, DisplayName = "Training Shield" },
 
-	-- Starter profession tools (reuse T1 wooden tool prefabs).
-	TrainingPickaxe = { Icon = ItemConfig.TOOL_ICONS.Pickaxe, Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Material", Tier = 1, Rarity = "Common", HotbarEquippable = true, ProtectedOnDeath = true, ToolPrefabName = "WoodenPickaxe", DisplayName = "Training Pickaxe" },
-	TrainingSpear   = { Icon = ItemConfig.TOOL_ICONS.FishingRod, Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Material", Tier = 1, Rarity = "Common", HotbarEquippable = true, ProtectedOnDeath = true, ToolPrefabName = "WoodenSpear", DisplayName = "Training Fishing Rod" },
+	-- Starter profession tools (reuse T1 wooden tool prefabs). Slot here is what
+	-- src/shared/Items/MaterialItem.lua reads to stamp equipSlot onto the owned item --
+	-- without it, ItemFactory.CreateOwnedItem falls back to "not equippable" for these,
+	-- same as every other Material-kind item (see MaterialItem.lua's doc comment).
+	TrainingPickaxe = { Icon = ItemConfig.TOOL_ICONS.Pickaxe, Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Material", Slot = "Pickaxe", Tier = 1, Rarity = "Common", HotbarEquippable = true, ProtectedOnDeath = true, ToolPrefabName = "WoodenPickaxe", DisplayName = "Training Pickaxe" },
+	TrainingSpear   = { Icon = ItemConfig.TOOL_ICONS.FishingRod, Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Material", Slot = "FishingSpear", Tier = 1, Rarity = "Common", HotbarEquippable = true, ProtectedOnDeath = true, ToolPrefabName = "WoodenSpear", DisplayName = "Training Fishing Rod" },
 	-- TODO: FUTURE (Drop system) check Untradeable before allowing drops
 	-- TODO: FUTURE (PvP loot system) check Untradeable before including item in death loot table
 

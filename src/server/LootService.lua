@@ -27,7 +27,10 @@ local WorldLoot      = require(ServerScriptService:WaitForChild("DungeonWorldLoo
 local LootService = {}
 
 -- Sum coinFind % across all equipped armor slots for a player.
-local ARMOR_SLOTS_CHECK = { "Helm", "Chest", "Legs", "Boots", "Shield" }
+-- Pulled from the shared ItemConfig.ARMOR_SLOTS list (also used by DurabilityService
+-- and ItemConfig itself) instead of a locally hardcoded copy, so adding/removing an
+-- armor slot in the future only means editing ItemConfig.
+local ARMOR_SLOTS_CHECK = Config.ARMOR_SLOTS
 local function getTotalCoinFind(player)
 	local profile = DungeonProfile.Load(player)
 	if not profile or type(profile.equipped) ~= "table" or type(profile.inventory) ~= "table" then
@@ -116,77 +119,85 @@ local function isEliteMob(mob)
 end
 
 ------------------------------------------------------------------------
--- LootService.onMobDied(mob, killingBlowPlayer)
--- Called from MobManager.ProcessMobDeath.
--- mob fields used: mob.Tier, mob.Stats.Level, mob.MobID
+-- Each mob death rolls three INDEPENDENT drop types: coins, a key fragment,
+-- and gear. They used to all live inline in one long onMobDied function;
+-- splitting them into their own try* functions keeps each roll's logic
+-- self-contained (easier to reason about / unit-poke individually) and
+-- makes adding a future 4th independent drop type (e.g. crafting shards)
+-- a matter of writing one more tryDropX function instead of threading more
+-- state through a single growing function.
+--
+-- Each tryDrop* takes the current scatterIndex (which world-pickup "slot"
+-- around the death position is next free) and returns the index the next
+-- roll should use -- it only advances when this roll actually spawned a
+-- pickup, so drops still scatter tightly instead of leaving gaps.
 ------------------------------------------------------------------------
-function LootService.onMobDied(mob, killingBlowPlayer)
-    if not killingBlowPlayer or not killingBlowPlayer.Parent then return end
 
-    local tier  = mob.Tier or 1
-    local level = (mob.Stats and mob.Stats.Level) or 1
-    local elite = isEliteMob(mob)
-    local deathPos = mob.GetPosition and mob:GetPosition()
-    if typeof(deathPos) ~= "Vector3" then
-        return
-    end
-    local ownerUserId = killingBlowPlayer.UserId
-    local scatterIndex = 0
-
-    ----------------------------------------------------------------
-    -- Coin drop (wallet): 30% base for all non-elite mobs; elites always.
-    -- Independent of the gear drop roll below.
-    ----------------------------------------------------------------
-    local coinFindPct    = getTotalCoinFind(killingBlowPlayer)
+-- Coin drop (wallet): base chance for all non-elite mobs; elites always.
+-- Independent of the gear drop roll.
+local function tryDropCoins(tier, elite, killingBlowPlayer, deathPos, ownerUserId, scatterIndex)
+    local coinFindPct = getTotalCoinFind(killingBlowPlayer)
     local effectiveCoinChance = Config.MOB_COIN_DROP_CHANCE * (1 + coinFindPct / 100)
-    local coinRoll        = math.random()
-    local coinFindProc    = false
+    local coinRoll = math.random()
+    local coinFindProc = false
     if not elite and coinRoll > Config.MOB_COIN_DROP_CHANCE and coinRoll <= effectiveCoinChance then
         coinFindProc = true  -- coin find pushed this over the base threshold
     end
-    if elite or coinRoll <= effectiveCoinChance then
-        local t = math.clamp(math.floor(tonumber(tier) or 1), 1, 5)
-        local range = Config.MOB_COIN_RANGE_BY_TIER[t]
-        if range then
-            local lo, hi = range[1], range[2]
-            if type(lo) == "number" and type(hi) == "number" and hi >= lo then
-                local coins = math.random(lo, hi)
-                local partyMult = PartyService.GetRewardMultiplier(killingBlowPlayer)
-                if partyMult > 1 then
-                    coins = math.max(1, math.floor(coins * partyMult))
-                end
-                if coins > 0 then
-                    WorldLoot.SpawnMobDrop(deathPos, ownerUserId, {
-                        kind = "coins",
-                        amount = coins,
-                        coinFind = coinFindProc,
-                    }, scatterIndex)
-                    scatterIndex = scatterIndex + 1
-                end
-            end
-        end
+    if not (elite or coinRoll <= effectiveCoinChance) then
+        return scatterIndex  -- no coin drop this kill
     end
 
-    ----------------------------------------------------------------
-    -- Key fragment drop: independent roll, scales by mob tier.
-    ----------------------------------------------------------------
+    local t = math.clamp(math.floor(tonumber(tier) or 1), 1, 5)
+    local range = Config.MOB_COIN_RANGE_BY_TIER[t]
+    if not range then
+        return scatterIndex
+    end
+    local lo, hi = range[1], range[2]
+    if not (type(lo) == "number" and type(hi) == "number" and hi >= lo) then
+        return scatterIndex
+    end
+
+    local coins = math.random(lo, hi)
+    local partyMult = PartyService.GetRewardMultiplier(killingBlowPlayer)
+    if partyMult > 1 then
+        coins = math.max(1, math.floor(coins * partyMult))
+    end
+    if coins <= 0 then
+        return scatterIndex
+    end
+
+    WorldLoot.SpawnMobDrop(deathPos, ownerUserId, {
+        kind = "coins",
+        amount = coins,
+        coinFind = coinFindProc,
+    }, scatterIndex)
+    return scatterIndex + 1
+end
+
+-- Key fragment drop: independent roll, scales by mob tier.
+local function tryDropKeyFragment(tier, deathPos, ownerUserId, scatterIndex)
     local fragTier = math.clamp(math.floor(tonumber(tier) or 1), 1, 5)
-    if math.random() <= KEY_FRAG_CHANCES[fragTier] then
-        local fragId = KEY_FRAG_IDS[fragTier]
-        WorldLoot.SpawnMobDrop(deathPos, ownerUserId, {
-            kind = "item_id",
-            itemId = fragId,
-            count = 1,
-            notifyPayload = {
-                kind = "KeyFragment",
-                name = fragId,
-                tier = fragTier,
-            },
-        }, scatterIndex)
-        scatterIndex = scatterIndex + 1
+    if math.random() > KEY_FRAG_CHANCES[fragTier] then
+        return scatterIndex  -- no key fragment this kill
     end
 
-    -- Roll for drop. Luck buff (BuffService "LuckPct") multiplies the final chance.
+    local fragId = KEY_FRAG_IDS[fragTier]
+    WorldLoot.SpawnMobDrop(deathPos, ownerUserId, {
+        kind = "item_id",
+        itemId = fragId,
+        count = 1,
+        notifyPayload = {
+            kind = "KeyFragment",
+            name = fragId,
+            tier = fragTier,
+        },
+    }, scatterIndex)
+    return scatterIndex + 1
+end
+
+-- Gear drop: rarity roll + ItemGenerator + world pickup spawn.
+-- Luck buff (BuffService "LuckPct") multiplies the final chance.
+local function tryDropGear(tier, level, elite, killingBlowPlayer, deathPos, ownerUserId, scatterIndex)
     local baseDrop  = Config.TIER_DROP_CHANCE[tier] or 0.18
     local dropBonus = elite and Config.ELITE_DROP_CHANCE_BONUS or 0
     local luckMult  = 1 + (BuffService.GetLuckBonusPct(killingBlowPlayer) / 100)
@@ -233,6 +244,31 @@ function LootService.onMobDied(mob, killingBlowPlayer)
 
     print(string.format("[LootService] %s dropped world loot: %s",
         killingBlowPlayer.Name, template.name))
+end
+
+------------------------------------------------------------------------
+-- LootService.onMobDied(mob, killingBlowPlayer)
+-- Called from MobManager.ProcessMobDeath.
+-- mob fields used: mob.Tier, mob.Stats.Level, mob.MobID
+------------------------------------------------------------------------
+function LootService.onMobDied(mob, killingBlowPlayer)
+    if not killingBlowPlayer or not killingBlowPlayer.Parent then return end
+
+    local tier  = mob.Tier or 1
+    local level = (mob.Stats and mob.Stats.Level) or 1
+    local elite = isEliteMob(mob)
+    local deathPos = mob.GetPosition and mob:GetPosition()
+    if typeof(deathPos) ~= "Vector3" then
+        return
+    end
+    local ownerUserId = killingBlowPlayer.UserId
+    local scatterIndex = 0
+
+    -- Each roll is independent; scatterIndex only advances when a roll
+    -- actually spawns a pickup, so drops stay tightly clustered.
+    scatterIndex = tryDropCoins(tier, elite, killingBlowPlayer, deathPos, ownerUserId, scatterIndex)
+    scatterIndex = tryDropKeyFragment(tier, deathPos, ownerUserId, scatterIndex)
+    tryDropGear(tier, level, elite, killingBlowPlayer, deathPos, ownerUserId, scatterIndex)
 end
 
 return LootService

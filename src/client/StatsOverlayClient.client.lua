@@ -8,10 +8,15 @@
 
 local Players      = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local player         = Players.LocalPlayer
 local playerGui      = player:WaitForChild("PlayerGui")
 local DungeonMenuNet = require(script.Parent:WaitForChild("DungeonMenuNet"))
+-- Row-value math (sum equipped attributes, format HP/regen/level strings) is
+-- shared with the InventoryHud StatsPanel -- see DerivedStatsView for why
+-- this used to be two independent copies of the same computation.
+local DerivedStatsView = require(ReplicatedStorage:WaitForChild("DerivedStatsView"))
 
 -- Wait for PlayerStatsBox (created by DungeonMenuUI inside SkillsTabClient)
 local statsBox
@@ -337,47 +342,10 @@ local function set(key, val)
 end
 
 local function refresh(snap)
-	if not snap then return end
-	local profile = snap.profile
-	local derived  = snap.derived
-	if not (profile and derived) then return end
-
-	local dc = derived.combat or {}
-	set("hp",    string.format("%d / %d",
-		math.floor(dc.hp or 0), math.floor(dc.maxHp or 0)))
-	set("armor",  math.floor(dc.armor or 0))
-	set("hpReg",  string.format("%.1f / s", dc.hpRegen or 0))
-	set("enReg",  string.format("%.1f / s", dc.energyRegen or 0))
-
-	local inv, eq = profile.inventory or {}, profile.equipped or {}
-	local tot = { str=0, int=0, dex=0, vit=0 }
-	for _, slot in ipairs({"Helm", "Chest", "Legs", "Boots"}) do
-		local uuid = eq[slot]
-		if type(uuid) == "string" and uuid ~= "" then
-			local it = inv[uuid]
-			if type(it) == "table" and type(it.subStats) == "table" then
-				for k in pairs(tot) do
-					tot[k] = tot[k] + (tonumber(it.subStats[k]) or 0)
-				end
-			end
-		end
+	local values = DerivedStatsView.Compute(snap)
+	for key, text in pairs(values) do
+		set(key, text)
 	end
-	set("str", tot.str)
-	set("int", tot.int)
-	set("dex", tot.dex)
-	set("vit", tot.vit)
-
-	local sc = (profile.stats and profile.stats.combat) or {}
-	local dm = derived.mining  or {}
-	local df = derived.fishing or {}
-	set("combat",  "Lv. " .. tostring(sc.level or 1))
-	set("mining",  "Lv. " .. tostring(dm.miningLevel or 1))
-	set("fishing", "Lv. " .. tostring(df.fishingLevel or 1))
-
-	local coins = math.floor(
-		tonumber(profile.currencies and profile.currencies.Coins) or 0)
-	set("coins",  tostring(coins))
-	set("inRaid", (profile.flags and profile.flags.inRaid) and "Yes" or "No")
 end
 
 DungeonMenuNet.addSnapshotListener(refresh)

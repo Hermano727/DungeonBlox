@@ -6,9 +6,14 @@
 
 local DungeonStatsService = {}
 
-local function sumEquipped(profile, key)
+-- Sums one subStat key (e.g. "hp", "armor", "MiningLevel") across every
+-- currently-equipped item. Exposed publicly (not just used internally by
+-- BuildSnapshot below) so other services that need a single one of these
+-- sums -- e.g. CombatStateService's per-tick maxHp check -- don't have to
+-- hand-roll the same equipped/inventory/subStats walk themselves.
+function DungeonStatsService.SumEquippedSubStat(profile, key)
 	local total = 0
-	for _, uuid in pairs(profile.equipped) do
+	for _, uuid in pairs(profile.equipped or {}) do
 		if type(uuid) == "string" then
 			local item = profile.inventory[uuid]
 			if item and item.subStats then
@@ -21,6 +26,7 @@ local function sumEquipped(profile, key)
 	end
 	return total
 end
+local sumEquipped = DungeonStatsService.SumEquippedSubStat
 
 function DungeonStatsService.RecomputeRuntimeHp(profile)
 	local snap = DungeonStatsService.BuildSnapshot(profile)
