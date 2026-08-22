@@ -10,7 +10,8 @@ HearthstoneConfig.COOLDOWN     = 300   -- seconds between teleports (5 minutes)
 HearthstoneConfig.DATASTORE_KEY = "HearthstoneLocations_v1"
 
 -- Replace with your Roblox UserId for admin access to the dev panel.
-HearthstoneConfig.ADMIN_IDS = { 706604079 }
+-- Sourced from DevRoster (single source of truth for dev/admin UserIds).
+HearthstoneConfig.ADMIN_IDS = require(script.Parent:WaitForChild("DevRoster")).IDS
 
 local HearthstoneIcons = require(script.Parent.Assets.Icons.Hearthstones.HearthstoneIcons)
 

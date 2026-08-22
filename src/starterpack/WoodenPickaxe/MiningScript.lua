@@ -7,7 +7,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local miningRewardRequest = ReplicatedStorage:WaitForChild("MiningRewardRequest")
 local miningDebrisRequest = ReplicatedStorage:WaitForChild("MiningDebrisRequest")
 local MiningXPEvent = ReplicatedStorage:WaitForChild("MiningXPEvent")
-local PlayerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
 local SkillXPShared = require(ReplicatedStorage:WaitForChild("SkillXPShared"))
 
 -- Configuration
@@ -16,124 +15,11 @@ local CLICKS_TO_MINE = 3 -- Number of clicks to fully mine ore
 local MINE_RANGE = 15 -- Maximum range to mine ore
 local ORE_RESPAWN_TIME = 10 -- Seconds before ore respawns
 local XP_PER_COAL = 5 -- Fallback if server omits amount; server authoritatively grants XP only when coal is granted
-local UI_HIDE_DELAY = 5 -- Seconds before UI hides after last XP gain
 
--- HUD visibility
-local uiShown = false
-local lastXPGainTime = 0
-local uiHideTask = nil
-local priorityLoopRunning = false
-
--- Function to hide the UI after delay
-local function startHideTimer()
-    -- Cancel any existing hide task
-    if uiHideTask then
-        task.cancel(uiHideTask)
-        uiHideTask = nil
-    end
-
-    uiHideTask = task.delay(UI_HIDE_DELAY, function()
-        local gui = PlayerGui:FindFirstChild("MiningXPUI")
-        if gui then
-            local mainFrame = gui:FindFirstChild("MainFrame")
-            if mainFrame then
-                mainFrame.Visible = false
-                uiShown = false
-            end
-        end
-        uiHideTask = nil
-    end)
-end
-
--- Function to update ZIndex based on which XP was most recent
-local function setBarZ(guiName, z)
-    local g = PlayerGui:FindFirstChild(guiName)
-    if not g then return end
-    local mf = g:FindFirstChild("MainFrame")
-    if not mf then return end
-    mf.ZIndex = z
-    for _, child in pairs(mf:GetDescendants()) do
-        if child:IsA("GuiObject") then
-            child.ZIndex = z
-        end
-    end
-end
-
-local function updateZIndexPriority()
-    local player = Players.LocalPlayer
-    if not player then return end
-
-    local combatTime = player:GetAttribute("LastCombatXPGain") or 0
-    local miningTime = player:GetAttribute("LastMiningXPGain") or 0
-    local fishingTime = player:GetAttribute("LastFishingXPGain") or 0
-
-    local front = "Combat"
-    local best = combatTime
-    if miningTime >= best then front, best = "Mining", miningTime end
-    if fishingTime >= best then front, best = "Fishing", fishingTime end
-
-    setBarZ("CombatXPUI", front == "Combat" and 10 or 5)
-    setBarZ("MiningXPUI", front == "Mining" and 10 or 5)
-    setBarZ("FishingXPUI", front == "Fishing" and 10 or 5)
-end
-
--- Start continuous priority loop
-local function startPriorityLoop()
-    if priorityLoopRunning then return end
-    priorityLoopRunning = true
-
-    task.spawn(function()
-        while task.wait(0.1) do
-            updateZIndexPriority()
-        end
-    end)
-end
-
--- Function to update the XP UI
-local function updateXPUI()
-    local gui = PlayerGui:FindFirstChild("MiningXPUI")
-    if not gui then return end
-
-    local mainFrame = gui:FindFirstChild("MainFrame")
-    if not mainFrame then return end
-
-    -- Show UI if not already shown
-    if not uiShown then
-        mainFrame.Visible = true
-        uiShown = true
-    end
-
-    -- Update timestamp for priority system
-    local player = Players.LocalPlayer
-    if player then
-        player:SetAttribute("LastMiningXPGain", tick())
-    end
-
-    -- Reset hide timer and start a new one
-    lastXPGainTime = tick()
-    startHideTimer()
-
-    local xpBackground = mainFrame:FindFirstChild("XPBackground")
-    local xpFill = xpBackground and xpBackground:FindFirstChild("XPFill")
-    local levelLabel = mainFrame:FindFirstChild("LevelLabel")
-    local xpLabel = mainFrame:FindFirstChild("XPLabel")
-
-    local xpNeeded = SkillXPShared.GetXPForLevel(SkillXPShared.Mining.Level)
-    local progress = math.clamp(SkillXPShared.Mining.XP / xpNeeded, 0, 1)
-
-    -- Update fill bar (leave 4 pixels padding on each side)
-    if xpFill then
-        xpFill.Size = UDim2.new(progress, 0, 1, -4)
-    end
-
-    -- Update labels
-    if levelLabel then
-        levelLabel.Text = "Level " .. SkillXPShared.Mining.Level
-    end
-    if xpLabel then
-        xpLabel.Text = SkillXPShared.Mining.XP .. " / " .. xpNeeded .. " XP"
-    end
-end
+-- UI ownership moved to XpHud (React, src/client/XpHud) -- this script no
+-- longer touches any GUI instance. addXP only mutates SkillXPShared state
+-- and stamps player:SetAttribute("LastMiningXPGain", tick()), which is what
+-- XpHud.luau's lastGain() reads to decide which bar is visible/on top.
 
 -- Function to add XP and check for level up
 local function addXP(amount)
@@ -148,8 +34,12 @@ local function addXP(amount)
         print("Mining level up! Now level " .. SkillXPShared.Mining.Level)
     end
 
+    local player = Players.LocalPlayer
+    if player then
+        player:SetAttribute("LastMiningXPGain", tick())
+    end
+
     SkillXPShared.Notify()
-    updateXPUI()
 end
 
 MiningXPEvent.OnClientEvent:Connect(function(xpAmount)
@@ -305,10 +195,5 @@ tool.Activated:Connect(function()
         canMine = true
     end
 end)
-
--- Start the priority loop when script loads
-startPriorityLoop()
-
-SkillXPShared.ApplyXPHudLayout(PlayerGui)
 
 print("Mining script loaded for " .. tool.Name)

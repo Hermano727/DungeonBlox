@@ -6,17 +6,15 @@ local player=Players.LocalPlayer;local mouse=player:GetMouse()
 local playerGui=player:WaitForChild("PlayerGui")
 local MenuMouse=require(RS:WaitForChild("CursorUtils"))
 local FLY_SPEED=90
-local DEV_USERIDS={}
-local function isDev()
-    for _,id in ipairs(DEV_USERIDS) do if player.UserId==id then return true end end
-    return RunService:IsStudio()
-end
+local DevRoster=require(RS:WaitForChild("DevRoster"))
+local function isDev() return DevRoster.IsDev(player) end
 if not isDev() then return end
 local GE=RS:WaitForChild("GameEvents",15)
 local evPlace=GE and GE:WaitForChild("DevPlaceSpawner",10)
 local evDelete=GE and GE:WaitForChild("DevDeleteSpawner",10)
 local rfList=GE and GE:WaitForChild("DevListSpawners",10)
 local rfPlaceZone=GE and GE:WaitForChild("DevPlaceZone",10)
+local rfSetZoneMusic=GE and GE:WaitForChild("DevSetZoneMusic",10)
 local rfDayNight=GE and GE:WaitForChild("DevDayNightControl",10)
 local MobData=require(RS:WaitForChild("MobData"))
 local NPCRegistry=require(RS:WaitForChild("NPCRegistry"))
@@ -182,6 +180,7 @@ local function finishZoneDraw()
 			EliteMobId = MOB_IDS[zoneEliteMobIdx],
 			Points = pts,
 			Position = Vector3.new(0, groundY, 0),
+			MusicId = boxZoneMusicId and boxZoneMusicId.Text or "",
 		})
 	end)
 	if not ok or type(result) ~= "table" or not result.ok then
@@ -357,10 +356,12 @@ local btnEliteZone=mkB(zoneSec,"OFF",W-58,172,46,24,Color3.fromRGB(90,40,40))
 local btnElitePrev=mkB(zoneSec,"<",12,200,24,26)
 local btnEliteNext=mkB(zoneSec,">",W-34,200,24,26)
 local eliteMobDisp=lbl(zoneSec,MOB_IDS[zoneEliteMobIdx] or "-",40,200,W-72,26,12,Color3.new(1,1,1),false,Enum.TextXAlignment.Center)
-local btnFinishZone=mkB(zoneSec,"Finish Zone",12,234,88,26,Color3.fromRGB(40,90,40))
-local btnClearZone=mkB(zoneSec,"Clear",106,234,52,26,Color3.fromRGB(90,40,40))
-local btnHideFly=mkB(zoneSec,"Hide & Fly",164,234,86,26,Color3.fromRGB(50,70,110))
-zoneDrawLbl=lbl(zoneSec,"Pts: 0",12,264,W-24,18,11,Color3.fromRGB(255,220,80),false,Enum.TextXAlignment.Left)
+lbl(zoneSec,"MUSIC ID (optional, blank = none)",12,234,W-24,14,11,ACC,true)
+local boxZoneMusicId=mkI(zoneSec,"rbxassetid://... or bare number",12,250,W-24,28,"")
+local btnFinishZone=mkB(zoneSec,"Finish Zone",12,286,88,26,Color3.fromRGB(40,90,40))
+local btnClearZone=mkB(zoneSec,"Clear",106,286,52,26,Color3.fromRGB(90,40,40))
+local btnHideFly=mkB(zoneSec,"Hide & Fly",164,286,86,26,Color3.fromRGB(50,70,110))
+zoneDrawLbl=lbl(zoneSec,"Pts: 0",12,316,W-24,18,11,Color3.fromRGB(255,220,80),false,Enum.TextXAlignment.Left)
 zoneSec.CanvasPosition=Vector2.new(0,0)
 local function tintAlnBtn(b,name,active)
     local c=ZoneConfig.ALIGNMENT_COLORS[name]
@@ -627,16 +628,16 @@ refreshList=function()
         return (a.Position-hrp.Position).Magnitude<(b.Position-hrp.Position).Magnitude
     end)
     for _,entry in ipairs(entries) do
-        local row=Instance.new("Frame",lf)
-        row.Size=UDim2.new(1,0,0,28);row.BackgroundColor3=Color3.fromRGB(35,26,26)
-        row.BorderSizePixel=0;row.ZIndex=4
-        Instance.new("UICorner",row).CornerRadius=UDim.new(0,5)
         local isM=entry.SpawnerType=="Mob"
         local isZ=entry.SpawnerType=="Zone"
+        local row=Instance.new("Frame",lf)
+        row.Size=UDim2.new(1,0,0,isZ and 54 or 28);row.BackgroundColor3=Color3.fromRGB(35,26,26)
+        row.BorderSizePixel=0;row.ZIndex=4
+        Instance.new("UICorner",row).CornerRadius=UDim.new(0,5)
         local p=entry.Position
         local coord=string.format("  [%.0f, %.0f, %.0f]",p.X,p.Y,p.Z)
         local rl=Instance.new("TextLabel",row);rl.BackgroundTransparency=1
-        rl.Size=UDim2.new(1,-32,1,0);rl.Position=UDim2.fromOffset(8,0)
+        rl.Size=UDim2.new(1,-32,0,28);rl.Position=UDim2.fromOffset(8,0)
         rl.Font=Enum.Font.GothamMedium;rl.TextSize=12
         local rowColor
         if isZ then rowColor=Color3.fromRGB(200,200,140)
@@ -666,6 +667,35 @@ refreshList=function()
             end
             task.delay(.4,refreshList)
         end)
+        if isZ then
+            local musicBox=Instance.new("TextBox",row)
+            musicBox.Position=UDim2.fromOffset(8,29);musicBox.Size=UDim2.fromOffset(row.AbsoluteSize.X>0 and (row.AbsoluteSize.X-70) or (W-86),20)
+            musicBox.BackgroundColor3=Color3.fromRGB(14,10,10);musicBox.BorderSizePixel=0
+            musicBox.Font=Enum.Font.GothamMedium;musicBox.TextSize=11;musicBox.TextColor3=Color3.new(1,1,1)
+            musicBox.PlaceholderText="music id (blank = none)";musicBox.PlaceholderColor3=Color3.fromRGB(100,85,85)
+            musicBox.ClearTextOnFocus=false;musicBox.Text=tostring(entry.MusicId or "");musicBox.ZIndex=5
+            musicBox.TextXAlignment=Enum.TextXAlignment.Left
+            Instance.new("UICorner",musicBox).CornerRadius=UDim.new(0,4)
+            local musicStroke=Instance.new("UIStroke",musicBox);musicStroke.Thickness=1;musicStroke.Color=ACC
+            local saveBtn=Instance.new("TextButton",row)
+            saveBtn.AnchorPoint=Vector2.new(1,0);saveBtn.Position=UDim2.new(1,-4,0,29)
+            saveBtn.Size=UDim2.fromOffset(50,20);saveBtn.BackgroundColor3=Color3.fromRGB(55,40,40)
+            saveBtn.BorderSizePixel=0;saveBtn.Font=Enum.Font.GothamBold;saveBtn.TextSize=11
+            saveBtn.TextColor3=Color3.new(1,1,1);saveBtn.Text="Save";saveBtn.ZIndex=5
+            Instance.new("UICorner",saveBtn).CornerRadius=UDim.new(0,4)
+            saveBtn.Activated:Connect(function()
+                if not rfSetZoneMusic or type(zoneId)~="string" or zoneId=="" then return end
+                local ok,result=pcall(function()
+                    return rfSetZoneMusic:InvokeServer({ZoneId=zoneId,MusicId=musicBox.Text})
+                end)
+                if ok and type(result)=="table" and result.ok then
+                    showStatus("Zone music updated: "..(result.zone and result.zone.name or zoneId))
+                else
+                    local err=(ok and type(result)=="table" and result.error) or tostring(result)
+                    showStatus("Set music failed: "..tostring(err),true)
+                end
+            end)
+        end
     end
 end
 btnFinishZone.Activated:Connect(finishZoneDraw)

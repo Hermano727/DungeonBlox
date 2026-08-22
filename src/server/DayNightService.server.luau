@@ -12,22 +12,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local DayNightConfig = require(ReplicatedStorage:WaitForChild("DayNightConfig"))
-
-local DEV_USERIDS = {
-	706604079,
-	62963717,
-	446429007,
-	49263337,
-}
-
-local function isDev(player)
-	for _, id in ipairs(DEV_USERIDS) do
-		if player.UserId == id then
-			return true
-		end
-	end
-	return RunService:IsStudio()
-end
+local DevRoster = require(ReplicatedStorage:WaitForChild("DevRoster"))
+local isDev = DevRoster.IsDev
 
 local PHASE_SEC = DayNightConfig.PHASE_DURATION_SEC
 local CYCLE_SEC = DayNightConfig.cycleDurationSec()
