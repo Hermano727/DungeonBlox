@@ -1,4 +1,9 @@
 local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindConfig"))
+local VideoSettings = require(game:GetService("ReplicatedStorage"):WaitForChild("VideoSettings"))
+-- Dialog zoom-in FOV sits DIALOG_ZOOM_FOV_DELTA studs below VideoSettings.fov
+-- (was a hardcoded 65 vs. a hardcoded 70 default) so the Settings menu's FOV
+-- slider keeps this feeling proportional at any base FOV.
+local DIALOG_ZOOM_FOV_DELTA = 5
 -- DialogModule.lua
 local DialogModule = {}
 DialogModule.__index = DialogModule
@@ -11,10 +16,16 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
 
+local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
+
 local DIALOG_STAND_DISTANCE = 5.75
 
+-- Was Quicksand ("rbxasset://fonts/families/Quicksand.json") -- not a real Roblox bundled
+-- font family, so this silently fell back to the default font at render time (this is the
+-- "Font family rbxasset://fonts/families/Quicksand.json failed to load" warning seen live
+-- during actual NPC dialogue). Routed through UIFonts.Families.Body (Work Sans) instead.
 local DIALOG_FONT = Font.new(
-	"rbxasset://fonts/families/Quicksand.json",
+	UIFonts.Families.Body,
 	Enum.FontWeight.Medium,
 	Enum.FontStyle.Normal
 )
@@ -458,7 +469,7 @@ function DialogModule:triggerDialog(player, questionNumber)
 	local dialogNum = questionNumber or self.dialogOption
 	local dialog = self.dialogs[dialogNum] -- Show the first dialog (can be updated for other logic)
 	
-	tweenService:Create(game.Workspace.CurrentCamera, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {FieldOfView = 65}):Play()
+	tweenService:Create(game.Workspace.CurrentCamera, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {FieldOfView = VideoSettings.fov - DIALOG_ZOOM_FOV_DELTA}):Play()
 	
 	task.spawn(function()
 		task.wait(0.05)
@@ -642,9 +653,9 @@ function DialogModule:hideGui(exitQuip, notActuallyAnExitQuip)
 	end
 
 	if notActuallyAnExitQuip then
-		tweenService:Create(game.Workspace.CurrentCamera, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {FieldOfView = 65}):Play()
+		tweenService:Create(game.Workspace.CurrentCamera, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {FieldOfView = VideoSettings.fov - DIALOG_ZOOM_FOV_DELTA}):Play()
 	else
-		tweenService:Create(game.Workspace.CurrentCamera, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {FieldOfView = 70}):Play()
+		tweenService:Create(game.Workspace.CurrentCamera, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {FieldOfView = VideoSettings.fov}):Play()
 	end
 	
 	-- hide player response options

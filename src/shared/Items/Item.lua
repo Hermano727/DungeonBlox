@@ -21,10 +21,10 @@
 
 	Historically only armor stamped a specific `equipSlot` onto the owned record; weapons
 	and materials fell back to generic type-based guessing in
-	DungeonProfileTypes.GetAllowedEquipSlot, which silently collapsed every weapon (Sword
+	ProfileTypes.GetAllowedEquipSlot, which silently collapsed every weapon (Sword
 	AND Bow) onto one "Weapon" slot and, worse, every catalog-granted item (GrantItemId
 	never copied `Slot`/tags at all) onto one generic "Armor" bucket. That bucket isn't
-	even a slot PlayerPreview's UI reads -- see DungeonProfileTypes.lua's Reconcile()
+	even a slot PlayerPreview's UI reads -- see ProfileTypes.lua's Reconcile()
 	migration for how already-corrupted saves get fixed up. Routing every grant through
 	this class hierarchy means the slot is always correct at creation time, in one place,
 	instead of re-derived (and re-drifting) in N places.
@@ -52,7 +52,7 @@ export type ItemDef = {
 -- Legacy owned-item `type` values: only these four Kinds ever get their own literal
 -- `type` string on the owned record; everything else (Ammo/Fish/Alteration/Reforging/
 -- Chaos/Divinity/Nullification/Transmutation/Wisdom/plain Material/...) collapses to
--- "Material", matching what DungeonProfileService's old inline table construction did via
+-- "Material", matching what ProfileService's old inline table construction did via
 -- its own mapKindToLegacyItemType helper (now removed -- this replaces it). Getting this
 -- wrong would be a real regression: several crafting/enchant systems (CraftingOrbApply,
 -- EnchantScrollApply, ProtectionScrollApply) key off `item.type == "Material"` for scroll/
@@ -90,7 +90,7 @@ end
 
 -- Overridden by subclasses that want to stamp `tags` on the owned record. Left empty by
 -- default -- see WeaponItem's comment for why catalog-granted weapons intentionally don't
--- populate this (DungeonEquippedHotbar reads weapon tags to apply WeaponSwingMult; adding
+-- populate this (EquippedHotbar reads weapon tags to apply WeaponSwingMult; adding
 -- tags here would be a live gameplay-balance change, not a bugfix, so it's opt-in).
 function Item:GetTags(): { string }?
 	return nil

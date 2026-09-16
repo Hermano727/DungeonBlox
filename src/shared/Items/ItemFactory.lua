@@ -3,7 +3,7 @@
 	ItemFactory -- the single place that turns a catalog itemId into an owned item record.
 
 	Replaces the inline table-literal construction that used to be duplicated (and, in the
-	weapon/material case, subtly wrong) in DungeonProfileService.GrantItemId and its
+	weapon/material case, subtly wrong) in ProfileService.GrantItemId and its
 	stack-merge sibling mergeStackableIntoInventory. Both now call
 	ItemFactory.CreateOwnedItem(itemId, opts) instead of hand-building the record.
 

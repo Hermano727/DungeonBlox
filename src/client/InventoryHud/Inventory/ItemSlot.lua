@@ -3,6 +3,7 @@
 --  hover wiring, used by both InvSlots (bag) and PlayerPreview (equip boxes). No durability
 --  bar yet -- first pass covers equip/swap only, per spec.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
 local React = require(ReplicatedStorage.Packages.React)
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
 local RarityBorder = require(script.Parent:WaitForChild("RarityBorder"))
@@ -20,6 +21,9 @@ export type ItemSlotProps = {
 	onRightClick: ((x: number, y: number) -> ())?,
 	onHoverStart: ((x: number, y: number) -> ())?,
 	onHoverEnd: (() -> ())?,
+	-- Fires on MouseButton1 InputBegan, in ADDITION to (never instead of) Activated below --
+	-- see InventoryMain's press/drag effect for how it turns this into hold-drag-and-drop.
+	onPressStart: ((x: number, y: number) -> ())?,
 }
 
 local function ItemSlot(props: ItemSlotProps)
@@ -35,12 +39,15 @@ local function ItemSlot(props: ItemSlotProps)
 
 	-- Selected (currently held/picked-up) always wins as a flat white outline; otherwise
 	-- rarity-colored gradient border for an occupied slot, plain muted border when empty.
+	-- Thickness matches PlayerPreview's EquipmentSlot (8) -- these are two independent
+	-- RarityBorder call sites, not a shared constant, so a bag-slot-only bump here is
+	-- exactly how they drift apart again. See the CLAUDE.md note on this.
 	if props.selected then
-		children.Stroke = e(RarityBorder, { color = SELECTED_BORDER_COLOR, thickness = 5 })
+		children.Stroke = e(RarityBorder, { color = SELECTED_BORDER_COLOR, thickness = 10 })
 	elseif item then
-		children.Stroke = e(RarityBorder, { rarity = rarity, thickness = 3 })
+		children.Stroke = e(RarityBorder, { rarity = rarity, thickness = 8 })
 	else
-		children.Stroke = e(RarityBorder, { color = EMPTY_BORDER_COLOR, thickness = 3 })
+		children.Stroke = e(RarityBorder, { color = EMPTY_BORDER_COLOR, thickness = 8 })
 	end
 
 	if item and rarity == "Legendary" then
@@ -73,7 +80,7 @@ local function ItemSlot(props: ItemSlotProps)
 				Text = ItemDefinitions.GetDisplayNameForItem(item),
 				TextWrapped = true,
 				TextScaled = true,
-				Font = Enum.Font.GothamMedium,
+				FontFace = UIFonts.BodyMedium,
 				TextColor3 = Color3.new(1, 1, 1),
 				ZIndex = 4,
 			})
@@ -87,7 +94,7 @@ local function ItemSlot(props: ItemSlotProps)
 				Size = UDim2.fromOffset(size * 0.4, size * 0.24),
 				BackgroundTransparency = 1,
 				Text = tostring(count),
-				Font = Enum.Font.GothamBold,
+				FontFace = UIFonts.BodyBold,
 				TextScaled = true,
 				TextColor3 = Color3.new(1, 1, 1),
 				TextStrokeTransparency = 0,
@@ -109,6 +116,12 @@ local function ItemSlot(props: ItemSlotProps)
 		[React.Event.InputBegan] = function(_rbx, input)
 			if input.UserInputType == Enum.UserInputType.MouseButton2 and props.onRightClick then
 				props.onRightClick(input.Position.X, input.Position.Y)
+			elseif input.UserInputType == Enum.UserInputType.MouseButton1 and props.onPressStart then
+				-- Possible hold-drag start. Whether this becomes a real drag (vs. a plain click)
+				-- is decided by movement-past-threshold up in InventoryMain, not here -- this
+				-- button doesn't know or care, and Activated below still fires normally for an
+				-- actual click.
+				props.onPressStart(input.Position.X, input.Position.Y)
 			end
 		end,
 	}, children)

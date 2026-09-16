@@ -11,14 +11,21 @@ local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local Camera = workspace.CurrentCamera
 
+-- -=/VIDEO SETTINGS/=-
+-- Settings menu Video tab owns the resting FOV now (VideoSettings.fov,
+-- default 70 -- matches this file's old hardcoded DefaultFieldOfView so
+-- nothing changes until the player actually moves the slider). Crouch still
+-- zooms in by a fixed delta below whatever that base is.
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local VideoSettings = require(ReplicatedStorage:WaitForChild("VideoSettings"))
+
 ----------------- { CONFIGURATION } ---------------------
 
 local config = {
 	CrouchButtons = Enum.KeyCode.C,                                                    -- Key for crouching
 	CrouchingCooldown = 0.1,                                                           -- Minimum time required between crouching and uncrouching
 	Speed = 8,                                                                         -- Speed while crouching
-	DefaultFieldOfView = 70,                                                           -- Default Camera FOV
-	CrouchFieldOfView = 60,                                                            -- Crouching Camera FOV (can make it the same or zoom in/out)
+	CrouchFieldOfViewDelta = 10,                                                       -- How much narrower (studs of FOV) crouching gets vs. VideoSettings.fov
 	CameraFOVCrouchTime = 0.5,                                                         -- Time to tween the camera to the crouching FOV
 	CameraFOVResetTime = 1,                                                            -- Time to tween the camera back to the default FOV
 	CameraOffset = -1,                                                                 -- How much the camera tweens down when crouching
@@ -34,6 +41,11 @@ local config = {
 	RunningEnabled = true,                                                             -- Enabled since you have running system
 	CrouchWalkAnimSpeed = 0.5                                                          -- Speed multiplier for crouch walk animation (1.0 = normal speed)
 }
+
+-- -=/DERIVED FOV HELPER/=-
+local function crouchFieldOfView()
+	return VideoSettings.fov - config.CrouchFieldOfViewDelta
+end
 
 ---------------------------------------------------------
 
@@ -56,18 +68,17 @@ local freefallTimer = 0
 local currentCrouchAnim = nil
 local isCrouching = false
 local fovTween = nil
-local lastFOV = config.DefaultFieldOfView
+local lastFOV = VideoSettings.fov
 
 -- Get references to the running system
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local runEvent = ReplicatedStorage:WaitForChild("UpdateRunningState")
 
 -- Server-authoritative crouch (routes through the existing energy system)
 local RequestCrouch = ReplicatedStorage:WaitForChild("EnergyEvents"):WaitForChild("RequestCrouch", 10)
 
 -- -=/SETTING CAMERA FOV/=-
-Camera.FieldOfView = config.DefaultFieldOfView
-lastFOV = config.DefaultFieldOfView
+Camera.FieldOfView = VideoSettings.fov
+lastFOV = VideoSettings.fov
 
 -- -=/INITIAL ATTRIBUTE SETUP/=-
 if RootPart:GetAttribute("IsCrouching") == nil then
@@ -177,7 +188,7 @@ local function Crouch()
 	Humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
 
 	-- Set crouch FOV
-	SmoothFOV(config.CrouchFieldOfView, config.CameraFOVCrouchTime)
+	SmoothFOV(crouchFieldOfView(), config.CameraFOVCrouchTime)
 
 	local CAMgoal1 = { CameraOffset = Vector3.new(0, config.CameraOffset, 0) }
 	local CAMinfo1 = TweenInfo.new(
@@ -220,7 +231,7 @@ local function Stop()
 			Humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
 
 			-- Reset FOV to default
-			SmoothFOV(config.DefaultFieldOfView, config.CameraFOVResetTime)
+			SmoothFOV(VideoSettings.fov, config.CameraFOVResetTime)
 
 			local CAMgoal2 = { CameraOffset = Vector3.new(0, 0, 0) }
 			local CAMinfo2 = TweenInfo.new(
@@ -275,8 +286,8 @@ RunService.Heartbeat:Connect(function()
 
 	if isCrouching then
 		-- Only maintain FOV if our tween is complete and FOV gets changed externally
-		if fovTween == nil and math.abs(Camera.FieldOfView - config.CrouchFieldOfView) > 0.5 then
-			Camera.FieldOfView = config.CrouchFieldOfView
+		if fovTween == nil and math.abs(Camera.FieldOfView - crouchFieldOfView()) > 0.5 then
+			Camera.FieldOfView = crouchFieldOfView()
 		end
 	end
 
@@ -345,8 +356,8 @@ end)
 RunService.Heartbeat:Connect(function()
 	if isCrouching and fovTween == nil then
 		-- If FOV gets changed by another script while crouching, restore it
-		if math.abs(Camera.FieldOfView - config.CrouchFieldOfView) > 0.5 then
-			Camera.FieldOfView = config.CrouchFieldOfView
+		if math.abs(Camera.FieldOfView - crouchFieldOfView()) > 0.5 then
+			Camera.FieldOfView = crouchFieldOfView()
 		end
 	end
 end)
@@ -374,7 +385,7 @@ plr.CharacterAdded:Connect(function(newCharacter)
 	isCrouching = false
 	originalSpeed = Humanoid.WalkSpeed
 	fovTween = nil
-	lastFOV = config.DefaultFieldOfView
+	lastFOV = VideoSettings.fov
 
 	-- Reset attributes for new character
 	if RootPart:GetAttribute("IsCrouching") == nil then

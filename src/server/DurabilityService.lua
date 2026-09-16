@@ -22,11 +22,11 @@ local DurabilityService = {}
 -- Lazy deps to avoid circular requires
 local _dp, _stats
 local function dp()
-	if not _dp then _dp = require(ServerScriptService:WaitForChild("DungeonProfileService")) end
+	if not _dp then _dp = require(ServerScriptService:WaitForChild("ProfileService")) end
 	return _dp
 end
 local function stats()
-	if not _stats then _stats = require(ServerScriptService:WaitForChild("DungeonStatsService")) end
+	if not _stats then _stats = require(ServerScriptService:WaitForChild("StatsService")) end
 	return _stats
 end
 

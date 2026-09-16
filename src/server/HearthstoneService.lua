@@ -10,7 +10,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local HearthstoneConfig   = require(ReplicatedStorage:WaitForChild("HearthstoneConfig"))
 local HearthstoneRegistry = require(ServerScriptService:WaitForChild("HearthstoneRegistry"))
-local DungeonProfile      = require(ServerScriptService:WaitForChild("DungeonProfileService"))
+local DungeonProfile      = require(ServerScriptService:WaitForChild("ProfileService"))
 
 local HearthstoneService = {}
 
@@ -36,6 +36,37 @@ local function getProfile(player)
         end
     end
     return p
+end
+
+-- Returns the CFrame of `player`'s active hearthstone location (same lookup Teleport()
+-- uses, minus the cooldown/mutation), for callers that just need "where does this player's
+-- hearthstone point right now" -- e.g. the dungeon system's "Leave Dungeon" button. Falls
+-- back to the Oakhaven seed location (HearthstoneConfig.SEED_LOCATIONS) if the profile has
+-- no usable hearthstone or the registry lookup fails for any reason, so this never returns
+-- nil -- callers can always teleport somewhere sane.
+function HearthstoneService.GetHearthstoneLocation(player)
+    local function oakhavenFallback()
+        for _, seed in ipairs(HearthstoneConfig.SEED_LOCATIONS) do
+            if seed.id == "oakhaven" then
+                return CFrame.new(seed.position + Vector3.new(0, 3, 0))
+            end
+        end
+        -- Should be unreachable (oakhaven is always seeded), but never return nil.
+        return CFrame.new(0, 10, 0)
+    end
+
+    local profile = getProfile(player)
+    if not profile then
+        return oakhavenFallback()
+    end
+
+    local hs = profile.hearthstone
+    local loc = hs and HearthstoneRegistry.GetLocation(hs.active or "oakhaven")
+    if not loc then
+        return oakhavenFallback()
+    end
+
+    return CFrame.new(loc.position + Vector3.new(0, 3, 0))
 end
 
 -- Teleport player to their active hearthstone location (5-min cooldown).

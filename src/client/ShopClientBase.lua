@@ -23,6 +23,7 @@ local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindC
 
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
 local UserInputService  = game:GetService("UserInputService")
 
 local MenuMouse       = require(ReplicatedStorage:WaitForChild("CursorUtils"))
@@ -68,7 +69,7 @@ local function lbl(parent, props)
 	local l = Instance.new("TextLabel")
 	l.BackgroundTransparency = 1
 	l.TextColor3    = props.color or T.TextPrimary
-	l.Font          = props.bold  and Enum.Font.GothamBold or Enum.Font.GothamMedium
+	l.FontFace      = props.bold  and UIFonts.BodyBold or UIFonts.BodyMedium
 	l.TextSize      = props.size  or 13
 	l.TextXAlignment= props.xa    or Enum.TextXAlignment.Left
 	l.TextYAlignment= props.ya    or Enum.TextYAlignment.Top
@@ -231,7 +232,7 @@ function ShopClientBase.create(config)
 	local closeBtn=Instance.new("TextButton")
 	closeBtn.Size=UDim2.fromOffset(32,32); closeBtn.AnchorPoint=Vector2.new(1,0)
 	closeBtn.Position=UDim2.new(1,-8,0,8); closeBtn.BackgroundColor3=T.CloseBtn
-	closeBtn.Font=Enum.Font.GothamBold; closeBtn.TextSize=16
+	closeBtn.FontFace=UIFonts.BodyBold; closeBtn.TextSize=16
 	closeBtn.TextColor3=Color3.new(1,1,1); closeBtn.Text="X"
 	closeBtn.ZIndex=6; closeBtn.Parent=panel; cr(closeBtn,6)
 
@@ -266,7 +267,7 @@ function ShopClientBase.create(config)
 			local b=Instance.new("TextButton")
 			b.Size=UDim2.new(1,-12,0,52); b.Position=UDim2.fromOffset(6,6+(i-1)*58)
 			b.BackgroundColor3=T.SidebarInact; b.BorderSizePixel=0
-			b.Font=Enum.Font.GothamBold; b.TextSize=16; b.TextColor3=T.TextPrimary
+			b.FontFace=UIFonts.BodyBold; b.TextSize=16; b.TextColor3=T.TextPrimary
 			b.Text=tabName; b.ZIndex=4; b.AutoButtonColor=false; b.Parent=sidebar; cr(b,8)
 			tabBtns[tabName]=b
 		end

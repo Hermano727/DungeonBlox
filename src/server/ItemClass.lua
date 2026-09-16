@@ -3,7 +3,7 @@
     OOP wrapper for a generated item instance.
     Stores the rolled base stats and provides getFinalStats() which applies
     weapon-type multipliers. Call toGrantTemplate() to get a table that
-    DungeonProfileService.GrantItem() will accept.
+    ProfileService.GrantItem() will accept.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -78,7 +78,7 @@ end
 
 --[[
     toGrantTemplate()
-    Returns a table compatible with DungeonProfileService.GrantItem(player, template, 1).
+    Returns a table compatible with ProfileService.GrantItem(player, template, 1).
     All stats (base + substats) are packed into the subStats dict.
 ]]
 function ItemClass:toGrantTemplate()

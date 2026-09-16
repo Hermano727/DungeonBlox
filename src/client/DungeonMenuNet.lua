@@ -5,10 +5,10 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Types = require(ReplicatedStorage:WaitForChild("DungeonProfileTypes"))
+local Types = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
 local push = ReplicatedStorage:WaitForChild("DungeonProfilePush")
-local rfEquip = ReplicatedStorage:WaitForChild("DungeonEquipItem")
-local rfUnequip = ReplicatedStorage:WaitForChild("DungeonUnequipItem")
+local rfEquip = ReplicatedStorage:WaitForChild("EquipItem")
+local rfUnequip = ReplicatedStorage:WaitForChild("UnequipItem")
 local rfSync = ReplicatedStorage:WaitForChild("DungeonProfileRequestSync")
 local rfInventoryAct = ReplicatedStorage:WaitForChild("DungeonInventoryAct")
 
@@ -280,6 +280,23 @@ function DungeonMenuNet.requestUnequip(slot)
 	elseif rfUnequip and rfUnequip:IsA("RemoteEvent") then
 		rfUnequip:FireServer(slot)
 	end
+end
+
+-- Drop/Trash both go through requestInventoryAct (DropItem/TrashItem kinds) rather than
+-- their own RemoteFunctions -- same reasoning as requestEquip/requestUnequip already
+-- being thin wrappers around it: one dispatch path, all validation server-side.
+function DungeonMenuNet.requestDropItem(itemUuid)
+	if type(itemUuid) ~= "string" or itemUuid == "" then
+		return false, "bad_uuid"
+	end
+	return DungeonMenuNet.requestInventoryAct({ kind = "DropItem", uuid = itemUuid })
+end
+
+function DungeonMenuNet.requestTrashItem(itemUuid)
+	if type(itemUuid) ~= "string" or itemUuid == "" then
+		return false, "bad_uuid"
+	end
+	return DungeonMenuNet.requestInventoryAct({ kind = "TrashItem", uuid = itemUuid })
 end
 
 function DungeonMenuNet.requestInventoryAct(act)

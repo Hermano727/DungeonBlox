@@ -13,7 +13,7 @@ local ReplicatedStorage   = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local Config = require(ReplicatedStorage:WaitForChild("AuctionConfig"))
-local DPS    = require(ServerScriptService:WaitForChild("DungeonProfileService"))
+local DPS    = require(ServerScriptService:WaitForChild("ProfileService"))
 
 local store = DataStoreService:GetDataStore(Config.DATASTORE_NAME)
 
@@ -135,7 +135,7 @@ local function grantItemDirect(player, item)
 	for k, v in pairs(item) do copy[k] = v end
 	copy.uuid = newUuid
 	profile.inventory[newUuid] = copy
-	DPS.PlaceItemInFirstEmptySlot(profile, newUuid)
+	DPS.PlaceItemInFirstEmptySlot(profile, newUuid, player)
 	return true
 end
 
@@ -508,7 +508,7 @@ end
 -- Player join: claim pending coins/items
 -- ---------------------------------------------------------------------------
 Players.PlayerAdded:Connect(function(player)
-	task.wait(4) -- allow DungeonBootstrap to load profile first
+	task.wait(4) -- allow ProfileBootstrap to load profile first
 	if player and player.Parent then
 		claimPendingForPlayer(player)
 	end

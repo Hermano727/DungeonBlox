@@ -1,29 +1,33 @@
 --[[
     LootClient
-    Listens for ItemDropNotify and shows a brief pickup banner in the top-right.
+    Listens for ItemDropNotify and shows a brief pickup banner in the bottom-right
+    (2026-09-13 -- was top-right; moved per direct request while making room up there
+    for the Combat XP bar's orb-burst effect).
     Banners stack up to 5 and auto-dismiss after 4 seconds.
-    Rarity color matches the existing DungeonProfileTypes.GetRarityColor() palette.
+    Rarity color matches the existing ProfileTypes.GetRarityColor() palette.
 ]]
 
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService      = game:GetService("TweenService")
 
-local Types = require(ReplicatedStorage:WaitForChild("DungeonProfileTypes"))
+local Types = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
+local SfxService = require(ReplicatedStorage:WaitForChild("SfxService"))
 
 local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 ------------------------------------------------------------------------
--- Rarity colors come straight from DungeonProfileTypes.GetRarityColor(),
--- the same source DungeonWorldLootService uses for the world-pickup aura
+-- Rarity colors come straight from ProfileTypes.GetRarityColor(),
+-- the same source WorldLootService uses for the world-pickup aura
 -- color. This file used to keep its own hand-copied color table (still
 -- correct, but only by luck of nobody having edited one copy without the
 -- other yet) -- reading the shared table directly removes that footgun.
 ------------------------------------------------------------------------
 
 ------------------------------------------------------------------------
--- Banner container (top-right, stacks downward)
+-- Banner container (bottom-right, stacks upward off the pinned bottom corner --
+-- 2026-09-13, was top-right/stacks downward)
 ------------------------------------------------------------------------
 local gui = Instance.new("ScreenGui")
 gui.Name           = "LootBannerGui"
@@ -36,8 +40,12 @@ gui.Parent         = playerGui
 
 local stack = Instance.new("Frame", gui)
 stack.Name              = "Stack"
-stack.AnchorPoint       = Vector2.new(1, 0)
-stack.Position          = UDim2.new(1, -12, 0, 48)
+-- AnchorPoint (1,1) pins the stack's bottom-right corner at Position; AutomaticSize.Y
+-- then grows the frame's TOP edge upward as banners are added, so the newest banner
+-- stays put near the corner and older ones get pushed up -- no UIListLayout/order
+-- changes needed, just the anchor+position flip from the old top-right version.
+stack.AnchorPoint       = Vector2.new(1, 1)
+stack.Position          = UDim2.new(1, -12, 1, -12)
 stack.Size              = UDim2.fromOffset(280, 10)
 stack.BackgroundTransparency = 1
 stack.AutomaticSize     = Enum.AutomaticSize.Y
@@ -71,10 +79,20 @@ local function spawnBanner(data)
         else
             displayText = string.format("+%d Coins", amount)
         end
-    else
+    elseif data.type == "Weapon" or data.type == "Armor" then
+        -- Gear drop: never stackable, so no quantity suffix.
         rarityColor = Types.GetRarityColor(data.rarity)
         local typeIcon = data.type == "Weapon" and "[W]" or "[A]"
         displayText = typeIcon .. " " .. tostring(data.name or "Item")
+    else
+        -- Any other stackable material (key fragments today, more later --
+        -- Ore, Scrap, crafting shards, ...). Mirrors the Coins case above:
+        -- shows "xN" only when more than one dropped, so a single item
+        -- still just reads "Key Fragment" instead of "Key Fragment x1".
+        rarityColor = Types.GetRarityColor(data.rarity)
+        local count = math.max(0, math.floor(tonumber(data.count) or 1))
+        local baseName = tostring(data.name or "Item")
+        displayText = count > 1 and string.format("+%s x%d", baseName, count) or ("+" .. baseName)
     end
 
     local banner = Instance.new("Frame", stack)
@@ -136,7 +154,20 @@ local function bindItemDropNotify()
         return
     end
     ev.OnClientEvent:Connect(spawnBanner)
-    print("[LootClient] ready (banners bound)")
+
+    -- Pickup sound: fired once per successful pickup (mob drop or death-loot
+    -- bundle), uncapped -- picking up several items fast is meant to layer
+    -- their sounds, not swallow repeats. See WorldLootService.firePickupSfx.
+    local sfxEvent = ge:WaitForChild("ItemPickupSfx", 120)
+    if sfxEvent and sfxEvent:IsA("RemoteEvent") then
+        sfxEvent.OnClientEvent:Connect(function(key)
+            SfxService.PlayEffect(key)
+        end)
+    else
+        warn("[LootClient] GameEvents.ItemPickupSfx missing after wait — pickup sfx disabled.")
+    end
+
+    print("[LootClient] ready (banners + pickup sfx bound)")
 end
 
 task.defer(bindItemDropNotify)

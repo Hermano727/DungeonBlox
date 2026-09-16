@@ -19,15 +19,19 @@ local ItemConfig = {}
 
 ItemConfig.TIER_MEDIANS        = { 10, 30, 50, 70, 90 }
 ItemConfig.MAX_SUBSTATS        = { 2, 3, 3, 4, 4 }
-ItemConfig.RARITY_SUBSTAT_MULT = { Common=0.70, Uncommon=0.85, Rare=1.00, Epic=1.20, Legendary=1.45 }
+ItemConfig.RARITY_SUBSTAT_MULT = { Common=0.70, Uncommon=0.85, Rare=1.00, Epic=1.20, Legendary=1.45, Mythic=1.45 }
 ItemConfig.WEAPON_MULTIPLIERS  = { Sword=1.00, Scythe=1.05, Axe=1.10, Mace=1.15, Bow=1.20 }
 ItemConfig.WEAPON_TYPES        = { "Sword", "Scythe", "Axe", "Mace", "Bow" }
 -- Procedural weapon drops clone these StarterPack Tool names from DungeonToolPrefabsArchive.
+-- Scythe/Axe/Mace removed (2026-08): no icon art yet and WEAPON_TYPES_BY_TIER[1] already
+-- restricts T1 drops to Sword/Bow only, so these three entries were pure dead config --
+-- EquippedHotbar.ensureStarterWeaponDropPrefabs iterates every value in this map
+-- unconditionally at boot, so having them here warned "StarterPack missing Tool for
+-- weapon drop prefab: Axe Tool / Mace / scythe" on every server start even though nothing
+-- live ever requested them. Re-add an entry here (and to WEAPON_TYPES_BY_TIER once a tier
+-- unlocks it) when that weapon type actually gets art + a StarterPack prefab.
 ItemConfig.WEAPON_DROP_PREFAB_BY_TYPE = {
 	Sword = "TrainingSword",
-	Scythe = "scythe",
-	Axe = "Axe Tool",
-	Mace = "Mace",
 	Bow = "WoodenBow",
 }
 ItemConfig.ARMOR_SLOTS         = { "Helm", "Chest", "Legs", "Boots", "Shield" }
@@ -35,7 +39,7 @@ ItemConfig.ARMOR_SLOTS         = { "Helm", "Chest", "Legs", "Boots", "Shield" }
 ------------------------------------------------------------------------
 -- Weapon kind -> equip-panel slot. Every weapon kind shares the single
 -- "Weapon" slot except Bow, which gets its own -- PlayerPreview.lua's 8-slot
--- layout, DungeonBootstrap's TRAINING_GEAR_FOR_SLOT, and
+-- layout, ProfileBootstrap's TRAINING_GEAR_FOR_SLOT, and
 -- KeybindConfig.Keybinds.ToolSlot already all assume Bow is independent of
 -- Weapon; this table (plus WEAPON_ID_KIND below) is what makes item
 -- generation/granting agree with them. Add a new non-default-slot weapon
@@ -219,6 +223,10 @@ ItemConfig.WEAPON_TYPE_WEIGHTS = {
 -- Drop config
 ------------------------------------------------------------------------
 
+-- Canonical rarity order (Common -> Legendary). Single source of truth for anything that
+-- must iterate rarities in a fixed order -- ItemGenerator.rollRarity's deterministic roll,
+-- and DevClient's Item Spawner tab (rarity cycle control).
+ItemConfig.RARITY_ORDER = { "Common", "Uncommon", "Rare", "Epic", "Legendary" }
 ItemConfig.DEFAULT_RARITY_WEIGHTS  = { Common=45, Uncommon=27, Rare=16, Epic=9, Legendary=3 }
 ItemConfig.TIER_DROP_CHANCE        = { [1]=0.18,[2]=0.28,[3]=0.40,[4]=0.55,[5]=0.72 }
 ItemConfig.ELITE_DROP_CHANCE_BONUS = 0.25
@@ -286,8 +294,8 @@ ItemConfig.ARMOR_KIND_LABEL  = { Helm = "Helmet", Chest = "Chestplate", Legs = "
 -- armor kinds keyed by an ARMOR_SLOTS id (Helm/Chest/Legs/Boots/Shield).
 ItemConfig.GENERATED_ITEM_ICONS = {
     [1] = {
-        Sword  = "rbxassetid://77680002167902",
-        Bow    = "rbxassetid://102552791823343",
+        Sword  = "rbxassetid://107047939268385", -- better shade of brown (2026-09-12, per direct request)
+        Bow    = "rbxassetid://82650715306940", -- better shade of brown (2026-09-12, per direct request)
         Helm   = "rbxassetid://84010311919153",
         Chest  = "rbxassetid://95963199323247",
         Legs   = "rbxassetid://128669788193929",

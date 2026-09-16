@@ -5,6 +5,7 @@
 --  in later.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
 local React = require(ReplicatedStorage.Packages.React)
 local PanelShell = require(script.Parent:WaitForChild("PanelShell"))
 local InventoryData = require(script.Parent:WaitForChild("InventoryData"))
@@ -41,7 +42,7 @@ local function Row(props: { label: string, value: string, layoutOrder: number })
 			Size = UDim2.new(0.6, 0, 1, 0),
 			BackgroundTransparency = 1,
 			Text = props.label,
-			Font = Enum.Font.GothamMedium,
+			FontFace = UIFonts.BodyMedium,
 			TextSize = 14,
 			TextColor3 = Color3.fromRGB(180, 165, 145),
 			TextXAlignment = Enum.TextXAlignment.Left,
@@ -51,7 +52,7 @@ local function Row(props: { label: string, value: string, layoutOrder: number })
 			Position = UDim2.new(0.6, 0, 0, 0),
 			BackgroundTransparency = 1,
 			Text = props.value,
-			Font = Enum.Font.GothamBold,
+			FontFace = UIFonts.BodyBold,
 			TextSize = 15,
 			TextColor3 = Color3.fromRGB(238, 230, 206),
 			TextXAlignment = Enum.TextXAlignment.Right,

@@ -20,12 +20,31 @@ local MobData=require(RS:WaitForChild("MobData"))
 local NPCRegistry=require(RS:WaitForChild("NPCRegistry"))
 local ZoneConfig=require(RS:WaitForChild("ZoneConfig"))
 local DayNightConfig=require(RS:WaitForChild("DayNightConfig"))
+-- Only mobs with a real, fully-authored model (not a generic/placeholder
+-- mesh) show up in the dev tool's spawn list -- per direct request
+-- ("remove the slop mobs... the only ones fully made with model are kane +
+-- plains slime + skeleton"). MobData itself is untouched (other systems --
+-- natural spawners already placed in the world, loot tables -- still
+-- reference every MobID), this only filters what F8 offers for placing new
+-- ones. Expand this set as more mobs get real models.
+local MOB_ID_WHITELIST={PlainsSlime=true,SmallSkeleton=true,Kane=true}
 local MOB_IDS={}
-for t=1,5 do local tb=MobData[t];if type(tb)=="table" then for id in pairs(tb) do table.insert(MOB_IDS,id) end end end
+for t=1,5 do local tb=MobData[t];if type(tb)=="table" then for id in pairs(tb) do if MOB_ID_WHITELIST[id] then table.insert(MOB_IDS,id) end end end end
 table.sort(MOB_IDS)
 local NPC_TYPES={}
 for k in pairs(NPCRegistry.Types) do table.insert(NPC_TYPES,k) end
 table.sort(NPC_TYPES)
+local ItemConfig=require(RS:WaitForChild("ItemConfig"))
+local ItemDefinitions=require(RS:WaitForChild("ItemDefinitions"))
+local rfSpawnItem=GE and GE:WaitForChild("DevSpawnItem",10)
+local rfDevGrant=RS:WaitForChild("DevGrantItem",60)
+if not rfDevGrant then warn("[DevClient] DevGrantItem RF not found after 60s") end
+-- Reflected off ItemDefinitions.Items -- any new catalog entry (dungeon key, fragment,
+-- material, etc.) shows up in the Item tab's "Other Items" list automatically, no
+-- dev-tool code change needed.
+local OTHER_ITEM_IDS={}
+for id in pairs(ItemDefinitions.Items) do table.insert(OTHER_ITEM_IDS,id) end
+table.sort(OTHER_ITEM_IDS)
 local panelOpen,placingMode,mode,mobIdx,npcIdx=false,false,"Mob",1,1
 local exploreMode=false
 local panelMouseFree=false
@@ -201,7 +220,7 @@ ghost.CanCollide=false;ghost.CanQuery=false;ghost.CanTouch=false;ghost.CastShado
 ghost.Transparency=0.55;ghost.Shape=Enum.PartType.Cylinder;ghost.Material=Enum.Material.Neon
 ghost.Size=Vector3.new(1,10,10);ghost.CFrame=CFrame.new(0,-500,0);ghost.Parent=workspace
 local function updateGhost(r)
-    if mode=="Time" then ghost.CFrame=CFrame.new(0,-500,0); return end
+    if mode=="Time" or mode=="Gear" or mode=="Items" or mode=="Mythic" then ghost.CFrame=CFrame.new(0,-500,0); return end
     if mode=="Mob" then ghost.Color=Color3.fromRGB(220,60,60)
         local d=math.clamp((r or 100)*2,4,200);ghost.Size=Vector3.new(1,d,d)
     elseif mode=="Zone" then
@@ -246,7 +265,7 @@ RunService.RenderStepped:Connect(function()
     hrp.AssemblyLinearVelocity=move*FLY_SPEED
     hrp.AssemblyAngularVelocity=Vector3.zero
 end)
-local W,H=262,520
+local W,H=600,700
 local DARK=Color3.fromRGB(20,15,15);local ACC=Color3.fromRGB(90,70,70);local GOLD=Color3.fromRGB(255,215,100)
 local sg=Instance.new("ScreenGui");sg.Name="DevPlacerUI";sg.ResetOnSpawn=false
 sg.IgnoreGuiInset=true;sg.DisplayOrder=200;sg.Enabled=false
@@ -284,11 +303,60 @@ local function div(y) local d=Instance.new("Frame",pnl)
     d.BackgroundColor3=ACC;d.BorderSizePixel=0 end
 lbl(pnl,"DevPlacer",12,9,W-52,26,16,GOLD,true)
 local closeX=mkB(pnl,"X",W-36,8,28,28,Color3.fromRGB(70,30,30))
-lbl(pnl,"MODE",12,48,50,16,11,ACC,true)
-local btnMob=mkB(pnl,"MOB",54,44,46,26);local btnNpc=mkB(pnl,"NPC",104,44,46,26);local btnZone=mkB(pnl,"ZONE",154,44,46,26);local btnTime=mkB(pnl,"TIME",204,44,46,26)
-div(76)
-local mobSec=Instance.new("Frame",pnl);mobSec.Position=UDim2.fromOffset(0,82)
-mobSec.Size=UDim2.fromOffset(W,170);mobSec.BackgroundTransparency=1
+lbl(pnl,"MODE",12,44,120,14,11,ACC,true)
+-- Data-driven mode row: append a { key, label, color, colorOff } entry to add a new F8
+-- tab -- position/wrapping/coloring below are all computed, no pixel math to hand-edit.
+-- immediate=true marks an "instant action" tab (Time, Gear, Items) whose main button fires
+-- right away instead of entering a click-to-place mode (matches Time's original behavior).
+-- Gear/Items split (2026-09-12, per direct request): these used to be one "ITEM" tab with
+-- the procedural weapon/armor spawner on top and a "OTHER ITEMS" catalog cycle+grant button
+-- underneath it, inside the same scrolling section. The catalog button sat below the fold
+-- (needed scrolling to reach), while the panel's single global "confirm" button (placeBtn)
+-- stayed pinned at the very bottom of the whole panel, always wired to the GEAR spawn
+-- action for this tab -- so clicking what looked like "the bottom button" while a catalog
+-- item was selected silently spawned random gear instead (regression report: pressing the
+-- lower button after selecting a dungeon key spawned a Wooden Bow / Leather Chestplate
+-- instead). Splitting into two tabs removes the ambiguity: GEAR keeps placeBtn as its
+-- confirm action, ITEMS is a self-contained icon grid where clicking an item's own icon
+-- grants it directly -- no shared confirm button involved.
+local MODES={
+    { key="Mob",  label="MOB",  color=Color3.fromRGB(160,50,50),  colorOff=Color3.fromRGB(80,30,30) },
+    { key="NPC",  label="NPC",  color=Color3.fromRGB(50,50,160),  colorOff=Color3.fromRGB(40,40,80) },
+    { key="Zone", label="ZONE", color=Color3.fromRGB(110,120,50), colorOff=Color3.fromRGB(60,65,30) },
+    { key="Time", label="TIME", color=Color3.fromRGB(90,130,180), colorOff=Color3.fromRGB(40,55,80), immediate=true },
+    { key="Gear", label="GEAR", color=Color3.fromRGB(150,110,40), colorOff=Color3.fromRGB(70,55,25), immediate=true },
+    { key="Items", label="ITEMS", color=Color3.fromRGB(60,140,120), colorOff=Color3.fromRGB(30,65,55), immediate=true },
+    { key="Mythic", label="MYTHIC", color=Color3.fromRGB(255,85,0), colorOff=Color3.fromRGB(110,40,10), immediate=true },
+}
+local modeButtons={}
+local MODE_ROW_Y0=60
+local function layoutModeButtons()
+    local x,y=12,MODE_ROW_Y0
+    local maxRight=W-12
+    local bottom=y
+    for _,m in ipairs(MODES) do
+        local btnW=math.max(44,#m.label*8+20)
+        if x>12 and x+btnW>maxRight then
+            x=12;y=y+26+4
+        end
+        local b=modeButtons[m.key]
+        if not b then
+            b=mkB(pnl,m.label,x,y,btnW,26)
+            modeButtons[m.key]=b
+        else
+            b.Position=UDim2.fromOffset(x,y);b.Size=UDim2.fromOffset(btnW,26)
+        end
+        x=x+btnW+4
+        bottom=math.max(bottom,y+26)
+    end
+    return bottom
+end
+local modeRowBottom=layoutModeButtons()
+div(modeRowBottom+6)
+local sectionY=modeRowBottom+12
+local SECTION_H=360
+local mobSec=Instance.new("Frame",pnl);mobSec.Position=UDim2.fromOffset(0,sectionY)
+mobSec.Size=UDim2.fromOffset(W,196);mobSec.BackgroundTransparency=1
 lbl(mobSec,"MOB TYPE",12,2,80,16,11,ACC,true)
 local mobPrev=mkB(mobSec,"<",12,20,24,26)
 local mobNext=mkB(mobSec,">",W-34,20,24,26)
@@ -301,9 +369,15 @@ lbl(mobSec,"ACT.RADIUS",12,112,100,14,11,ACC,true)
 local boxRadius=mkI(mobSec,"100",12,128,78,28,"100")
 lbl(mobSec,"ZONE",100,112,60,14,11,ACC,true)
 local boxZone=mkI(mobSec,"Default",100,128,W-116,28,"Default")
-local npcSec=Instance.new("Frame",pnl);npcSec.Position=UDim2.fromOffset(0,82)
+-- "Force Spawn Elite" (2026-09-14): instantly spawns whichever mob MOB_TYPE
+-- is currently showing as a NAMED ELITE (rise-from-ground intro + top-middle
+-- boss bar), through the exact same server path a real elite pity/chance
+-- trigger uses -- see MobManager.ForceSpawnNamedElite. Independent of the
+-- placing-mode click-to-place flow below; fires immediately on click.
+local btnForceElite=mkB(mobSec,"Force Spawn Elite",12,164,W-24,26,Color3.fromRGB(90,40,90))
+local npcSec=Instance.new("Frame",pnl);npcSec.Position=UDim2.fromOffset(0,sectionY)
 npcSec.Size=UDim2.fromOffset(W,170);npcSec.BackgroundTransparency=1;npcSec.Visible=false
-local zoneSec=Instance.new("ScrollingFrame",pnl);zoneSec.Position=UDim2.fromOffset(0,82)
+local zoneSec=Instance.new("ScrollingFrame",pnl);zoneSec.Position=UDim2.fromOffset(0,sectionY)
 zoneSec.Size=UDim2.fromOffset(W,170);zoneSec.BackgroundTransparency=1;zoneSec.Visible=false
 zoneSec.BorderSizePixel=0
 zoneSec.CanvasSize=UDim2.new(0,0,0,0)
@@ -313,7 +387,7 @@ zoneSec.ScrollBarThickness=6
 zoneSec.ScrollBarImageColor3=ACC
 zoneSec.TopImage=""
 zoneSec.BottomImage=""
-local timeSec=Instance.new("Frame",pnl);timeSec.Position=UDim2.fromOffset(0,82)
+local timeSec=Instance.new("Frame",pnl);timeSec.Position=UDim2.fromOffset(0,sectionY)
 timeSec.Size=UDim2.fromOffset(W,188);timeSec.BackgroundTransparency=1;timeSec.Visible=false
 lbl(timeSec,"TIME OF DAY",12,2,120,14,11,ACC,true)
 local timeStatusLbl=lbl(timeSec,"Auto cycle",12,18,W-24,14,11,Color3.fromRGB(180,170,140),false)
@@ -413,13 +487,366 @@ end)
 refreshAlignmentBtns()
 refreshBanBtns()
 refreshEliteZoneUi()
-div(314)
-local placeBtn=mkB(pnl,"Click to Place",10,322,W-20,36,Color3.fromRGB(40,80,40));placeBtn.TextSize=14
-statusLbl=lbl(pnl,"",10,362,W-20,18,11,Color3.fromRGB(255,220,120),false,Enum.TextXAlignment.Center)
+-- GEAR tab: procedural weapon/armor spawner (ItemGenerator, same engine mob drops use).
+-- The catalog "Other Items" granter used to live at the bottom of this same scrolling
+-- section; it's now its own ITEMS tab (icon grid, further down this file) -- see the note
+-- above MODES for why.
+local itemSec=Instance.new("ScrollingFrame",pnl);itemSec.Position=UDim2.fromOffset(0,sectionY)
+itemSec.Size=UDim2.fromOffset(W,SECTION_H);itemSec.BackgroundTransparency=1;itemSec.Visible=false
+itemSec.BorderSizePixel=0
+itemSec.CanvasSize=UDim2.new(0,0,0,0)
+itemSec.AutomaticCanvasSize=Enum.AutomaticSize.Y
+itemSec.ScrollingDirection=Enum.ScrollingDirection.Y
+itemSec.ScrollBarThickness=6
+itemSec.ScrollBarImageColor3=ACC
+itemSec.TopImage=""
+itemSec.BottomImage=""
+
+local ITEM_KINDS={"Random","Weapon","Armor"}
+local itemKindIdx=1
+local WEAPON_POOL=ItemConfig.WEAPON_TYPES_BY_TIER[1] or ItemConfig.WEAPON_TYPES
+local ARMOR_POOL=ItemConfig.ARMOR_SLOTS_BY_TIER[1] or ItemConfig.ARMOR_SLOTS
+local weaponIdx,armorIdx=1,1
+local RARITY_OPTIONS={"Random"}
+for _,r in ipairs(ItemConfig.RARITY_ORDER) do table.insert(RARITY_OPTIONS,r) end
+local rarityIdx=1
+
+lbl(itemSec,"ITEM KIND",12,2,120,12,11,ACC,true)
+local itemKindPrev=mkB(itemSec,"<",12,16,24,24)
+local itemKindNext=mkB(itemSec,">",W-34,16,24,24)
+local itemKindDisp=lbl(itemSec,ITEM_KINDS[itemKindIdx],40,16,W-92,24,13,Color3.new(1,1,1),false,Enum.TextXAlignment.Center)
+
+lbl(itemSec,"SUBTYPE",12,44,120,12,11,ACC,true)
+local itemSubPrev=mkB(itemSec,"<",12,58,24,24)
+local itemSubNext=mkB(itemSec,">",W-34,58,24,24)
+local itemSubDisp=lbl(itemSec,"Any",40,58,W-92,24,13,Color3.new(1,1,1),false,Enum.TextXAlignment.Center)
+
+lbl(itemSec,"LEVEL (1-21 = T1)",12,86,W-24,12,11,ACC,true)
+local boxItemLevel=mkI(itemSec,"1",12,100,60,26,"1")
+local itemTierDisp=lbl(itemSec,"Tier: T1",84,103,W-96,20,12,Color3.fromRGB(180,220,180),true)
+
+lbl(itemSec,"RARITY",12,130,120,12,11,ACC,true)
+local itemRarityPrev=mkB(itemSec,"<",12,144,24,24)
+local itemRarityNext=mkB(itemSec,">",W-34,144,24,24)
+local itemRarityDisp=lbl(itemSec,RARITY_OPTIONS[rarityIdx],40,144,W-92,24,13,Color3.new(1,1,1),false,Enum.TextXAlignment.Center)
+
+lbl(itemSec,"SUBSTATS (blank = default roll)",12,172,180,12,11,ACC,true)
+local boxItemSubstats=mkI(itemSec,"e.g. 2",12,186,80,26,"")
+lbl(itemSec,"COUNT",100,172,80,12,11,ACC,true)
+local boxItemCount=mkI(itemSec,"1",100,186,60,26,"1")
+
+-- FORCE SUBSTAT (optional, dev-only): pin one specific substat to an exact
+-- value -- e.g. pick "critical" and set VALUE to 100 to spawn a weapon that
+-- crits every hit, for testing. Pool reflects Kind/weapon-type so you only
+-- ever see substats that can actually land on what you're about to spawn.
+lbl(itemSec,"FORCE SUBSTAT (optional -- e.g. critical @ 100 = guaranteed crit)",12,218,W-24,12,11,ACC,true)
+local forceSubPrev=mkB(itemSec,"<",12,232,24,24)
+local forceSubDisp=lbl(itemSec,"None",40,232,260,24,13,Color3.new(1,1,1),false,Enum.TextXAlignment.Center)
+local forceSubNext=mkB(itemSec,">",304,232,24,24)
+lbl(itemSec,"VALUE",340,218,90,12,11,ACC,true)
+local boxForceSubValue=mkI(itemSec,"e.g. 100",340,232,90,24,"")
+
+local btnSpawnItem=mkB(itemSec,"Spawn Item",12,264,W-24,28,Color3.fromRGB(40,80,40))
+
+local MELEE_WEAPON_TYPES={Sword=true,Scythe=true,Axe=true,Mace=true}
+local forceSubIdx=1
+local FORCE_SUB_POOL={"None"}
+
+local function refreshForceSubPool()
+    local kind=ITEM_KINDS[itemKindIdx]
+    local pool={"None"}
+    if kind=="Armor" then
+        for _,e in ipairs(ItemConfig.ARMOR_EFFECTS) do table.insert(pool,e.id) end
+    else
+        -- Weapon (and Random -- crit etc. only exist on weapons anyway, so the
+        -- weapon pool is the useful default there too).
+        local wt=WEAPON_POOL[weaponIdx]
+        local isMelee=MELEE_WEAPON_TYPES[wt]==true
+        for _,e in ipairs(ItemConfig.WEAPON_EFFECTS) do
+            if not (e.meleeOnly and not isMelee) and not (e.rangedOnly and isMelee) then
+                table.insert(pool,e.id)
+            end
+        end
+    end
+    FORCE_SUB_POOL=pool
+    if forceSubIdx>#FORCE_SUB_POOL then forceSubIdx=1 end
+    forceSubDisp.Text=FORCE_SUB_POOL[forceSubIdx]
+end
+
+local function refreshItemKindUi()
+    itemKindDisp.Text=ITEM_KINDS[itemKindIdx]
+    local kind=ITEM_KINDS[itemKindIdx]
+    if kind=="Weapon" then
+        itemSubDisp.Text=WEAPON_POOL[weaponIdx] or "-"
+        itemSubPrev.Visible=true;itemSubNext.Visible=true
+    elseif kind=="Armor" then
+        itemSubDisp.Text=ARMOR_POOL[armorIdx] or "-"
+        itemSubPrev.Visible=true;itemSubNext.Visible=true
+    else
+        itemSubDisp.Text="Any"
+        itemSubPrev.Visible=false;itemSubNext.Visible=false
+    end
+    refreshForceSubPool()
+end
+itemKindPrev.Activated:Connect(function() itemKindIdx=((itemKindIdx-2)%#ITEM_KINDS)+1;refreshItemKindUi() end)
+itemKindNext.Activated:Connect(function() itemKindIdx=(itemKindIdx%#ITEM_KINDS)+1;refreshItemKindUi() end)
+itemSubPrev.Activated:Connect(function()
+    local kind=ITEM_KINDS[itemKindIdx]
+    if kind=="Weapon" and #WEAPON_POOL>0 then weaponIdx=((weaponIdx-2)%#WEAPON_POOL)+1
+    elseif kind=="Armor" and #ARMOR_POOL>0 then armorIdx=((armorIdx-2)%#ARMOR_POOL)+1 end
+    refreshItemKindUi()
+end)
+itemSubNext.Activated:Connect(function()
+    local kind=ITEM_KINDS[itemKindIdx]
+    if kind=="Weapon" and #WEAPON_POOL>0 then weaponIdx=(weaponIdx%#WEAPON_POOL)+1
+    elseif kind=="Armor" and #ARMOR_POOL>0 then armorIdx=(armorIdx%#ARMOR_POOL)+1 end
+    refreshItemKindUi()
+end)
+refreshItemKindUi()
+
+itemRarityPrev.Activated:Connect(function() rarityIdx=((rarityIdx-2)%#RARITY_OPTIONS)+1;itemRarityDisp.Text=RARITY_OPTIONS[rarityIdx] end)
+itemRarityNext.Activated:Connect(function() rarityIdx=(rarityIdx%#RARITY_OPTIONS)+1;itemRarityDisp.Text=RARITY_OPTIONS[rarityIdx] end)
+
+forceSubPrev.Activated:Connect(function() forceSubIdx=((forceSubIdx-2)%#FORCE_SUB_POOL)+1;forceSubDisp.Text=FORCE_SUB_POOL[forceSubIdx] end)
+forceSubNext.Activated:Connect(function() forceSubIdx=(forceSubIdx%#FORCE_SUB_POOL)+1;forceSubDisp.Text=FORCE_SUB_POOL[forceSubIdx] end)
+
+local TIER1_MAX_LEVEL=21 -- mirrors DevService's server-side check; this copy only drives
+                          -- the "Tier: ..." preview label, the server independently re-validates.
+local function refreshItemTierPreview()
+    local lvl=math.floor(tonumber(boxItemLevel.Text) or 0)
+    if lvl<1 then
+        itemTierDisp.Text="Tier: ?";itemTierDisp.TextColor3=Color3.fromRGB(220,160,120)
+    elseif lvl<=TIER1_MAX_LEVEL then
+        itemTierDisp.Text="Tier: T1";itemTierDisp.TextColor3=Color3.fromRGB(180,220,180)
+    else
+        itemTierDisp.Text="T2+ not implemented";itemTierDisp.TextColor3=Color3.fromRGB(255,140,140)
+    end
+end
+boxItemLevel.FocusLost:Connect(refreshItemTierPreview)
+refreshItemTierPreview()
+
+local function spawnItemAction()
+    if not rfSpawnItem then
+        showStatus("DevSpawnItem remote missing",true)
+        return
+    end
+    local kind=ITEM_KINDS[itemKindIdx]
+    local data={
+        Level=math.floor(tonumber(boxItemLevel.Text) or 1),
+        Kind=kind,
+        Count=math.clamp(math.floor(tonumber(boxItemCount.Text) or 1),1,20),
+    }
+    if RARITY_OPTIONS[rarityIdx]~="Random" then
+        data.Rarity=RARITY_OPTIONS[rarityIdx]
+    end
+    if boxItemSubstats.Text~="" then
+        data.SubstatCount=tonumber(boxItemSubstats.Text)
+    end
+    local chosenSub=FORCE_SUB_POOL[forceSubIdx]
+    if chosenSub and chosenSub~="None" then
+        local v=tonumber(boxForceSubValue.Text)
+        if v~=nil then
+            data.ForceSubstatId=chosenSub
+            data.ForceSubstatValue=v
+        end
+    end
+    if kind=="Weapon" then
+        data.WeaponType=WEAPON_POOL[weaponIdx]
+    elseif kind=="Armor" then
+        data.ArmorSlot=ARMOR_POOL[armorIdx]
+    end
+    local ok,result=pcall(function() return rfSpawnItem:InvokeServer(data) end)
+    if not ok or type(result)~="table" or not result.ok then
+        local err=(type(result)=="table" and result.error) or tostring(result)
+        showStatus("Spawn failed: "..tostring(err),true)
+        return
+    end
+    local it=result.item or {}
+    showStatus(string.format("Spawned %s (%s, L%d)",tostring(it.name),tostring(it.rarity),tonumber(it.level) or 0))
+end
+btnSpawnItem.Activated:Connect(spawnItemAction)
+
+-- ITEMS tab: a self-contained icon grid over the whole ItemDefinitions catalog (dungeon
+-- keys/fragments/materials/consumables/...) via the existing DevGrantItem remote. Nothing
+-- here is hardcoded -- add a new catalog item and it shows up with zero DevClient changes.
+-- Each cell grants itself directly on click, deliberately NOT routed through the panel's
+-- shared placeBtn -- that button is what caused the original regression (see the note
+-- above MODES).
+local itemsSec=Instance.new("ScrollingFrame",pnl);itemsSec.Position=UDim2.fromOffset(0,sectionY)
+itemsSec.Size=UDim2.fromOffset(W,SECTION_H);itemsSec.BackgroundTransparency=1;itemsSec.Visible=false
+itemsSec.BorderSizePixel=0
+itemsSec.CanvasSize=UDim2.new(0,0,0,0)
+itemsSec.AutomaticCanvasSize=Enum.AutomaticSize.Y
+itemsSec.ScrollingDirection=Enum.ScrollingDirection.Y
+itemsSec.ScrollBarThickness=6
+itemsSec.ScrollBarImageColor3=ACC
+itemsSec.TopImage=""
+itemsSec.BottomImage=""
+
+local itemsGrid=Instance.new("UIGridLayout",itemsSec)
+itemsGrid.CellSize=UDim2.fromOffset(78,108)
+itemsGrid.CellPadding=UDim2.fromOffset(8,8)
+itemsGrid.SortOrder=Enum.SortOrder.LayoutOrder
+local itemsPad=Instance.new("UIPadding",itemsSec)
+itemsPad.PaddingTop=UDim.new(0,4)
+itemsPad.PaddingLeft=UDim.new(0,4)
+itemsPad.PaddingRight=UDim.new(0,4)
+
+local function grantOtherItem(itemId,qty)
+    if not rfDevGrant then
+        showStatus("DevGrantItem remote missing",true)
+        return
+    end
+    qty=math.clamp(math.floor(tonumber(qty) or 1),1,9999)
+    local pOk,grantOk,grantErr=pcall(function() return rfDevGrant:InvokeServer(itemId,qty) end)
+    if not pOk then
+        showStatus("Grant failed: "..tostring(grantOk),true)
+        return
+    end
+    if grantOk then
+        showStatus("Granted "..tostring(qty).."x "..itemId)
+    else
+        showStatus("Grant failed: "..tostring(grantErr),true)
+    end
+end
+
+for i,id in ipairs(OTHER_ITEM_IDS) do
+    local def=ItemDefinitions.Get(id)
+
+    local cell=Instance.new("Frame")
+    cell.Name=id
+    cell.LayoutOrder=i
+    cell.BackgroundColor3=Color3.fromRGB(30,24,20)
+    cell.BorderSizePixel=0
+    cell.Parent=itemsSec
+    Instance.new("UICorner",cell).CornerRadius=UDim.new(0,6)
+    local cellStroke=Instance.new("UIStroke",cell);cellStroke.Thickness=1;cellStroke.Color=ACC
+
+    local icon=Instance.new("ImageButton")
+    icon.Position=UDim2.fromOffset(7,6)
+    icon.Size=UDim2.fromOffset(64,64)
+    icon.BackgroundColor3=Color3.fromRGB(14,10,10)
+    icon.BorderSizePixel=0
+    icon.AutoButtonColor=true
+    icon.Image=(def and def.Icon) or ""
+    icon.ScaleType=Enum.ScaleType.Fit
+    icon.Parent=cell
+    Instance.new("UICorner",icon).CornerRadius=UDim.new(0,5)
+
+    local qtyBox=mkI(cell,"1",7,74,64,20,"1")
+    qtyBox.TextSize=12
+
+    local nameLbl=Instance.new("TextLabel")
+    nameLbl.BackgroundTransparency=1
+    nameLbl.Position=UDim2.fromOffset(2,95)
+    nameLbl.Size=UDim2.fromOffset(74,11)
+    nameLbl.Font=Enum.Font.GothamMedium
+    nameLbl.TextSize=8
+    nameLbl.TextColor3=Color3.fromRGB(190,180,170)
+    nameLbl.TextTruncate=Enum.TextTruncate.AtEnd
+    nameLbl.Text=(def and def.DisplayName) or id
+    nameLbl.Parent=cell
+
+    icon.Activated:Connect(function()
+        grantOtherItem(id,qtyBox.Text)
+    end)
+end
+
+-- MYTHIC tab.
+-- Mythic is deliberately absent from ItemConfig.RARITY_ORDER (so it can never roll from
+-- an ordinary kill), which is why it cannot be an option in the ITEM tab's rarity list.
+-- Instead each mythic is hand-authored in MythicItemDefs and built by MythicItemBuilder,
+-- so what this spawns is the REAL boss drop with its fixed substats -- not a random roll
+-- wearing a Mythic label. Reflected off MythicItemDefs.Items: adding a boss item there
+-- makes it appear here with no DevClient change.
+local MythicItemDefs=require(RS:WaitForChild("MythicItemDefs"))
+local MYTHIC_KEYS={}
+for k in pairs(MythicItemDefs.Items) do table.insert(MYTHIC_KEYS,k) end
+table.sort(MYTHIC_KEYS)
+local mythicIdx=1
+
+local mythicSec=Instance.new("ScrollingFrame",pnl)
+mythicSec.Position=UDim2.fromOffset(0,sectionY)
+mythicSec.Size=UDim2.fromOffset(W,SECTION_H)
+mythicSec.BackgroundTransparency=1;mythicSec.Visible=false;mythicSec.BorderSizePixel=0
+mythicSec.CanvasSize=UDim2.new(0,0,0,0)
+mythicSec.AutomaticCanvasSize=Enum.AutomaticSize.Y
+mythicSec.ScrollingDirection=Enum.ScrollingDirection.Y
+mythicSec.ScrollBarThickness=6;mythicSec.ScrollBarImageColor3=ACC
+mythicSec.TopImage="";mythicSec.BottomImage=""
+
+lbl(mythicSec,"MYTHIC ITEM",12,2,120,12,11,ACC,true)
+local mythPrev=mkB(mythicSec,"<",12,16,24,24)
+local mythNext=mkB(mythicSec,">",W-34,16,24,24)
+local mythDisp=lbl(mythicSec,MYTHIC_KEYS[1] or "(none)",40,16,W-92,24,13,Color3.new(1,1,1),false,Enum.TextXAlignment.Center)
+
+local mythName=lbl(mythicSec,"",12,46,W-24,20,12,MythicItemDefs.RARITY_COLOR,true,Enum.TextXAlignment.Center)
+local mythInfo=lbl(mythicSec,"",12,68,W-24,60,11,Color3.fromRGB(190,190,200),false,Enum.TextXAlignment.Left)
+mythInfo.TextWrapped=true
+mythInfo.TextYAlignment=Enum.TextYAlignment.Top
+
+lbl(mythicSec,"COUNT",12,132,80,12,11,ACC,true)
+local boxMythCount=mkI(mythicSec,"1",12,146,60,26,"1")
+
+local function refreshMythic()
+    local key=MYTHIC_KEYS[mythicIdx]
+    mythDisp.Text=key or "(none)"
+    local def=key and MythicItemDefs.Items[key]
+    if not def then mythName.Text="";mythInfo.Text="No mythics defined." return end
+    mythName.Text=def.DisplayName or key
+    local base=def.BaseStatsAs or {}
+    local subs={}
+    for _,sdef in ipairs(def.SubStats or {}) do
+        if sdef.useStandardRoll then
+            table.insert(subs,sdef.id.." (std roll)")
+        else
+            table.insert(subs,string.format("%s %s-%s",sdef.id,tostring(sdef.min),tostring(sdef.max)))
+        end
+    end
+    mythInfo.Text=string.format("%s  |  base as %s L%s (T%s)\nGuaranteed: %s\nSource: %s",
+        tostring(def.Kind),tostring(base.rarity),tostring(base.level),tostring(base.tier),
+        table.concat(subs,", "),tostring(def.SourceMobID))
+end
+refreshMythic()
+mythPrev.Activated:Connect(function()
+    if #MYTHIC_KEYS==0 then return end
+    mythicIdx=((mythicIdx-2)%#MYTHIC_KEYS)+1;refreshMythic()
+end)
+mythNext.Activated:Connect(function()
+    if #MYTHIC_KEYS==0 then return end
+    mythicIdx=(mythicIdx%#MYTHIC_KEYS)+1;refreshMythic()
+end)
+
+local function spawnMythicAction()
+    if not rfSpawnItem then showStatus("DevSpawnItem remote missing",true) return end
+    local key=MYTHIC_KEYS[mythicIdx]
+    if not key then showStatus("No mythic selected",true) return end
+    local def=MythicItemDefs.Items[key] or {}
+    local base=def.BaseStatsAs or {}
+    local ok,result=pcall(function()
+        return rfSpawnItem:InvokeServer({
+            Mythic=key,
+            Level=base.level or 21,
+            Count=math.clamp(math.floor(tonumber(boxMythCount.Text) or 1),1,20),
+        })
+    end)
+    if not ok or type(result)~="table" or not result.ok then
+        local err=(type(result)=="table" and result.error) or tostring(result)
+        showStatus("Mythic spawn failed: "..tostring(err),true)
+        return
+    end
+    local it=result.item or {}
+    showStatus(string.format("Spawned %s (%s, L%d)",tostring(it.name),tostring(it.rarity),tonumber(it.level) or 0))
+end
+
+local D=sectionY+SECTION_H+2
+div(D)
+local placeBtn=mkB(pnl,"Click to Place",10,D+8,W-20,36,Color3.fromRGB(40,80,40));placeBtn.TextSize=14
+statusLbl=lbl(pnl,"",10,D+48,W-20,18,11,Color3.fromRGB(255,220,120),false,Enum.TextXAlignment.Center)
 statusLbl.Visible=false
-lbl(pnl,"MANAGED SPAWNERS",10,384,W-20,16,11,ACC,true)
-local lf=Instance.new("ScrollingFrame",pnl);lf.Position=UDim2.fromOffset(8,402)
-lf.Size=UDim2.fromOffset(W-16,H-410);lf.BackgroundTransparency=1;lf.BorderSizePixel=0
+lbl(pnl,"MANAGED SPAWNERS",10,D+70,W-20,16,11,ACC,true)
+local lf=Instance.new("ScrollingFrame",pnl);lf.Position=UDim2.fromOffset(8,D+88)
+lf.Size=UDim2.fromOffset(W-16,math.max(80,H-(D+88)-8));lf.BackgroundTransparency=1;lf.BorderSizePixel=0
 lf.ScrollBarThickness=4;lf.ScrollBarImageColor3=ACC
 lf.AutomaticCanvasSize=Enum.AutomaticSize.Y;lf.CanvasSize=UDim2.new(0,0,0,0);lf.ZIndex=3
 Instance.new("UIListLayout",lf).Padding=UDim.new(0,4)
@@ -498,22 +925,35 @@ local function fetchTimeState()
 	end)
 end
 local function refreshMode()
-    btnMob.BackgroundColor3=mode=="Mob" and Color3.fromRGB(160,50,50) or Color3.fromRGB(80,30,30)
-    btnNpc.BackgroundColor3=mode=="NPC" and Color3.fromRGB(50,50,160) or Color3.fromRGB(40,40,80)
-    btnZone.BackgroundColor3=mode=="Zone" and Color3.fromRGB(110,120,50) or Color3.fromRGB(60,65,30)
-    btnTime.BackgroundColor3=mode=="Time" and Color3.fromRGB(90,130,180) or Color3.fromRGB(40,55,80)
-    mobSec.Visible=mode=="Mob";npcSec.Visible=mode=="NPC";zoneSec.Visible=mode=="Zone";timeSec.Visible=mode=="Time"
+    for _,m in ipairs(MODES) do
+        modeButtons[m.key].BackgroundColor3 = (mode==m.key) and m.color or m.colorOff
+    end
+    mobSec.Visible=mode=="Mob";npcSec.Visible=mode=="NPC";zoneSec.Visible=mode=="Zone";timeSec.Visible=mode=="Time";itemSec.Visible=mode=="Gear";itemsSec.Visible=mode=="Items";mythicSec.Visible=mode=="Mythic"
     if mode~="Zone" then exploreMode=false end
     if mode=="Zone" then
         zoneSec.CanvasPosition=Vector2.new(0,0)
         updateGhost()
-    elseif mode=="Time" then updateGhost()
+    elseif mode=="Time" or mode=="Gear" or mode=="Items" or mode=="Mythic" then updateGhost()
     else updateGhost(tonumber(boxRadius.Text)) end
+    -- placeBtn is the panel's one shared "confirm" button; ITEMS deliberately has no use
+    -- for it (each icon grants itself), so it's hidden rather than left pointing at Gear's
+    -- spawn action -- that mismatch was the original bug (see the note above MODES).
+    placeBtn.Visible = mode~="Items"
     if mode=="Zone" then
         placeBtn.Text=placingMode and "Drawing... (E or click)" or "Draw Zone"
     elseif mode=="Time" then
         placeBtn.Text="Apply Time"
         placeBtn.BackgroundColor3=Color3.fromRGB(40,80,40)
+    elseif mode=="Gear" then
+        placeBtn.Text="Spawn Item"
+        placeBtn.BackgroundColor3=Color3.fromRGB(40,80,40)
+        itemSec.CanvasPosition=Vector2.new(0,0)
+    elseif mode=="Items" then
+        itemsSec.CanvasPosition=Vector2.new(0,0)
+    elseif mode=="Mythic" then
+        placeBtn.Text="Spawn Mythic"
+        placeBtn.BackgroundColor3=MythicItemDefs.RARITY_COLOR
+        mythicSec.CanvasPosition=Vector2.new(0,0)
     else
         placeBtn.Text=placingMode and "Placing... (click world)" or "Click to Place"
     end
@@ -580,7 +1020,7 @@ setExploreMode=function(v)
 	end
 end
 setPlacing=function(v)
-    if mode=="Time" then placingMode=false; return end
+    if mode=="Time" or mode=="Gear" or mode=="Items" then placingMode=false; return end
     placingMode=v
     zonePreview.Parent=(v and mode=="Zone" and devVisualsActive()) and workspace or nil
     if not v then
@@ -702,10 +1142,14 @@ btnFinishZone.Activated:Connect(finishZoneDraw)
 btnClearZone.Activated:Connect(function() clearZoneDraw(); refreshZoneDrawPreview(); showStatus("Cleared corners") end)
 btnHideFly.Activated:Connect(function() setExploreMode(not exploreMode) end)
 closeX.Activated:Connect(function() setPanelOpen(false) end)
-btnMob.Activated:Connect(function() mode="Mob";refreshMode() end)
-btnNpc.Activated:Connect(function() mode="NPC";refreshMode() end)
-btnZone.Activated:Connect(function() mode="Zone";refreshMode() end)
-btnTime.Activated:Connect(function() mode="Time";setPlacing(false);refreshMode() end)
+for _,m in ipairs(MODES) do
+    local key,immediate=m.key,m.immediate
+    modeButtons[key].Activated:Connect(function()
+        mode=key
+        if immediate then setPlacing(false) end
+        refreshMode()
+    end)
+end
 btnTimeDawn.Activated:Connect(function() applyDevTime(6, 0) end)
 btnTimeNoon.Activated:Connect(function() applyDevTime(12, 0) end)
 btnTimeDusk.Activated:Connect(function() applyDevTime(18, 0) end)
@@ -726,11 +1170,26 @@ do
 end
 mobPrev.Activated:Connect(function() mobIdx=((mobIdx-2)%#MOB_IDS)+1;mobDisp.Text=MOB_IDS[mobIdx] end)
 mobNext.Activated:Connect(function() mobIdx=(mobIdx%#MOB_IDS)+1;mobDisp.Text=MOB_IDS[mobIdx] end)
+btnForceElite.Activated:Connect(function()
+    if not evPlace then warn("[DevClient] evPlace missing");return end
+    local mid=MOB_IDS[mobIdx];if not mid then return end
+    evPlace:FireServer({SpawnerType="NamedElite",MobId=mid,Position=mouse.Hit.Position})
+end)
 npcPrev.Activated:Connect(function() npcIdx=((npcIdx-2)%#NPC_TYPES)+1;npcDisp.Text=NPC_TYPES[npcIdx] end)
 npcNext.Activated:Connect(function() npcIdx=(npcIdx%#NPC_TYPES)+1;npcDisp.Text=NPC_TYPES[npcIdx] end)
 placeBtn.Activated:Connect(function()
     if mode=="Time" then
         applyDevTime(boxTimeHour.Text, boxTimeMin.Text)
+        return
+    end
+    if mode=="Gear" then
+        spawnItemAction()
+        return
+    end
+    -- mode=="Items" never reaches here -- placeBtn is hidden for that tab (see refreshMode);
+    -- each catalog icon grants itself directly instead of going through this shared button.
+    if mode=="Mythic" then
+        spawnMythicAction()
         return
     end
     setPlacing(not placingMode)

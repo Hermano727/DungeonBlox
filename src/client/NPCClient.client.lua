@@ -30,7 +30,7 @@ local DialogModule  = require(ReplicatedStorage:WaitForChild("DialogModule"))
 local NPCRegistry   = require(ReplicatedStorage:WaitForChild("NPCRegistry"))
 
 local MenuMouse     = require(ReplicatedStorage:WaitForChild("CursorUtils"))
-local Types         = require(ReplicatedStorage:WaitForChild("DungeonProfileTypes"))
+local Types         = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
 local DungeonMenuNet = require(script.Parent:WaitForChild("DungeonMenuNet"))
 
 -- NPCRequest is created by NPCService at server start; wait with timeout

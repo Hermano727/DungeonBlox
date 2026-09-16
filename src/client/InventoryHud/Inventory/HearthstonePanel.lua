@@ -8,6 +8,7 @@
 --  the real system.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
 local React = require(ReplicatedStorage.Packages.React)
 local PanelShell = require(script.Parent:WaitForChild("PanelShell"))
 local HearthstoneConfig = require(ReplicatedStorage:WaitForChild("HearthstoneConfig"))
@@ -56,7 +57,7 @@ local function LocationTile(props: { name: string, icon: string?, layoutOrder: n
 			Size = UDim2.new(1, -8, 0, hasIcon and 16 or 34),
 			BackgroundTransparency = 1,
 			Text = string.upper(props.name),
-			Font = Enum.Font.GothamBold,
+			FontFace = UIFonts.BodyBold,
 			TextSize = hasIcon and 11 or 13,
 			TextColor3 = THEME.LabelText,
 			TextWrapped = true,

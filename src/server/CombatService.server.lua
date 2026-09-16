@@ -7,7 +7,7 @@ local TrySwing=RS:WaitForChild("GameEvents"):WaitForChild("TrySwing")
 local SwingResult=RS:WaitForChild("GameEvents"):WaitForChild("SwingResult")
 
 local _dp
-local function getDP() if not _dp then _dp=require(SSS:WaitForChild("DungeonProfileService")) end return _dp end
+local function getDP() if not _dp then _dp=require(SSS:WaitForChild("ProfileService")) end return _dp end
 
 local function getWeaponSwingMult(player)
 	local char=player.Character

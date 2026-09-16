@@ -1,7 +1,7 @@
 --!strict
 --[[
 	ConsumableItem : Item -- catalog consumables (Kind = "Consumable"), e.g. potions.
-	Matches DungeonProfileTypes.GetAllowedEquipSlot's existing Consumable -> "Potion"
+	Matches ProfileTypes.GetAllowedEquipSlot's existing Consumable -> "Potion"
 	fallback, just stamped directly onto the owned record instead of re-derived from
 	`item.type` every time something asks.
 ]]

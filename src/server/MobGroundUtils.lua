@@ -35,6 +35,19 @@ function MobGroundUtils.ResolveGroundedSpawnPosition(model, position, feetToRoot
     local rayParams = RaycastParams.new()
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
     rayParams.FilterDescendantsInstances = {model}
+    -- Without this, the raycast hits whatever geometry is physically first
+    -- in its path regardless of collision -- including purely-decorative,
+    -- CanCollide=false clutter (grass blades, foliage clumps, the various
+    -- "Grass"/"Interactive Grass" models scattered through the level). That
+    -- reports a ground height sitting on top of a grass mesh instead of the
+    -- real collidable terrain underneath, so mobs spawn/settle floating
+    -- slightly above the actual floor (2026-09-09, per direct request: "not
+    -- sure why our current [ground] logic is ... but on flat grassy areas
+    -- the slimes aren't directly on the ground"). RespectCanCollide makes
+    -- the ray skip anything with CanCollide off, same as how the player's
+    -- own physics-based Humanoid already only ever rests on collidable
+    -- geometry.
+    rayParams.RespectCanCollide = true
 
     local hit = workspace:Raycast(
         position + Vector3.new(0, 50, 0),
@@ -57,6 +70,11 @@ function MobGroundUtils.FindGroundY(excludeInstance, x, z, fallbackY)
     local rayParams = RaycastParams.new()
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
     rayParams.FilterDescendantsInstances = {excludeInstance}
+    -- See the matching comment in ResolveGroundedSpawnPosition above -- same
+    -- fix, same reason (skip non-collidable decorative geometry so this
+    -- always resolves to the real walkable surface, not a grass mesh sitting
+    -- slightly above it).
+    rayParams.RespectCanCollide = true
 
     local hit = workspace:Raycast(
         Vector3.new(x, fallbackY + 10, z),

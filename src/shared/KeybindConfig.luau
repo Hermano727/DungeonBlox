@@ -5,7 +5,7 @@
 --  Usage:
 --      local Keys = require(ReplicatedStorage.KeybindConfig)
 --      if input.KeyCode == Keys.Dash then ... end
---      local slot = Keys.HotbarSlot[input.KeyCode]   -- 1..9 or nil
+--      local slot = Keys.ToolSlot[input.KeyCode]   -- "Weapon"|"Bow"|"Pickaxe"|"FishingSpear" or nil
 --
 --  Naming: PascalCase action names describing INTENT, not the key.
 --  "Dash" not "Q" - so rebinding is a one-line change here.
@@ -30,7 +30,7 @@ local Keybinds = {
 	DevPlacer       = K.F8,
 	HearthstoneMenu = K.F7,
 	ItemGrantMenu   = K.F10,
-	UIDevTool = K.F6,  -- dev-gated (DevRoster) live-nudge tool for registered decorative UI art, see UIDevTuning (F9 is reserved by Studio's mic/voice panel)
+	UIDevTool = K.F6,  -- dev-gated (DevRoster) live-nudge tool, now covers BOTH registered decorative UI art AND worn-armor Motor6D welds (Slash toggles which one it's tuning) -- see UIDevTuning and ArmorVisualsService (F9 is reserved by Studio's mic/voice panel, F10 is ItemGrantMenu, F11 is the OS/browser fullscreen bind -- don't use either for a dev tool)
 
 	-- DevPlacer sub-controls (only live while DevPlacer is open)
 	DevPlaceConfirm = K.Return,

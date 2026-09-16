@@ -15,7 +15,7 @@
 --
 --  SINGLE AUTHORITY: WeaponData.Weapons
 --  Every consumer reads this flat table via WeaponData.GetStats(weaponId)
---  (CombatClient, MobCombat, BowServer, DungeonProfileService,
+--  (CombatClient, MobCombat, BowServer, ProfileService,
 --  StarterCharacterScripts/LocalScript). Add weapons HERE and nowhere else.
 --
 --  Per-weapon child ModuleScripts (WeaponData.<Name>) were an abandoned

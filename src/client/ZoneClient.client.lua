@@ -219,6 +219,15 @@ zoneMusic.Parent  = SoundService
 local currentMusicId = ""
 local musicFadeToken = 0
 
+-- ZoneMusic lives outside the SoundService.Main tree (it needs to keep
+-- playing independent of gameplay SFX groups), so it can't inherit a
+-- Master multiplier via SoundGroup nesting the way Movement/Effects do.
+-- Bake VolumeSettings.master into the target volume by hand instead;
+-- SettingsClient's Master slider re-applies this live via the same formula.
+local function targetMusicVolume()
+	return (VolumeSettings.master or 1) * VolumeSettings.music
+end
+
 local function setZoneMusic(musicId)
 	musicId = type(musicId) == "string" and musicId or ""
 	if musicId == currentMusicId then return end
@@ -246,7 +255,7 @@ local function setZoneMusic(musicId)
 		zoneMusic:Play()
 		TweenService:Create(zoneMusic,
 			TweenInfo.new(ZoneConfig.ZONE_MUSIC_FADE_SEC, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
-			{ Volume = VolumeSettings.music }):Play()
+			{ Volume = targetMusicVolume() }):Play()
 	end
 
 	if zoneMusic.IsPlaying then

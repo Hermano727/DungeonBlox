@@ -1,6 +1,6 @@
 --[[
   EquipService (legacy stub)
-  Equip/unequip remotes are owned by DungeonBootstrap as RemoteFunctions.
+  Equip/unequip remotes are owned by ProfileBootstrap as RemoteFunctions.
   Keeping this script empty avoids duplicate RemoteEvents under the same names.
 
   Confirmed dead by this audit (2026-08-21): nothing requires this module and
@@ -10,4 +10,4 @@
   DungeonBlox's two parallel profile systems, of which this stub is a remnant.
 ]]
 
-print("[EquipService] stub; DungeonBootstrap owns DungeonEquipItem / DungeonUnequipItem")
+print("[EquipService] stub; ProfileBootstrap owns EquipItem / UnequipItem")

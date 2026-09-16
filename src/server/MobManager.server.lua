@@ -14,7 +14,7 @@ local MobData     = require(ReplicatedStorage:WaitForChild("MobData"))
 local MobCombat   = require(ServerScriptService:WaitForChild("MobCombat"))
 local LootService = require(ServerScriptService:WaitForChild("LootService"))
 local DropperKeyService = require(ServerScriptService:WaitForChild("DropperKeyService"))
-local DungeonProfile = require(ServerScriptService:WaitForChild("DungeonProfileService"))
+local DungeonProfile = require(ServerScriptService:WaitForChild("ProfileService"))
 local CombatStateService = require(ServerScriptService:WaitForChild("CombatStateService"))
 local MountService = require(ServerScriptService:WaitForChild("MountService"))
 local PartyService = require(ServerScriptService:WaitForChild("PartyService"))
@@ -213,11 +213,28 @@ function ProcessMobDeath(mob, killingBlowPlayer)
             local currentScore = player:GetAttribute("Score") or 0
             player:SetAttribute("Score", currentScore + score)
             
-            -- Award combat XP (5 XP per mob kill)
+            -- Award combat XP (5 XP per mob kill).
+            -- Inside a dungeon this BANKS instead: XP is only paid out on a
+            -- completed run and forfeited on failure. Note this is the LIVE
+            -- xp path -- DamageService.AwardKill also fires CombatXPEvent but
+            -- with a (mobId, score, tier) signature the client misreads, so it
+            -- contributes nothing.
             local xpGain = COMBAT_XP_PER_KILL
-            DungeonProfile.AddSkillXP(player, "combat", xpGain)
-            -- Keep HUD popup event
-            CombatXPEvent:FireClient(player, xpGain)
+            local xpBanked = false
+            do
+                local okX, DungeonScore = pcall(function()
+                    return require(ServerScriptService:WaitForChild("DungeonScoreService", 5))
+                end)
+                if okX and DungeonScore and DungeonScore.IsInRun(player) then
+                    DungeonScore.AddXP(player, xpGain)
+                    xpBanked = true
+                end
+            end
+
+            if not xpBanked then
+                DungeonProfile.AddSkillXP(player, "combat", xpGain)
+                CombatXPEvent:FireClient(player, xpGain)
+            end
         end
     end
     
@@ -264,6 +281,15 @@ local function OnHeartbeat(deltaTime)
             player:SetAttribute("EliteActive", true)
             player:SetAttribute("EliteCurrentHealth", activeEliteMob.CurrentHealth or 0)
             player:SetAttribute("EliteMaxHealth", activeEliteMob.MaxHealth or 0)
+            -- Overwrite (not just read) CurrentEliteMobId with the REAL active
+            -- mob's id while it's alive -- ZoneService only ever sets this to
+            -- "whichever elite THIS ZONE is configured to spawn", which is
+            -- wrong once a specific mob (e.g. a dev-tool force-spawn, see
+            -- ForceSpawnNamedElite below) is actually up. HealthClient (and
+            -- the top-middle boss bar) resolve the elite's display Name from
+            -- this attribute via MobData.FindMobById, so it must reflect the
+            -- real spawned mob, not just the zone's configured slot.
+            player:SetAttribute("CurrentEliteMobId", activeEliteMob.MobID)
         else
             PlayerActiveEliteMob[player.UserId] = nil
             clearPlayerEliteHealthAttributes(player)
@@ -330,8 +356,79 @@ end)
 -- ============================================
 
 -- Expose function to create spawners (call from other scripts or command line)
+-- Register an already-constructed spawner object (e.g. a DungeonBossSpawner
+-- subclass) rather than building a plain MobSpawner from primitives. Needed
+-- because boss spawners carry extra config (ceiling anchor) that
+-- RegisterSpawner's positional signature cannot express.
+local function RegisterSpawnerObject(spawner)
+    if not spawner then return nil end
+    table.insert(ActiveSpawners, spawner)
+    local zone = spawner.ZoneName or "Default"
+    if not ZonePity[zone] then
+        ZonePity[zone] = 0
+    end
+    return spawner
+end
+
+-- Remove a spawner and destroy everything it spawned. Needed for dungeon
+-- instances: each run clones the realm and registers its own spawners, and
+-- those must go away with the realm or they leak forever and keep ticking
+-- against a destroyed model.
+local function UnregisterSpawner(spawner)
+    if not spawner then return false end
+    for i = #ActiveSpawners, 1, -1 do
+        if ActiveSpawners[i] == spawner then
+            table.remove(ActiveSpawners, i)
+        end
+    end
+    for _, mob in ipairs(spawner.SpawnedMobs or {}) do
+        if mob then
+            if mob.UID then ActiveMobs[mob.UID] = nil end
+            if mob.Model then
+                pcall(function() mob.Model:Destroy() end)
+            end
+        end
+    end
+    spawner.SpawnedMobs = {}
+    return true
+end
+
+-- Dev-tool convenience (F8 "Force Spawn Elite"): force-spawn a specific named
+-- elite mob immediately in front of `player`, going through the EXACT same
+-- path a real elite pity/chance trigger uses (SetNextSpawnMob + an immediate
+-- SpawnMob with the rise-from-ground intro -- see MobSpawner:SpawnMob) rather
+-- than a plain grunt-mob spawner, so testing a named elite (e.g. Kane) gets
+-- the same intro effect, PlayerActiveEliteMob HP-bar tracking, and top-middle
+-- boss bar a naturally-triggered elite would. A huge CooldownTime + MaxSpawns
+-- = 1 means this ad-hoc spawner never auto-respawns another copy once this
+-- one dies -- it exists purely to carry ONE forced spawn through the normal
+-- Tick/ActiveMobs registration pipeline (see OnHeartbeat's spawner loop).
+-- Returns the spawned mob object, or nil on failure (unknown MobID, no
+-- player Character, etc).
+local function ForceSpawnNamedElite(player, mobId)
+    if not player or type(mobId) ~= "string" or mobId == "" then
+        return nil
+    end
+    if not MobData.FindMobById(mobId) then
+        warn("[MobManager] ForceSpawnNamedElite: unknown MobID " .. tostring(mobId))
+        return nil
+    end
+
+    local spawnPos = getFrontSpawnPosition(player, Vector3.new())
+    local spawner = RegisterSpawner(spawnPos, mobId, 999999, 1, 100, "DevForcedElite")
+    spawner:SetNextSpawnMob(mobId, spawnPos, true)
+    local mob = spawner:SpawnMob()
+    if mob then
+        PlayerActiveEliteMob[player.UserId] = mob
+    end
+    return mob
+end
+
 _G.MobSystem = {
     CreateSpawner = RegisterSpawner,
+    RegisterSpawnerObject = RegisterSpawnerObject,
+    UnregisterSpawner = UnregisterSpawner,
+    ForceSpawnNamedElite = ForceSpawnNamedElite,
     GetActiveMobs = function() return ActiveMobs end,
     GetActiveSpawners = function() return ActiveSpawners end,
     GetZonePity = function() return ZonePity end,
@@ -355,6 +452,24 @@ do
 			mod.applySavedSpawns(RegisterSpawner)
 		elseif not ok then
 			warn("[MobManager] MobDevSpawnStore require failed: ", mod)
+		end
+	end
+end
+
+-- Declarative dungeon spawns (model-anchored, defined in source rather than
+-- placed by hand in Play mode). Runs after the DataStore-backed F8 camps so
+-- a dungeon definition always wins over a stale saved marker.
+do
+	local dss = ServerScriptService:FindFirstChild("DungeonMobSpawnService")
+	if dss and dss:IsA("ModuleScript") then
+		local ok, mod = pcall(require, dss)
+		if ok and type(mod) == "table" and mod.RegisterAll then
+			local ok2, err2 = pcall(mod.RegisterAll)
+			if not ok2 then
+				warn("[MobManager] DungeonMobSpawnService.RegisterAll failed: ", err2)
+			end
+		elseif not ok then
+			warn("[MobManager] DungeonMobSpawnService require failed: ", mod)
 		end
 	end
 end

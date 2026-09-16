@@ -28,6 +28,9 @@
 ]]
 
 local CollectionService = game:GetService("CollectionService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
 
 local NPCBootstrapKit = {}
 
@@ -46,7 +49,10 @@ NPCBootstrapKit.DefaultColors = {
 --- DialogModule contract every NPC dialog UI expects: a "gui" BillboardGui with
 --- "name", "arrow", and "dialog" TextLabels.
 --- colors: { text = Color3, stroke = Color3 } — optional, defaults to DefaultColors.
-function NPCBootstrapKit.EnsureHeadGui(head, displayName, colors)
+--- npcType: string identifying the NPC archetype ("Merchant", "Blacksmith", etc.) -- passed
+--- straight to UIFonts.GetNPCFont so a future per-archetype override (UIFonts.NPCOverrides)
+--- takes effect without this function changing. nil falls back to UIFonts.NPCDefault.
+function NPCBootstrapKit.EnsureHeadGui(head, displayName, colors, npcType)
 	if head:FindFirstChild("gui") then
 		return
 	end
@@ -63,7 +69,7 @@ function NPCBootstrapKit.EnsureHeadGui(head, displayName, colors)
 	nameLabel.Name                   = "name"
 	nameLabel.Size                   = UDim2.new(1, 0, 0.45, 0)
 	nameLabel.BackgroundTransparency = 1
-	nameLabel.Font                   = Enum.Font.GothamBold
+	nameLabel.FontFace               = UIFonts.GetNPCFont(npcType, "Name")
 	nameLabel.TextSize               = 16
 	nameLabel.TextColor3             = colors.text
 	nameLabel.TextStrokeTransparency = 0.3
@@ -80,7 +86,7 @@ function NPCBootstrapKit.EnsureHeadGui(head, displayName, colors)
 	arrow.Size                   = UDim2.new(1, 0, 0.3, 0)
 	arrow.Position               = UDim2.new(0, 0, 0.45, 0)
 	arrow.BackgroundTransparency = 1
-	arrow.Font                   = Enum.Font.GothamBold
+	arrow.FontFace               = UIFonts.GetNPCFont(npcType, "Name")
 	arrow.TextSize               = 13
 	arrow.TextColor3             = colors.text
 	arrow.Text                   = "\226\150\188" -- ▼
@@ -95,7 +101,7 @@ function NPCBootstrapKit.EnsureHeadGui(head, displayName, colors)
 	dialog.Name                   = "dialog"
 	dialog.Size                   = UDim2.new(1, 0, 1, 0)
 	dialog.BackgroundTransparency = 1
-	dialog.Font                   = Enum.Font.GothamMedium
+	dialog.FontFace               = UIFonts.GetNPCFont(npcType, "Dialog")
 	dialog.TextSize               = 13
 	dialog.TextColor3             = Color3.new(1, 1, 1)
 	dialog.TextWrapped            = true

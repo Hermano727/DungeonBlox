@@ -12,11 +12,21 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local SkillXPShared = require(ReplicatedStorage:WaitForChild("SkillXPShared"))
+local SfxService = require(ReplicatedStorage:WaitForChild("SfxService"))
 
 -- Listen for combat XP events from server
 local combatXPEvent = ReplicatedStorage:WaitForChild("CombatXPEvent")
 combatXPEvent.OnClientEvent:Connect(function(xpAmount)
-    SkillXPShared.AddXP("Combat", xpAmount)
+    local leveledUp = SkillXPShared.AddXP("Combat", xpAmount)
+    -- Plays only on an actual Combat level-up now (2026-09-13, per direct request:
+    -- "make the xp sound effect only play on combat level up rather than every
+    -- kill" -- was every kill, since this event only fires on a killing blow, see
+    -- DamageService.AwardKill / MobManager.server.lua). The Combat XP bar itself
+    -- still shows/raises on every kill regardless -- that's driven by the
+    -- LastCombatXPGain attribute stamp inside AddXP, untouched by this gate.
+    if leveledUp then
+        SfxService.PlayEffect("CombatXPGain")
+    end
 end)
 
 print("Combat XP client loaded")

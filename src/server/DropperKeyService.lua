@@ -9,7 +9,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 local Debris = game:GetService("Debris")
 
-local DungeonProfile = require(ServerScriptService:WaitForChild("DungeonProfileService"))
+local DungeonProfile = require(ServerScriptService:WaitForChild("ProfileService"))
 
 local DROP_RADIUS = 40
 local DROP_CHANCE = 1

@@ -8,8 +8,13 @@
 	potion tier had to be added in two disconnected places to actually show up client-side.
 	PotionClient now reads Order/displayName from here instead of keeping its own copy.
 
-	NOT changed: healPerSecond/duration/maxCharges/regenInterval values are copied verbatim from
-	the previous inline table -- this is a structural move, not a balance change.
+	2026-09-10 rework (direct request: "the pot system right now allows for using 3 minor
+	potions in addition to 3 medium potions, it should be 3 potions IN GENERAL"): maxCharges/
+	regenInterval used to live PER TIER, so a player could drink 3 Minor AND 3 Medium potions
+	back to back -- 6 total heals, not 3. Charges are now tracked as ONE shared pool across
+	every tier (see SharedCharges below) -- drinking any potion, of any tier, consumes from the
+	same count. healPerSecond/duration are unchanged and still per-tier, since different tiers
+	still heal for different amounts.
 ]]
 
 return {
@@ -17,21 +22,25 @@ return {
 	-- itemIds (PotionService seeds a charge entry for each one on join).
 	Order = { "MinorPotion", "MediumPotion" },
 
-	-- itemId -> { healPerSecond, duration (seconds healed), maxCharges, regenInterval (seconds
-	-- per charge), displayName (short label for the charge HUD) }
+	-- The one shared charge pool every potion tier draws from. Values copied verbatim from
+	-- the old per-tier maxCharges/regenInterval (both tiers already used the same numbers), so
+	-- this is a structural change (one pool instead of two), not a balance change.
+	SharedCharges = {
+		maxCharges = 3,
+		regenInterval = 40, -- seconds per charge regenerated
+	},
+
+	-- itemId -> { healPerSecond, duration (seconds healed), displayName (short label) }.
+	-- maxCharges/regenInterval used to live here per-tier -- moved to SharedCharges above.
 	Tiers = {
 		MinorPotion = {
 			healPerSecond = 30,
 			duration = 5,
-			maxCharges = 3,
-			regenInterval = 40,
 			displayName = "Minor",
 		},
 		MediumPotion = {
 			healPerSecond = 60,
 			duration = 5,
-			maxCharges = 3,
-			regenInterval = 40,
 			displayName = "Medium",
 		},
 	},

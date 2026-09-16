@@ -36,6 +36,7 @@ local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"
 local UITheme = require(ReplicatedStorage:WaitForChild("UITheme"))
 local RarityBorder = require(script.Parent:WaitForChild("RarityBorder"))
 local LegendaryGlow = require(script.Parent:WaitForChild("LegendaryGlow"))
+local CharacterViewport = require(script.Parent:WaitForChild("CharacterViewport"))
 local e = React.createElement
 
 -- Native Figma canvas size (Container's FigBloxUIData.geometry.bounds).
@@ -48,7 +49,6 @@ local THEME = {
 	SlotBg     = Color3.fromRGB(20, 16, 13),    -- equipment slot fill
 	SlotBorder = UITheme.Gold,  -- muted gold UIStroke -- see UITheme
 	LabelText  = Color3.fromRGB(240, 230, 210), -- same #F0E6D2 as XpHud's THEME.TextPrimary
-	Backdrop   = Color3.fromRGB(251, 251, 251),
 }
 
 -- Equipment slot geometry, reduced from the FigBloxUI bounds to the handful
@@ -57,6 +57,11 @@ local THEME = {
 local BOX_SIZE     = 510
 local COL_LEFT_X   = 156
 local COL_RIGHT_X  = 2335
+-- Centre column: a single slot (Shield) sitting between the two columns on the
+-- bottom row, so the preview area above it narrows rather than the grid growing
+-- a lopsided 5th row. Derived from the other two columns so it stays centred if
+-- either edge moves.
+local COL_CENTER_X = ((COL_LEFT_X + BOX_SIZE) + COL_RIGHT_X) / 2 - BOX_SIZE / 2
 local ROW_TOPS     = { 405, 1214, 2023, 2832 }
 local LABEL_HEIGHT = 144
 local LABEL_GAP    = 40 -- standardized; the export had this at 33-82px per label, hence "off center"
@@ -71,6 +76,7 @@ local SLOTS = {
 	{ id = "Bow",        label = "Bow",         column = "Right", row = 2, slot = "Bow" },
 	{ id = "Pickaxe",    label = "Pickaxe",     column = "Right", row = 3, slot = "Pickaxe" },
 	{ id = "FishingRod", label = "Fishing Rod", column = "Right", row = 4, slot = "FishingSpear" },
+	{ id = "Shield",     label = "Shield",      column = "Center", row = 4, slot = "Shield" },
 }
 
 type SlotProps = {
@@ -78,7 +84,7 @@ type SlotProps = {
 	            -- and strips it before the component ever sees props, so `props.key`
 	            -- is always nil.
 	label: string,
-	column: "Left" | "Right",
+	column: "Left" | "Right" | "Center",
 	row: number,
 	slot: string,
 	item: any?,
@@ -86,13 +92,22 @@ type SlotProps = {
 	onRightClick: ((x: number, y: number) -> ())?,
 	onHoverStart: ((x: number, y: number) -> ())?,
 	onHoverEnd: (() -> ())?,
+	-- Fires on MouseButton1 InputBegan, in ADDITION to (never instead of) Activated above --
+	-- see InventoryMain's press/drag effect. Same pattern as ItemSlot.lua's own onPressStart,
+	-- so hold-drag works identically whether the item started in the bag or an equip box.
+	onPressStart: ((x: number, y: number) -> ())?,
 }
 
 -- Box and Label are SIBLINGS (via a Fragment) both positioned in
 -- Container-absolute coordinates -- nesting Label inside Box's own
 -- coordinate space was the original bug that dropped every label but Helmet.
 local function EquipmentSlot(props: SlotProps)
-	local boxLeft = props.column == "Left" and COL_LEFT_X or COL_RIGHT_X
+	local boxLeft = COL_RIGHT_X
+	if props.column == "Left" then
+		boxLeft = COL_LEFT_X
+	elseif props.column == "Center" then
+		boxLeft = COL_CENTER_X
+	end
 	local boxTop = ROW_TOPS[props.row]
 	local centerX = boxLeft + BOX_SIZE / 2
 	local item = props.item
@@ -105,6 +120,11 @@ local function EquipmentSlot(props: SlotProps)
 	-- Rarity-colored gradient border when a piece is equipped (same look/component as the bag
 	-- slots), falling back to the plain gold outline the export shipped with when the slot is
 	-- empty -- an empty equip box isn't "a rarity", so it shouldn't render as one.
+	-- Thickness (8) must match ItemSlot.lua's own three RarityBorder call sites -- this
+	-- component reimplements the bag slot's border logic instead of using ItemSlot, so
+	-- nothing enforces that automatically. See the CLAUDE.md note on this (2026-08: bag
+	-- slots were rendering at thickness 3 while these rendered at 8, so an equipped item
+	-- had a bold outline and the same item sitting in the bag looked borderless).
 	local boxChildren: { [string]: any } = {
 		Stroke = item and e(RarityBorder, { rarity = rarity, thickness = 8 })
 			or e(RarityBorder, { color = THEME.SlotBorder, thickness = 8 }),
@@ -149,6 +169,12 @@ local function EquipmentSlot(props: SlotProps)
 		[React.Event.InputBegan] = function(_rbx, input)
 			if input.UserInputType == Enum.UserInputType.MouseButton2 and props.onRightClick then
 				props.onRightClick(input.Position.X, input.Position.Y)
+			elseif input.UserInputType == Enum.UserInputType.MouseButton1 and props.onPressStart then
+				-- Possible hold-drag start (equip box -> bag, i.e. drag-to-unequip). Whether
+				-- this becomes a real drag is decided by movement-past-threshold up in
+				-- InventoryMain -- this button doesn't know or care, and Activated above
+				-- still fires normally for an actual click.
+				props.onPressStart(input.Position.X, input.Position.Y)
 			end
 		end,
 	})
@@ -187,6 +213,13 @@ export type PlayerPreviewProps = {
 	onSlotRightClick: ((slotName: string, uuid: string?, x: number, y: number) -> ())?,
 	onHoverStart: ((item: any, x: number, y: number) -> ())?,
 	onHoverEnd: (() -> ())?,
+	-- Hold-drag support, iteration 2 (see InventoryMain). onSlotEnter/onSlotLeave fire for
+	-- EVERY equip box, empty or not -- an empty box is still a legal drop target (e.g.
+	-- dragging an unequipped weapon in) -- unlike onHoverStart/onHoverEnd above, which stay
+	-- tooltip-only and so only make sense when the box is occupied.
+	onSlotPressStart: ((slotName: string, uuid: string?, x: number, y: number) -> ())?,
+	onSlotEnter: ((slotName: string) -> ())?,
+	onSlotLeave: ((slotName: string) -> ())?,
 }
 
 local function PlayerPreview(props: PlayerPreviewProps?)
@@ -229,10 +262,28 @@ local function PlayerPreview(props: PlayerPreviewProps?)
 		slotProps.onRightClick = safeProps.onSlotRightClick and function(x, y)
 			safeProps.onSlotRightClick(slotDef.slot, uuid, x, y)
 		end or nil
-		slotProps.onHoverStart = (item and safeProps.onHoverStart) and function(x, y)
-			safeProps.onHoverStart(item, x, y)
+		-- onHoverStart/onHoverEnd now always run (previously gated on `item`) so
+		-- onSlotEnter/onSlotLeave fire for empty equip boxes too -- see the PlayerPreviewProps
+		-- comment above. The original item-gated tooltip call just moves inside, unchanged.
+		slotProps.onHoverStart = function(x, y)
+			if safeProps.onSlotEnter then
+				safeProps.onSlotEnter(slotDef.slot)
+			end
+			if item and safeProps.onHoverStart then
+				safeProps.onHoverStart(item, x, y)
+			end
+		end
+		slotProps.onHoverEnd = function()
+			if safeProps.onSlotLeave then
+				safeProps.onSlotLeave(slotDef.slot)
+			end
+			if safeProps.onHoverEnd then
+				safeProps.onHoverEnd()
+			end
+		end
+		slotProps.onPressStart = safeProps.onSlotPressStart and function(x, y)
+			safeProps.onSlotPressStart(slotDef.slot, uuid, x, y)
 		end or nil
-		slotProps.onHoverEnd = safeProps.onHoverEnd
 		slots[slotDef.id] = e(EquipmentSlot, slotProps)
 	end
 
@@ -247,13 +298,11 @@ local function PlayerPreview(props: PlayerPreviewProps?)
 	}, {
 		Scale = e("UIScale", { Scale = scale }),
 
-		Backdrop = e("Frame", {
-			Size = UDim2.fromOffset(1318, 2963),
-			Position = UDim2.fromOffset(839, 417),
-			BackgroundColor3 = THEME.Backdrop,
-			BackgroundTransparency = 0.58,
-			BorderSizePixel = 0,
-			ZIndex = 1,
+		Backdrop = e(CharacterViewport, {
+			equipped = equipped,
+			size = UDim2.fromOffset(1318, 2963),
+			position = UDim2.fromOffset(839, 417),
+			zIndex = 1,
 		}),
 
 		Slots = e("Frame", {

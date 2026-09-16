@@ -12,7 +12,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local MenuMouse = require(ReplicatedStorage:WaitForChild("CursorUtils"))
 local UserInputService = game:GetService("UserInputService")
-local Types = require(ReplicatedStorage:WaitForChild("DungeonProfileTypes"))
+local Types = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
 
 local CHEST_SLOT_COUNT = Types.CHEST_SLOT_COUNT

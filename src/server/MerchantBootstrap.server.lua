@@ -69,7 +69,7 @@ local function bootstrapModel(model)
 
     local head = model:FindFirstChild("Head")
     if head and head:IsA("BasePart") then
-        local ok, err = pcall(NPCBootstrapKit.EnsureHeadGui, head, NPC_NAME, HEAD_COLORS)
+        local ok, err = pcall(NPCBootstrapKit.EnsureHeadGui, head, NPC_NAME, HEAD_COLORS, "Merchant")
         if not ok then
             warn("[MerchantBootstrap] Head gui failed:", err)
         end

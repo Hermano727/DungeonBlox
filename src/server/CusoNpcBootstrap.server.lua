@@ -42,7 +42,7 @@ local function setupNpcModel(model, npcName)
 
     local head = model:FindFirstChild("Head")
     if head then
-        NPCBootstrapKit.EnsureHeadGui(head, npcName, HEAD_COLORS)
+        NPCBootstrapKit.EnsureHeadGui(head, npcName, HEAD_COLORS, "Cuso")
     end
 end
 

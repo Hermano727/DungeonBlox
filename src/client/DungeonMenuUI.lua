@@ -22,7 +22,7 @@
     - StatsOverlayClient.client.lua finds this module's "PlayerStatsBox" instance by name and
       parents its own "View Stats" button into it -- meaning that button is ALSO inside the
       unreachable screen and can't currently be seen or clicked.
-    - DungeonHotbarHud, InventoryDragController, and QuestTrackerClient all still look up the
+    - HotbarHud, InventoryDragController, and QuestTrackerClient all still look up the
       "SkillsPopupUI" ScreenGui by name to check whether the character menu is open (it never
       is, so those checks are permanently false -- harmless, but worth knowing if you're
       debugging why a "menu open" branch never fires).
@@ -38,7 +38,8 @@
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Types           = require(ReplicatedStorage:WaitForChild("DungeonProfileTypes"))
+local Types           = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
+local UIFonts         = require(ReplicatedStorage:WaitForChild("UIFonts"))
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
 local DayNightConfig  = require(ReplicatedStorage:WaitForChild("DayNightConfig"))
 local ItemTooltip = require(script.Parent:WaitForChild("ItemTooltip"))
@@ -85,9 +86,17 @@ end
 
 
 
-local QS = "rbxasset://fonts/families/Quicksand.json"
+-- Was Quicksand ("rbxasset://fonts/families/Quicksand.json") -- not a real Roblox bundled
+-- font family, so this failed silently at render time ("Temp read failed" in the console),
+-- falling back to the default font. Was then patched to a local Gotham-by-weight
+-- reimplementation, which fixed the rendering but duplicated logic shared/UIFonts.luau exists
+-- to centralize (and drifted from the rest of the UI once Body moved off Gotham to Work Sans).
+-- Routed through UIFonts.Families.Body directly instead, so this can't drift again. Per the
+-- STATUS comment at the top of this file, redraw() (which would call this with live data) is
+-- dead code at runtime, but createLayout() still runs once at startup, so this still needs to
+-- resolve to a real, working font.
 local function qsFont(lbl, w)
-	pcall(function() lbl.FontFace = Font.new(QS, w or Enum.FontWeight.Medium) end)
+	lbl.FontFace = Font.new(UIFonts.Families.Body, w or Enum.FontWeight.Medium)
 end
 
 local ALIGNMENTS = { "Lawful", "Neutral", "Chaotic" }

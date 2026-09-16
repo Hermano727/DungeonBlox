@@ -31,11 +31,11 @@ local ZoneConfig   = require(ReplicatedStorage:WaitForChild("ZoneConfig"))
 local ZoneDevStore = require(ServerScriptService:WaitForChild("ZoneDevStore"))
 local MobData      = require(ReplicatedStorage:WaitForChild("MobData"))
 
--- Lazy: avoid a require cycle through DungeonProfileService at boot time.
+-- Lazy: avoid a require cycle through ProfileService at boot time.
 local _profileSvc
 local function profileSvc()
 	if not _profileSvc then
-		_profileSvc = require(ServerScriptService:WaitForChild("DungeonProfileService"))
+		_profileSvc = require(ServerScriptService:WaitForChild("ProfileService"))
 	end
 	return _profileSvc
 end

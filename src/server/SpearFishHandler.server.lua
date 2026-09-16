@@ -5,7 +5,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
-local DungeonProfile = require(ServerScriptService:WaitForChild("DungeonProfileService"))
+local DungeonProfile = require(ServerScriptService:WaitForChild("ProfileService"))
 local QuestProgress = require(ServerScriptService:WaitForChild("QuestProgressService"))
 local PartyService = require(ServerScriptService:WaitForChild("PartyService"))
 local FishingConfig = require(ReplicatedStorage:WaitForChild("FishingConfig"))

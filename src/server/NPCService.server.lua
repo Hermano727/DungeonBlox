@@ -5,7 +5,7 @@
     trade, and interaction before mutating player state.
 
     Profile split:
-      DungeonProfileService  → currencies (Coins), flags (teleports)
+      ProfileService  → currencies (Coins), flags (teleports)
       InventoryService       → item inventory (slot-indexed consumables/gear)
 ]]
 
@@ -15,10 +15,11 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local Players             = game:GetService("Players")
 
 local NPCRegistry      = require(ReplicatedStorage:WaitForChild("NPCRegistry"))
-local DungeonProfile   = require(ServerScriptService:WaitForChild("DungeonProfileService"))
+local DungeonProfile   = require(ServerScriptService:WaitForChild("ProfileService"))
 local InventoryService = require(ServerScriptService:WaitForChild("InventoryService"))
 local PlayerData       = require(ServerScriptService:WaitForChild("PlayerDataManager"))
 local ItemDefinitions  = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
+local QuestProgress    = require(ServerScriptService:WaitForChild("QuestProgressService"))
 
 ---------------------------------------------------------------------------
 -- RemoteFunction setup
@@ -767,6 +768,38 @@ local function handleSalvageGear(player, _npcId, npcType, params)
 	}
 end
 
+---------------------------------------------------------------------------
+-- AcceptQuest / TurnInQuest: generic actions for quests declared in
+-- QuestRegistry. Any NpcType can offer these by adding "AcceptQuest"/
+-- "TurnInQuest" to its Interactions list in NPCRegistry -- no new handler
+-- needed per quest, only a new QuestRegistry entry (see Blacksmith's
+-- BlacksmithScrapRun for the pilot).
+---------------------------------------------------------------------------
+
+local function handleAcceptQuest(player, _npcId, _npcType, params)
+    local questId = params.questId
+    if type(questId) ~= "string" or questId == "" then
+        return { ok = false, err = "bad_quest_id" }
+    end
+    local ok, err = QuestProgress.AcceptQuest(player, questId)
+    if not ok then
+        return { ok = false, err = err or "cannot_accept" }
+    end
+    return { ok = true }
+end
+
+local function handleTurnInQuest(player, _npcId, _npcType, params)
+    local questId = params.questId
+    if type(questId) ~= "string" or questId == "" then
+        return { ok = false, err = "bad_quest_id" }
+    end
+    local ok, err = QuestProgress.TurnInQuest(player, questId)
+    if not ok then
+        return { ok = false, err = err or "cannot_turn_in" }
+    end
+    return { ok = true }
+end
+
 local HANDLERS = {
     BuyItem              = handleBuyItem,
     TradeOre             = handleTradeOre,
@@ -779,6 +812,8 @@ local HANDLERS = {
     TalkFishermanGreet   = handleTalkFishermanGreet,
     TalkFishermanFishQuest = handleTalkFishermanFishQuest,
     SalvageGear          = handleSalvageGear,
+    AcceptQuest          = handleAcceptQuest,
+    TurnInQuest          = handleTurnInQuest,
 }
 
 ---------------------------------------------------------------------------

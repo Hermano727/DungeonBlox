@@ -2,123 +2,85 @@
 	PotionClient
 	Charge/cooldown HUD for PotionService. Drinking itself is triggered by right-clicking
 	while a potion is the equipped/held tool — see DrinkPotionClientTemplate (cloned into
-	the DefaultPotionTool prefab by DungeonEquippedHotbar). This script owns only the
+	the DefaultPotionTool prefab by EquippedHotbar). This script owns only the
 	charge readout, not the drink trigger.
+
+	2026-09-10 rework (direct request: hunger on the left, potions on the right, same row,
+	"this will replace the current 'minor x3/3' small box on the left of the screen right
+	now"): the standalone list-box HUD is gone. Charges now render as icons parented into
+	HealthClient.client.lua's PotionIconsMount (the mount point on the right side of its
+	Hunger+Potion row) — HealthClient owns that row's layout, this script only owns the
+	charge networking + the icons themselves. Also reflects PotionService's shared-pool
+	charge model (one pool across every tier, not one per tier — see PotionConfig), so
+	there's a single row of icons rather than one row per tier.
 ]]
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
+
+local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
+local PotionConfig = require(ReplicatedStorage:WaitForChild("PotionConfig"))
 
 local gameEvents = ReplicatedStorage:WaitForChild("GameEvents", 10)
 local chargesSync = gameEvents and gameEvents:WaitForChild("PotionChargesSync", 10)
 local requestCharges = gameEvents and gameEvents:WaitForChild("RequestPotionCharges", 10)
 
--- Row order + display labels + fallback max-charge count all come from the same shared
--- PotionConfig PotionService reads, instead of a hand-copied list that used to live only here
--- (previously: adding a new potion tier server-side required remembering to also add it to this
--- client list, or it would silently never show up in the HUD).
-local PotionConfig = require(ReplicatedStorage:WaitForChild("PotionConfig"))
-local order = PotionConfig.Order
-local POTION_LABELS = {}
-for itemId, tierCfg in pairs(PotionConfig.Tiers) do
-	POTION_LABELS[itemId] = tierCfg.displayName or itemId
-end
+-- Icon art: per direct request, every charge slot uses the Medium Potion icon -- the shared
+-- pool isn't tier-specific anymore (drinking a Minor or a Medium both spend the same charge),
+-- so there's no single "correct" tier to represent it with; Medium is the one explicitly
+-- asked for ("we will use the icon for the medium potion in this case"). Read through
+-- ItemDefinitions/ConsumableIcons (the shared asset ID registry the Merchant also uses)
+-- instead of a hardcoded asset id, so it stays in sync if that icon is ever swapped.
+local POTION_ICON = ItemDefinitions.GetIcon("MediumPotion")
+local POTION_ICON_SIZE = 18 -- matches HealthClient's hunger-pip PIP_SIZE-driven row height
+local MAX_CHARGES = PotionConfig.SharedCharges.maxCharges
 
 ---------------------------------------------------------------------------
--- Charge HUD (minimal: tier label, count, seconds until next charge)
+-- Build the charge icons into HealthClient's mount point once it exists (same
+-- wait-and-poll pattern HotbarHud uses to find SkillsPopupUI).
 ---------------------------------------------------------------------------
 
-local gui = Instance.new("ScreenGui")
-gui.Name = "PotionChargesUI"
-gui.ResetOnSpawn = false
-gui.IgnoreGuiInset = true
-gui.DisplayOrder = 50
-gui.Parent = playerGui
+task.spawn(function()
+	local mount
+	repeat
+		mount = playerGui:FindFirstChild("PotionIconsMount", true)
+		if not mount then task.wait(0.5) end
+	until mount
 
-local holder = Instance.new("Frame")
-holder.Name = "Holder"
-holder.BackgroundTransparency = 1
-holder.AnchorPoint = Vector2.new(0, 1)
-holder.Position = UDim2.new(0, 16, 1, -160)
-holder.Size = UDim2.fromOffset(160, 50)
-holder.Parent = gui
-
-local rows = {}
-for i, itemId in ipairs(order) do
-	local row = Instance.new("TextLabel")
-	row.Name = itemId
-	row.BackgroundTransparency = 0.4
-	row.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
-	row.Size = UDim2.new(1, 0, 0, 22)
-	row.Position = UDim2.fromOffset(0, (i - 1) * 24)
-	row.Font = Enum.Font.GothamMedium
-	row.TextSize = 13
-	row.TextColor3 = Color3.fromRGB(220, 220, 220)
-	row.TextXAlignment = Enum.TextXAlignment.Left
-	row.Text = "  " .. POTION_LABELS[itemId] .. " x?/?"
-	row.Visible = false
-	row.Parent = holder
-	rows[itemId] = row
-end
-
-local latestCharges = {}
-
-local function renderRow(itemId)
-	local row = rows[itemId]
-	if not row then return end
-	local data = latestCharges[itemId]
-	if not data then
-		row.Visible = false
-		return
+	local icons = {}
+	for i = 1, MAX_CHARGES do
+		local icon = Instance.new("ImageLabel")
+		icon.Name = "PotionIcon" .. i
+		icon.LayoutOrder = i
+		icon.Size = UDim2.fromOffset(POTION_ICON_SIZE, POTION_ICON_SIZE)
+		icon.BackgroundTransparency = 1
+		icon.Image = POTION_ICON
+		icon.ScaleType = Enum.ScaleType.Fit
+		icon.ImageTransparency = 0.7 -- dim until renderCharges lights up available ones
+		icon.Parent = mount
+		icons[i] = icon
 	end
-	row.Visible = true
-	local label = POTION_LABELS[itemId] or itemId
-	-- Prefer the server-pushed maxCharges (added to the sync payload so this HUD never has to
-	-- assume a fixed cap); fall back to the shared config, then a hardcoded 3 only if somehow
-	-- neither is available (e.g. a payload from before this field existed).
-	local maxCharges = data.maxCharges
-		or (PotionConfig.Tiers[itemId] and PotionConfig.Tiers[itemId].maxCharges)
-		or 3
-	if data.secondsUntilNext and data.secondsUntilNext > 0 then
-		row.Text = string.format("  %s x%d/%d  (%ds)", label, data.count, maxCharges, math.ceil(data.secondsUntilNext))
-	else
-		row.Text = string.format("  %s x%d/%d", label, data.count, maxCharges)
+
+	local function renderCharges(data)
+		local count = (type(data) == "table" and data.count) or 0
+		for i, icon in ipairs(icons) do
+			icon.ImageTransparency = (i <= count) and 0 or 0.7
+		end
 	end
-end
 
-local function applyChargesPayload(payload)
-	if type(payload) ~= "table" then return end
-	for itemId, data in pairs(payload) do
-		latestCharges[itemId] = data
-		renderRow(itemId)
+	if chargesSync then
+		chargesSync.OnClientEvent:Connect(renderCharges)
 	end
-end
 
-if chargesSync then
-	chargesSync.OnClientEvent:Connect(applyChargesPayload)
-end
-
-if requestCharges then
-	task.spawn(function()
+	if requestCharges then
 		local ok, payload = pcall(function()
 			return requestCharges:InvokeServer()
 		end)
 		if ok then
-			applyChargesPayload(payload)
-		end
-	end)
-end
-
--- Smooth the countdown between server pushes without waiting for the next sync.
-RunService.Heartbeat:Connect(function(dt)
-	for itemId, data in pairs(latestCharges) do
-		if data.secondsUntilNext and data.secondsUntilNext > 0 then
-			data.secondsUntilNext = math.max(0, data.secondsUntilNext - dt)
-			renderRow(itemId)
+			renderCharges(payload)
 		end
 	end
 end)

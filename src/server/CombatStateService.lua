@@ -26,6 +26,15 @@ local function getEvent()
 	return ev
 end
 
+-- Authoritative "is this player flagged" query for gates elsewhere (e.g. the
+-- drop/trash item actions in ProfileService, which must not let a player dump gear
+-- mid-fight). Mirrors the exact same `timers[uid] > 0` check the Heartbeat loop below
+-- uses to decide combat vs. safe.
+function CombatStateService.IsInCombat(player)
+	local t = timers[player.UserId]
+	return t ~= nil and t > 0
+end
+
 function CombatStateService.OnPlayerDamaged(player)
 	local uid = player.UserId
 	local wasOut = not (timers[uid] and timers[uid] > 0)
@@ -35,23 +44,23 @@ end
 
 local _dp
 local function dp()
-	if not _dp then _dp = require(ServerScriptService:WaitForChild("DungeonProfileService")) end
+	if not _dp then _dp = require(ServerScriptService:WaitForChild("ProfileService")) end
 	return _dp
 end
 
 -- Stateless leaf module (pure functions over a profile table, no other
--- dependencies) -- safe to require eagerly, unlike DungeonProfileService
+-- dependencies) -- safe to require eagerly, unlike ProfileService
 -- above which needs the lazy/deferred pattern for boot-order reasons.
-local DungeonStatsService = require(ServerScriptService:WaitForChild("DungeonStatsService"))
+local StatsService = require(ServerScriptService:WaitForChild("StatsService"))
 
--- Same maxHp formula DungeonStatsService.BuildSnapshot uses for the
+-- Same maxHp formula StatsService.BuildSnapshot uses for the
 -- character-sheet UI (base + summed "hp" subStat across equipped gear) --
--- delegating the equipped-item sum to DungeonStatsService.SumEquippedSubStat
+-- delegating the equipped-item sum to StatsService.SumEquippedSubStat
 -- keeps this one-tick-per-player-per-heartbeat check as cheap as the old
 -- hand-rolled loop while guaranteeing it can't drift from the UI's number.
 local function computeMaxHp(profile)
 	local base = (profile.stats and profile.stats.combat and profile.stats.combat.maxHp) or 100
-	local bonus = DungeonStatsService.SumEquippedSubStat(profile, "hp")
+	local bonus = StatsService.SumEquippedSubStat(profile, "hp")
 	return math.max(1, base + bonus)
 end
 

@@ -23,8 +23,10 @@ end
 
 -- Spawn placement: scatter mobs in a group instead of stacking them on the
 -- spawner's marker point, and ground-snap each one via raycast.
-local SCATTER_RADIUS = 14        -- max horizontal studs from the spawner marker
+local SCATTER_RADIUS = 14        -- max horizontal studs from the spawner marker (see _scatterRadiusFor)
 local MIN_MOB_SEPARATION = 6     -- min studs between two mobs spawned by this spawner
+local SCATTER_RADIUS_PER_MOB = 4 -- widen the scatter as the group grows so 10 mobs
+                                 -- don't fight over one 14-stud circle
 local SCATTER_MAX_ATTEMPTS = 8
 local GROUND_PROBE_UP = 50
 local GROUND_PROBE_DOWN = 100

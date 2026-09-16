@@ -1,9 +1,14 @@
 --!strict
 --  PanelShell -- shared chrome for the inventory's sub-panels (Skills,
---  Stats, Hearthstone, Party): a title bar with a close (X) button, over a
---  content area. Every sub-panel wraps its content in this so the
---  "press X to pop back to the main inventory" behavior only needs to exist
---  in one place.
+--  Stats, Hearthstone, Party): a title bar over a content area, with an
+--  optional close (X) button.
+--
+--  The close button only renders when `onClose` is actually passed (2026-09-13,
+--  per the persistent-header QuickNav redesign -- see Inventory/init.lua's header
+--  comment): navigating between panels is now QuickNav's job, always visible above
+--  whatever's showing, so the sub-panels that use this shell (Stats/Hearthstone/
+--  Party) no longer pass onClose at all. Left optional rather than deleted outright
+--  in case a future panel still wants its own explicit close affordance.
 --
 --  Header treatment: a centered title flanked by thin gold rule lines (a plain
 --  Roblox-primitives placeholder for a proper flourish/scrollwork banner -- the
@@ -34,7 +39,7 @@ local ORNAMENT_SIZE = 16
 
 export type PanelShellProps = {
 	title: string,
-	onClose: () -> (),
+	onClose: (() -> ())?,
 	children: any,
 }
 
@@ -82,13 +87,13 @@ local function PanelShell(props: PanelShellProps)
 				TextColor3 = THEME.Title,
 				TextXAlignment = Enum.TextXAlignment.Center,
 			}),
-			Close = e("TextButton", {
+			Close = props.onClose and e("TextButton", {
 				AnchorPoint = Vector2.new(1, 0.5),
 				Position = UDim2.new(1, -12, 0.5, 0),
 				Size = UDim2.fromOffset(28, 28),
 				BackgroundColor3 = THEME.CloseBg,
 				BorderSizePixel = 0,
-				Font = Enum.Font.GothamBold,
+				FontFace = UIFonts.BodyBold,
 				TextSize = 16,
 				TextColor3 = Color3.fromRGB(230, 180, 180),
 				Text = "X",
@@ -96,7 +101,7 @@ local function PanelShell(props: PanelShellProps)
 				[React.Event.Activated] = props.onClose,
 			}, {
 				Corner = e("UICorner", { CornerRadius = UDim.new(0, 6) }),
-			}),
+			}) or nil,
 		}),
 
 		-- Thin seam line + a small diamond "rivet" straddling it -- marks the

@@ -11,7 +11,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local Workspace = game:GetService("Workspace")
 
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
-local DungeonProfile = require(ServerScriptService:WaitForChild("DungeonProfileService"))
+local DungeonProfile = require(ServerScriptService:WaitForChild("ProfileService"))
 local RemoteUtils = require(ReplicatedStorage:WaitForChild("RemoteUtils"))
 local MountRiderGuiCleanup = require(ReplicatedStorage:WaitForChild("MountRiderGuiCleanup"))
 local ServerStorage = game:GetService("ServerStorage")

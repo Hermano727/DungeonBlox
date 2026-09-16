@@ -5,7 +5,32 @@ local WeaponData = require(ReplicatedStorage:WaitForChild("WeaponData"))
 local ItemConfig = require(ReplicatedStorage:WaitForChild("ItemConfig"))
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
 local EnergyConfig = require(ReplicatedStorage:WaitForChild("EnergyConfig"))
+local CombatAnimConfig = require(ReplicatedStorage:WaitForChild("CombatAnimConfig"))
 local DamageService = require(ServerScriptService:WaitForChild("DamageService"))
+
+-- Server-side counterpart to CombatClient's rayDistanceIntoModelBounds: is
+-- `position` (the client's claimed hitPosition) actually inside `model`'s
+-- own real bounding box, expanded by `margin` studs? Same slab test, just
+-- a point-in-box check instead of a ray-vs-box check since we only have the
+-- claimed impact point here, not the original ray. This is what makes
+-- ApplyWeaponDamage/ApplyPvPDamage validate against the target's actual
+-- geometry instead of a flat radius-from-center -- a small mob's real bounds
+-- reject a claimed hit floating well above its body (e.g. at a healthbar's
+-- position) even though it'd pass a generic "within weapon range" check.
+local function isPositionWithinModelBounds(model, position, margin)
+	if not model or not position then
+		return false
+	end
+	local ok, boxCf, size = pcall(function() return model:GetBoundingBox() end)
+	if not ok or not boxCf or not size then
+		return false
+	end
+	local half = (size * 0.5) + Vector3.new(margin, margin, margin)
+	local local_ = boxCf:PointToObjectSpace(position)
+	return math.abs(local_.X) <= half.X
+		and math.abs(local_.Y) <= half.Y
+		and math.abs(local_.Z) <= half.Z
+end
 
 local ARMOR_SLOTS = ItemConfig.ARMOR_SLOTS
 local SUBSTAT_WEAPON_MAP = ItemConfig.ARMOR_SUBSTAT_WEAPON_MAP
@@ -14,7 +39,7 @@ local SUBSTAT_DMG_PER_200 = ItemConfig.ARMOR_SUBSTAT_DMG_PER_200
 local _ed, _dur, _dp
 local function ed()  if not _ed  then _ed  = require(ServerScriptService:WaitForChild("EnergyData"))       end return _ed  end
 local function dur() if not _dur then _dur = require(ServerScriptService:WaitForChild("DurabilityService")) end return _dur end
-local function dp()  if not _dp  then _dp  = require(ServerScriptService:WaitForChild("DungeonProfileService")) end return _dp  end
+local function dp()  if not _dp  then _dp  = require(ServerScriptService:WaitForChild("ProfileService")) end return _dp  end
 
 local function resolveWeaponIdForCombat(player, weaponId)
 	if type(weaponId) == "string" and WeaponData.Weapons[weaponId] then
@@ -146,8 +171,10 @@ local activeMobs = {}
 local processMobDeath = nil
 local levelPenaltyThreshold = 5
 local damageReductionPerLevel = 0.1
+local MAX_LEVEL_DAMAGE_REDUCTION = 0.5 -- hard ceiling; 10 or more levels behind still deals half
 local damageNumberEvent = nil
 local meleeGlassEvent = nil
+local mobHitFlashEvent = nil
 
 local function ensureMeleeGlassRemote()
 	if meleeGlassEvent and meleeGlassEvent.Parent then
@@ -170,6 +197,34 @@ local function ensureMeleeGlassRemote()
 	end
 	meleeGlassEvent = ev
 	return meleeGlassEvent
+end
+
+-- Broadcast (not per-attacker) -- unlike damageNumberEvent/meleeGlassEvent,
+-- which are feedback for the player who swung, a mob flashing white is part
+-- of the mob's own on-screen state: every player currently looking at it
+-- should see the same flash at the same moment, not just whoever landed the
+-- hit. See MobHitFlashClient for the client-side effect this drives.
+local function ensureMobHitFlashRemote()
+	if mobHitFlashEvent and mobHitFlashEvent.Parent then
+		return mobHitFlashEvent
+	end
+	local ge = ReplicatedStorage:FindFirstChild("GameEvents")
+	if not ge then
+		ge = Instance.new("Folder")
+		ge.Name = "GameEvents"
+		ge.Parent = ReplicatedStorage
+	end
+	local ev = ge:FindFirstChild("MobHitFlash")
+	if not ev or not ev:IsA("RemoteEvent") then
+		if ev then
+			ev:Destroy()
+		end
+		ev = Instance.new("RemoteEvent")
+		ev.Name = "MobHitFlash"
+		ev.Parent = ge
+	end
+	mobHitFlashEvent = ev
+	return mobHitFlashEvent
 end
 
 function MobCombat.Initialize(mobTable, deathHandler, config)
@@ -198,6 +253,7 @@ function MobCombat.Initialize(mobTable, deathHandler, config)
 	end
 	meleeGlassEvent = ge:WaitForChild("MeleeHitGlass")
 	ensureMeleeGlassRemote()
+	ensureMobHitFlashRemote()
 end
 
 local function calculateDamage(player, mob, baseDamage)
@@ -206,7 +262,13 @@ local function calculateDamage(player, mob, baseDamage)
     local levelDiff = mobLevel - playerLevel
 
     if levelDiff >= levelPenaltyThreshold then
-        local reduction = math.min((levelDiff - levelPenaltyThreshold + 1) * damageReductionPerLevel, 0.8)
+        -- Ramp: 10% at 5 levels behind, +10% per level after, HARD CAP 50%.
+        -- Was capped at 80%, which meant a level-1 player hitting a level-21
+        -- boss dealt only 20% of weapon damage -- and because the raw formula
+        -- wanted 160%, every level from 16 downward felt identical. A 50% cap
+        -- keeps the penalty meaningful without making under-levelled content
+        -- a wall.
+        local reduction = math.min((levelDiff - levelPenaltyThreshold + 1) * damageReductionPerLevel, MAX_LEVEL_DAMAGE_REDUCTION)
         baseDamage = baseDamage * (1 - reduction)
     end
 
@@ -225,19 +287,44 @@ end
 local function applyDamage(player, mob, baseDamage, weaponId, weapSubs, swingMult)
     local hpFrac = (mob.MaxHealth and mob.MaxHealth > 0)
         and (mob.CurrentHealth / mob.MaxHealth) or 1
-    local weaponFinal = DamageService.ComputeWeaponFinal(baseDamage, weapSubs, hpFrac, "Mob")
+    local weaponFinal, hitInfo = DamageService.ComputeWeaponFinal(baseDamage, weapSubs, hpFrac, "Mob")
+    local isCrit = hitInfo and hitInfo.isCrit or false
+    -- A "special" hit -- crit today, an on-hit enchant proc later -- plays its
+    -- own dedicated sound client-side, so it should suppress the mob's own
+    -- base hit noise (below) rather than layering both. When enchant procs
+    -- are implemented, OR their own trigger flag into this same line; don't
+    -- touch mob:GetHitSoundId() itself, that's still the per-mob base-sound
+    -- lookup, just gated on whether anything "special" happened this hit.
+    local specialHitSoundOccurred = isCrit
     local finalDamage = calculateDamage(player, mob, weaponFinal)
     if finalDamage <= 0 then
         return false
     end
 
-    -- Snapshot DamageTracker before hit so we can compute the true post-armor delta.
+    -- Snapshot DamageTracker (and the Model reference) before hit -- a kill
+    -- makes mob:TakeDamage() call Die() synchronously, which nils out
+    -- mob.Model before this function gets control back. Reading mob.Model
+    -- AFTER TakeDamage silently drops the damage number on every one-shot kill.
     local beforeDmg = mob.DamageTracker[player.UserId] or 0
+    local mobModel = mob.Model
+    local mobMaxHealth = mob.MaxHealth
     local died = mob:TakeDamage(player, finalDamage)
     local actualDamage = (mob.DamageTracker[player.UserId] or 0) - beforeDmg
 
-    if actualDamage > 0 and damageNumberEvent and mob.Model then
-        damageNumberEvent:FireClient(player, actualDamage, mob.Model)
+    if actualDamage > 0 and damageNumberEvent and mobModel then
+        damageNumberEvent:FireClient(player, actualDamage, mobModel, mobMaxHealth, isCrit)
+    end
+
+    -- Hit-flash: fires the instant a real hit is confirmed (same gate as the
+    -- damage number above -- actualDamage > 0, i.e. TakeDamage actually took
+    -- effect, not just "a swing was reported"), so it never lags behind the
+    -- number or plays for a hit the server rejected. Broadcast to everyone,
+    -- not just the attacker -- see ensureMobHitFlashRemote.
+    if actualDamage > 0 and mobModel then
+        local ev = ensureMobHitFlashRemote()
+        if ev then
+            ev:FireAllClients(mobModel)
+        end
     end
 
     if died and processMobDeath then
@@ -258,10 +345,17 @@ local function applyDamage(player, mob, baseDamage, weaponId, weapSubs, swingMul
     pcall(ed().chargeHitEnergy, player, swingMult)
     pcall(dur().weaponHit, player)
 
-	if playMeleeGlass then
+	if playMeleeGlass and not specialHitSoundOccurred then
 		local ev = ensureMeleeGlassRemote()
 		if ev then
-			ev:FireClient(player)
+			-- Per-mob-type hit sfx: base MobClass:GetHitSoundId() returns the
+			-- shared default (the "glass" clip this event was originally
+			-- built for); a MobClassRegistry subclass like SkeletonMobClass
+			-- overrides it to return something else. The event/instance
+			-- names below are historical (kept as MeleeHitGlass rather than
+			-- renamed) but the id sent is resolved per-mob now.
+			local soundId = mob.GetHitSoundId and mob:GetHitSoundId() or nil
+			ev:FireClient(player, soundId)
 		end
 	end
 
@@ -294,12 +388,28 @@ function MobCombat.ApplyWeaponDamage(player, mobUID, weaponId, hitPosition)
         return false
     end
 
+    -- Coarse early-out only: a cheap sanity check so we don't bother with the
+    -- real bounding-box test below for a claim that's wildly out of range.
+    -- Range is measured surface-to-surface, not centre-to-centre: a big mob
+    -- credits its own horizontal half-extent so the player can hit its body
+    -- rather than having to reach its HumanoidRootPart. No-op for small mobs
+    -- (GetHitRadius returns 0 below ~3 studs of half-extent).
+    local mobRadius = (mob.GetHitRadius and mob:GetHitRadius()) or 0
+    local forgiveness = CombatAnimConfig.SERVER_HIT_FORGIVENESS_STUDS or 3
+    local coarseRange = stats.MaxRange + mobRadius + forgiveness
+
     local playerDistance = (playerRoot.Position - mobPosition).Magnitude
-    if playerDistance > stats.MaxRange then
+    if playerDistance > coarseRange then
         return false
     end
 
-    if hitPosition and (hitPosition - mobPosition).Magnitude > stats.MaxRange + 5 then
+    -- The actual gate: does the claimed hitPosition land inside this mob's
+    -- OWN real bounding box (plus a small latency-forgiveness margin)? This
+    -- is what stops a swing aimed well above a small mob's body (e.g. at its
+    -- floating healthbar) from landing just because the player was standing
+    -- close enough -- the old check only measured distance to mob center,
+    -- never the mob's actual shape.
+    if not isPositionWithinModelBounds(mob.Model, hitPosition, forgiveness) then
         return false
     end
 
@@ -315,19 +425,19 @@ function MobCombat.ApplyWeaponDamage(player, mobUID, weaponId, hitPosition)
 end
 
 -- Player-vs-player damage path. Mirrors ApplyWeaponDamage but targets a Player
--- instead of a Mob. The alignment gate is owned by DungeonProfileService.CanPvP
+-- instead of a Mob. The alignment gate is owned by ProfileService.CanPvP
 -- so Lawful players can neither hit nor be hit. Reuses the same weapon roll,
 -- substat curve, energy gate, and durability hooks as PvE so balance is shared.
 local _dpsPvP
 local function getDPSForPvP()
 	if not _dpsPvP then
-		_dpsPvP = require(ServerScriptService:WaitForChild("DungeonProfileService"))
+		_dpsPvP = require(ServerScriptService:WaitForChild("ProfileService"))
 	end
 	return _dpsPvP
 end
 
 -- Lazy require for ZoneService so MobCombat doesn't form a boot-time cycle
--- through it. ZoneService itself lazily requires DungeonProfileService.
+-- through it. ZoneService itself lazily requires ProfileService.
 local _zoneSvc
 local function getZoneSvc()
 	if not _zoneSvc then
@@ -378,10 +488,14 @@ function MobCombat.ApplyPvPDamage(attacker, target, weaponId, hitPosition)
 	weaponId = resolveWeaponIdForCombat(attacker, weaponId)
 	local stats = WeaponData.GetStats(weaponId or "Unarmed")
 
-	-- Distance check (server-authoritative). +4 stud lag tolerance.
+	-- Coarse early-out (server-authoritative), same pattern as the PvE path:
+	-- cheap distance sanity check first, then the real gate is whether the
+	-- claimed hitPosition actually lands inside the target's own bounding
+	-- box, not just "somewhere near them."
+	local forgiveness = CombatAnimConfig.SERVER_HIT_FORGIVENESS_STUDS or 3
 	local dist = (attRoot.Position - tgtRoot.Position).Magnitude
-	if dist > (stats.MaxRange or 8) + 4 then return false end
-	if hitPosition and (hitPosition - tgtRoot.Position).Magnitude > (stats.MaxRange or 8) + 5 then
+	if dist > (stats.MaxRange or 8) + forgiveness then return false end
+	if not isPositionWithinModelBounds(tgtChar, hitPosition, forgiveness) then
 		return false
 	end
 
@@ -390,21 +504,28 @@ function MobCombat.ApplyPvPDamage(attacker, target, weaponId, hitPosition)
 
 	local maxHP = (tgtHum.MaxHealth and tgtHum.MaxHealth > 0) and tgtHum.MaxHealth or 100
 	local hpFrac = math.clamp(tgtHum.Health / maxHP, 0, 1)
-	local weaponFinal = DamageService.ComputeWeaponFinal(base, weapSubs or {}, hpFrac, "Player")
+	local weaponFinal, hitInfo = DamageService.ComputeWeaponFinal(base, weapSubs or {}, hpFrac, "Player")
+	local isCrit = hitInfo and hitInfo.isCrit or false
+	-- Same suppression rule as the PvE path in applyDamage: a crit (or, later,
+	-- an on-hit enchant proc) plays its own sound and should mute the base
+	-- melee-glass noise instead of layering both.
+	local specialHitSoundOccurred = isCrit
 	if weaponFinal <= 0 then return false end
 
 	local applied = DamageService.ApplyToPlayer(target, weaponFinal, attacker)
 	if applied and applied > 0 then
 		if damageNumberEvent then
-			damageNumberEvent:FireClient(attacker, applied, tgtChar)
+			damageNumberEvent:FireClient(attacker, applied, tgtChar, maxHP, isCrit)
 		end
 
 		-- Confirmed-hit energy + weapon durability tick, same as PvE.
 		pcall(ed().chargeHitEnergy, attacker)
 		pcall(dur().weaponHit, attacker)
 
-		-- Melee glass SFX, mirroring PvE rules.
-		if type(weaponId) == "string"
+		-- Melee glass SFX, mirroring PvE rules (including the crit/special-hit
+		-- suppression -- see specialHitSoundOccurred above).
+		if not specialHitSoundOccurred
+			and type(weaponId) == "string"
 			and WeaponData.Weapons[weaponId]
 			and WeaponData.GetStats(weaponId).AttackType == "Melee" then
 			local d = ed().get(attacker)

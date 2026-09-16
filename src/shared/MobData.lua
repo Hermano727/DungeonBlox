@@ -19,8 +19,23 @@ MobData[1] = {
         ReturnDistance = 50,
         AttackRange = 5,
         AttackCooldown = 0.5,
-        MoveSpeed = 2,
-        JumpHeight = 3
+        -- Doubled 2026-09-09 per direct request ("move 2x faster, hop ~33%
+        -- faster, like the Genshin slimes"). HoppingMobClass derives both
+        -- from this one number: actual translation speed always equals
+        -- MoveSpeed exactly (hopDist/duration cancels out to MoveSpeed by
+        -- construction), and hop duration = hopDist/MoveSpeed, so 2 -> 4
+        -- takes hopDist from the 3-stud floor up to 4 (no longer clamped),
+        -- shortening each hop's cycle from 1.5s to 1.0s -- exactly the 33%
+        -- faster cadence asked for, alongside the exact 2x speed.
+        MoveSpeed = 4,
+        JumpHeight = 3,
+        -- MobClassRegistry opt-in: routes to SlimeMobClass, which still hops
+        -- (inherits HoppingMobClass's Move()) but plays a random squelch
+        -- hit sound instead of the shared default glass sfx. Set as
+        -- MovementClass (not SoundClass) so it's picked ahead of the
+        -- JumpHeight > 0 heuristic that would otherwise send this to plain
+        -- HoppingMobClass.
+        MovementClass = "Slime"
     },
     ["ForestGoblin"] = {
         Name = "Forest Goblin",
@@ -53,6 +68,27 @@ MobData[1] = {
         AttackCooldown = 0.7,
         MoveSpeed = 10,
         JumpHeight = 0
+    },
+    ["MiasmaBoss"] = {
+        Name = "Miasma",
+        Level = 21,
+        BaseHP = 5000,
+        BaseDamage = 5,
+        BaseScore = 500,
+        LootPool = "CommonDrop",     -- trash loot; the Mythic is rolled separately
+        MobID = "MiasmaBoss",
+        Armor = 20,
+        AggroRange = 90,             -- big room, big boss
+        ReturnDistance = 250,        -- must not leash out of the arena
+        AttackRange = 6,             -- effective reach = this + GetHitRadius (~26),
+                                     -- so ~32 studs: just past the model's own edge
+        AttackCooldown = 2.0,
+        MoveSpeed = 8,
+        JumpHeight = 0,              -- MUST stay 0 or MobClassRegistry sends it to HoppingMobClass
+        MovementClass = "DungeonBoss",
+        KnockbackMultiplier = 0,     -- immovable
+        IsBoss = true,
+        ModelName = "MiasmaBoss",
     }
 }
 
@@ -217,6 +253,9 @@ MobData[1]["SmallSkeleton"] = {
 	MoveSpeed = 9,
 	JumpHeight = 0,
 	KnockbackMultiplier = 1.0,
+	SoundClass = "Skeleton", -- MobClassRegistry opt-in: cycles 4 bone-rattle hit
+		-- sounds via SkeletonMobClass:GetHitSoundId() instead of the shared
+		-- default glass sfx (MobClass:GetHitSoundId).
 }
 
 -- Named Elite variants (separate MobID entries)
@@ -235,7 +274,70 @@ MobData[1]["PlainsSlimeElite"] = {
     AttackCooldown = 0.5,
     MoveSpeed = 10,
     JumpHeight = 3,
-    KnockbackMultiplier = 0.5
+    KnockbackMultiplier = 0.5,
+    MovementClass = "Slime" -- see PlainsSlime's MovementClass comment above
+}
+
+-- First "named elite" boss-type mob (2026-09-14, direct request): a
+-- distinct character (skinned-mesh import, own name/lore) rather than a
+-- stat-buffed reskin of an existing mob like PlainsSlimeElite/CaveBatElite
+-- above. Spawns through the SAME elite-zone pity/chance machinery in
+-- MobManager.server.lua (set this MobID as a zone's EliteMobId via the F8
+-- dev tool's Elite Mob Zone picker) or on demand via the F8 dev tool's
+-- "Force Spawn Elite" button. Stats are a first-pass placeholder tuned to
+-- roughly slot between the existing T1 named elites and MiasmaBoss (T1
+-- dungeon boss, Level 21 / 5000 HP) -- adjust once playtested.
+-- Deliberately NOT IsBoss=true: that flag ends the current DUNGEON RUN on
+-- death (see LootService.lua), which is wrong for an open-world elite.
+--
+-- Playtest pass (2026-09-14, direct request: "nerf the speed ... by 20%,
+-- add a de-agro range as well, right now it infinitely chases"):
+--   * MoveSpeed 10 -> 8 (-20%).
+--   * ReturnDistance is the de-aggro/leash range -- MobClass.lua's
+--     HandleWalking already gives up and returns to Idle once the mob has
+--     wandered past ReturnDistance from its own spawn point AND is no
+--     longer within LEASH_GRACE_PROXIMITY (12 studs) of its target for
+--     LEASH_GRACE_DURATION (1s) -- this is the exact same shared leash
+--     every regular mob uses, just tuned per-mob via this one field. It was
+--     already set (150) but read as "infinite" in practice because Kane's
+--     old speed let it stay glued to the player (well within the 12-stud
+--     grace radius) indefinitely, so the countdown never started -- the
+--     speed nerf above is what actually lets a fleeing player pull ahead
+--     far enough to trigger it. Tightened 150 -> 90 (AggroRange + 30,
+--     matching the ratio regular T1 mobs use) on top of that so it also
+--     gives up sooner once a player genuinely disengages.
+MobData[1]["Kane"] = {
+    Name = "Kane the Enraged",
+    Level = 21,
+    BaseHP = 3000,
+    BaseDamage = 25,
+    BaseScore = 500,
+    LootPool = "EliteDrop",
+    MobID = "Kane",
+    Armor = 20,
+    AggroRange = 60,
+    ReturnDistance = 90,
+    AttackRange = 8,
+    AttackCooldown = 1.2,
+    MoveSpeed = 8,
+    JumpHeight = 0,
+    -- Was 0 ("immovable", copied from the MiasmaBoss pattern) -- but Kane is
+    -- an open-world named elite, not a dungeon boss, and per direct request
+    -- ("kane isnt taking any knockback... should just be a slight push")
+    -- should react like every other mob. Matched to the existing named-elite
+    -- convention (PlainsSlimeElite/CaveBatElite both use 0.5) rather than
+    -- the plain-mob default of 1.0, so Kane's bulk still reads as sturdier
+    -- than a common mob while clearly no longer immovable. ApplyKnockback in
+    -- MobClass.lua already only nudges position via PivotTo between AI
+    -- ticks -- it never touches the Animator/AnimationTrack, so this can't
+    -- interrupt Kane's walk animation.
+    KnockbackMultiplier = 0.5,
+    -- Marks this as a distinct named-elite CHARACTER (own model/lore), not a
+    -- stat-reskin like PlainsSlimeElite. Read by MobClass.lua to (a) skip
+    -- the normal floating nameplate/HP-bar billboard (MobHPBarUI) in favor
+    -- of the dedicated top-middle BossHealthBar.client.lua UI, and (b)
+    -- attach the orange "named elite" outline Highlight to the model.
+    IsNamedElite = true,
 }
 
 MobData[2]["CaveBatElite"] = {

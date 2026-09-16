@@ -50,9 +50,11 @@ NPCRegistry.Types = {
 
     ["Blacksmith"] = {
         DisplayName      = "Blacksmith",
-        Interactions     = { "RepairItem", "RepairAll" },
+        Interactions     = { "RepairItem", "RepairAll", "AcceptQuest", "TurnInQuest" },
         OpenRepairPrompt = "Repair Equipment",
         -- Cost formula in DurabilityService.getRepairCost: ceil(lost/50) Coins, min 1, x3 if broken
+        -- AcceptQuest/TurnInQuest: generic quest actions (see QuestRegistry.BlacksmithScrapRun),
+        -- routed here the same way as any other NPC transaction.
     },
 
     ["Miner"] = {

@@ -1,6 +1,6 @@
 --[[
 	DrinkPotionClientTemplate
-	Not run from ReplicatedStorage (LocalScripts don't run there). DungeonEquippedHotbar
+	Not run from ReplicatedStorage (LocalScripts don't run there). EquippedHotbar
 	clones this script into the DefaultPotionTool prefab at runtime so the LocalScript only
 	executes once parented under the player's Backpack/Character.
 

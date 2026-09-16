@@ -1,6 +1,7 @@
 --[[
 	CombatTimerClient
-	Shows a small combat indicator below the HP bar.
+	Shows a small combat indicator in the screen's top-right corner (2026-09-13 --
+	was top-center, which overlapped the Combat XP bar).
 	  Sword icon + countdown while in combat.
 	  Fades out when safe. Shield icon pulses when regen activates.
 ]]
@@ -25,8 +26,14 @@ gui.Parent         = playerGui
 
 local frame = Instance.new("Frame", gui)
 frame.Name             = "CombatFrame"
-frame.AnchorPoint      = Vector2.new(0.5, 0)
-frame.Position         = UDim2.new(0.5, 0, 0.08, 0)
+-- Moved to the top-right corner (2026-09-13, per direct request): was top-center,
+-- overlapping the Combat XP bar/orb-burst zone. Top-right instead of top-left since
+-- Roblox's own unhideable core UI buttons live top-left. This is ambient status info
+-- ("are you flagged, will you regen soon"), not something actively tracked mid-fight
+-- like HP/energy, so it doesn't need to compete with either of those busier areas --
+-- same 0.08 vertical offset as before, just anchored/offset from the right edge now.
+frame.AnchorPoint      = Vector2.new(1, 0)
+frame.Position         = UDim2.new(1, -16, 0.08, 0)
 frame.Size             = UDim2.fromOffset(160, 22)
 frame.BackgroundTransparency = 1
 frame.BorderSizePixel  = 0

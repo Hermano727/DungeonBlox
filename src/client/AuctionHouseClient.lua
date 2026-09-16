@@ -53,11 +53,17 @@ local RARITY_COLORS = {
 	Legendary = Color3.fromRGB(255, 175,  85),
 }
 
-local QS_FONT = "rbxasset://fonts/families/Quicksand.json"
+local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
+
+-- Was Quicksand ("rbxasset://fonts/families/Quicksand.json") wrapped in a pcall -- Quicksand
+-- isn't one of Roblox's bundled font families, so Font.new() never actually failed to
+-- construct (pcall had nothing to catch); the family just failed to *load* at render time
+-- ("Font family ... failed to load" in the console) and silently fell back to the default
+-- font. Routed through the shared UIFonts.Families.Body (Work Sans, a real Roblox-uploaded
+-- Font asset -- see shared/UIFonts.luau) so Auction House labels actually render as intended
+-- and stay in sync if the body font ever changes again.
 local function qsFont(lbl, w)
-	pcall(function()
-		lbl.FontFace = Font.new(QS_FONT, w or Enum.FontWeight.Medium)
-	end)
+	lbl.FontFace = Font.new(UIFonts.Families.Body, w or Enum.FontWeight.Medium)
 end
 
 -- ---------------------------------------------------------------------------

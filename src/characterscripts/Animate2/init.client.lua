@@ -1,23 +1,37 @@
--- Animate2 (LocalScript) - R15 Version
+-- Animate2 (LocalScript) - Custom skinned-rig locomotion state machine
 -- Place in StarterPlayer > StarterCharacterScripts
+--
+-- Profile-driven state machine (Idle / Walk / RunStart / RunLoop) for the
+-- 52-bone skinned-mesh player rig (Hero_Character -- see
+-- CharacterAnimProfiles.lua). Each state swaps between an Unarmed and an
+-- Armed (weapon-specific) track pair depending on whether a Tool is
+-- currently equipped (CharacterAnimProfiles.GetProfileForTool). Missing
+-- clips (jump, fall, landing, run-stop -- see CharacterAnimProfiles'
+-- header) fall back to holding whatever pose/state was already showing
+-- rather than substituting a wrong-rig animation.
+--
+-- Sprint input, FOV tweening, crouch gating, and backwards-walk detection
+-- don't depend on rig body-part names, so the animation *selection* below
+-- is the only thing that changed for the new rig.
 
 local Figure = script.Parent
 
--- Delete the default Animate script
-local defaultAnimate = Figure:WaitForChild("Animate", 5)
+-- Delete the default Animate script (unchanged from before)
+local defaultAnimate = Figure:FindFirstChild("Animate")
 if defaultAnimate then
 	defaultAnimate:Destroy()
 end
+Figure.ChildAdded:Connect(function(child)
+	if child.Name == "Animate" and child:IsA("LocalScript") then child:Destroy() end
+end)
 
 local Humanoid = Figure:WaitForChild("Humanoid")
 local HumanoidRootPart = Figure:WaitForChild("HumanoidRootPart")
 
--- Destroying the default Animate script above does NOT stop any AnimationTracks
--- it already started playing -- tracks live on the Animator and outlive the
--- script that created them. An orphaned track keeps IsPlaying=true at whatever
--- priority it used (often Core) forever, which both locks its joints against
--- procedural scripts (Turning/Lean writing C0) and fights our own animations
--- below. Stop anything already playing before we take over.
+-- Destroying the default Animate script above does NOT stop any
+-- AnimationTracks it already started playing -- tracks live on the
+-- Animator and outlive the script that created them. Stop anything
+-- already playing before we take over (unchanged from before).
 local function stopOrphanedTracks()
 	local existingAnimator = Humanoid:FindFirstChildOfClass("Animator")
 	if existingAnimator then
@@ -28,88 +42,38 @@ local function stopOrphanedTracks()
 end
 stopOrphanedTracks()
 
-local pose = "Standing"
-
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService
-local ContentProvider = game:GetService("ContentProvider")
 local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local ContentProvider = game:GetService("ContentProvider")
 local camera = workspace.CurrentCamera
-local defaultFOV = camera.FieldOfView
+local VideoSettings = require(ReplicatedStorage:WaitForChild("VideoSettings"))
+local function defaultFOV()
+	return VideoSettings.fov
+end
 local fovTween
 
-local Config = require(ReplicatedStorage:WaitForChild("EnergyConfig"))
 local EnergyEvents = ReplicatedStorage:WaitForChild("EnergyEvents")
 local RequestSprint = EnergyEvents:WaitForChild("RequestSprint")
 local EnergyChanged = EnergyEvents:WaitForChild("EnergyChanged")
 
+local CharacterAnimProfiles = require(ReplicatedStorage:WaitForChild("CharacterAnimProfiles"))
+local ActiveEquipment = require(ReplicatedStorage:WaitForChild("ActiveEquipment"))
+
 -- ============================================
--- ANIMATION SPEED CONFIGURATION
+-- SPEED / RUNNING CONFIGURATION (unchanged from before)
 -- ============================================
-local IDLE_ANIM_SPEED = 1.0
 local WALK_ANIM_SPEED = 1.0
-local RUN_ANIM_SPEED = 1.3
-local WALK_SPEED_SCALE = 8.7 -- was 14.5; scaled down with NORMAL_SPEED (-40%) to keep walk animation pace matched to actual WalkSpeed
+local WALK_SPEED_SCALE = 8.7
 local BACKWARDS_WALK_SPEED = 1.0
-local JUMP_ANIM_SPEED = 1.0
-local FALL_ANIM_SPEED = 1.0
-local CLIMB_ANIM_SPEED_SCALE = 12.0
-local SIT_ANIM_SPEED = 1.0
 
--- ============================================
--- RUNNING CONFIGURATION
--- ============================================
 local isRunning = false
-local originalWalkSpeed = Config.NORMAL_SPEED
-local runSpeedBoost = Config.SPRINT_SPEED - Config.NORMAL_SPEED
-local runAcceleration = 50
-local targetWalkSpeed = originalWalkSpeed
 
--- ============================================
--- FOV CONFIGURATION
--- ============================================
 local FOV_TWEEN_TIME = 0.5
 local RUN_FOV_BOOST = 15
 
-local currentAnim = ""
-local currentAnimInstance = nil
-local currentAnimTrack = nil
-local currentAnimKeyframeHandler = nil
-local currentAnimSpeed = 1
-local animTable = {}
-
--- R15 animation IDs
-local animNames = {
-	idle = {
-		{ id = "rbxassetid://507766666", weight = 9 },
-		{ id = "rbxassetid://507766951", weight = 1 }
-	},
-	walk = {
-		{ id = "rbxassetid://507777826", weight = 10 }
-	},
-	jump = {
-		{ id = "rbxassetid://507765000", weight = 10 }
-	},
-	fall = {
-		{ id = "rbxassetid://507767968", weight = 10 }
-	},
-	climb = {
-		{ id = "rbxassetid://507765644", weight = 10 }
-	},
-	sit = {
-		{ id = "rbxassetid://507768133", weight = 10 }
-	},
-	run = {
-		{ id = "rbxassetid://507767714", weight = 10 }
-	},
-}
-
-local idleWalkTransitionTime = 0.35
-
--- ============================================
--- CROUCH CHECK FUNCTION
--- ============================================
 local function IsCrouching()
 	if HumanoidRootPart then
 		return HumanoidRootPart:GetAttribute("IsCrouching") == true
@@ -117,346 +81,308 @@ local function IsCrouching()
 	return false
 end
 
-function configureAnimationSet(name, fileList)
-	if (animTable[name] ~= nil) then
-		for _, connection in pairs(animTable[name].connections) do
-			connection:disconnect()
-		end
-	end
-	animTable[name] = {}
-	animTable[name].count = 0
-	animTable[name].totalWeight = 0
-	animTable[name].connections = {}
-
-	local config = script:FindFirstChild(name)
-	if (config ~= nil) then
-		table.insert(animTable[name].connections, config.ChildAdded:connect(function(child) configureAnimationSet(name, fileList) end))
-		table.insert(animTable[name].connections, config.ChildRemoved:connect(function(child) configureAnimationSet(name, fileList) end))
-		local idx = 1
-		for _, childPart in pairs(config:GetChildren()) do
-			if (childPart:IsA("Animation")) then
-				table.insert(animTable[name].connections, childPart.Changed:connect(function(property) configureAnimationSet(name, fileList) end))
-				animTable[name][idx] = {}
-				animTable[name][idx].anim = childPart
-				local weightObject = childPart:FindFirstChild("Weight")
-				if (weightObject == nil) then
-					animTable[name][idx].weight = 1
-				else
-					animTable[name][idx].weight = weightObject.Value
-				end
-				animTable[name].count = animTable[name].count + 1
-				animTable[name].totalWeight = animTable[name].totalWeight + animTable[name][idx].weight
-				idx = idx + 1
-			end
-		end
-	end
-
-	if (animTable[name].count <= 0) then
-		for idx, anim in pairs(fileList) do
-			animTable[name][idx] = {}
-			animTable[name][idx].anim = Instance.new("Animation")
-			animTable[name][idx].anim.Name = name
-			animTable[name][idx].anim.AnimationId = anim.id
-			animTable[name][idx].weight = anim.weight
-			animTable[name].count = animTable[name].count + 1
-			animTable[name].totalWeight = animTable[name].totalWeight + anim.weight
-		end
-	end
-end
-
-function scriptChildModified(child)
-	local fileList = animNames[child.Name]
-	if (fileList ~= nil) then
-		configureAnimationSet(child.Name, fileList)
-	end
-end
-
-script.ChildAdded:connect(scriptChildModified)
-script.ChildRemoved:connect(scriptChildModified)
-
-local function setupRunAnimation()
-	local runValue = script:FindFirstChild("run")
-	if runValue and runValue:IsA("StringValue") and runValue.Value ~= "" then
-		animNames.run = { { id = runValue.Value, weight = 10 } }
-	end
-end
-
-setupRunAnimation()
-
-for name, fileList in pairs(animNames) do
-	configureAnimationSet(name, fileList)
-end
-
-local function preloadAnimations()
-	local assetsToLoad = {}
-	for animName, animSet in pairs(animTable) do
-		for i = 1, animSet.count do
-			table.insert(assetsToLoad, animSet[i].anim)
-		end
-	end
-	pcall(function()
-		ContentProvider:PreloadAsync(assetsToLoad)
-	end)
-end
-
-preloadAnimations()
-setupRunAnimation()
-
--- Second pass: catch any default-Animate track that started slightly after our
--- first cleanup (preloading above takes real time, giving it a window to sneak in).
-stopOrphanedTracks()
-
-local jumpAnimTime = 0
-local jumpAnimDuration = 0.3
-local fallTransitionTime = 0.3
-
-function stopAllAnimations()
-	local oldAnim = currentAnim
-	currentAnim = ""
-	currentAnimInstance = nil
-	if (currentAnimKeyframeHandler ~= nil) then
-		currentAnimKeyframeHandler:disconnect()
-	end
-	if (currentAnimTrack ~= nil) then
-		currentAnimTrack:Stop()
-		currentAnimTrack:Destroy()
-		currentAnimTrack = nil
-	end
-	return oldAnim
-end
-
-function setAnimationSpeed(speed)
-	if speed ~= currentAnimSpeed then
-		currentAnimSpeed = speed
-		if currentAnimTrack then
-			currentAnimTrack:AdjustSpeed(currentAnimSpeed)
-		end
-	end
-end
-
-function keyFrameReachedFunc(frameName)
-	if (frameName == "End") then
-		local repeatAnim = currentAnim
-		local animSpeed = currentAnimSpeed
-		playAnimation(repeatAnim, 0.0, Humanoid)
-		setAnimationSpeed(animSpeed)
-	end
-end
-
-function playAnimation(animName, transitionTime, humanoid)
-	local roll = math.random(1, animTable[animName].totalWeight)
-	local idx = 1
-	while (roll > animTable[animName][idx].weight) do
-		roll = roll - animTable[animName][idx].weight
-		idx = idx + 1
-	end
-	local anim = animTable[animName][idx].anim
-
-	if (anim ~= currentAnimInstance) then
-		if (currentAnimTrack ~= nil) then
-			currentAnimTrack:Stop(transitionTime)
-			currentAnimTrack:Destroy()
-		end
-
-		currentAnimSpeed = 1.0
-
-		local animator = humanoid:FindFirstChildOfClass("Animator")
-		if not animator then
-			animator = Instance.new("Animator")
-			animator.Parent = humanoid
-		end
-
-		currentAnimTrack = animator:LoadAnimation(anim)
-		currentAnimTrack.Priority = Enum.AnimationPriority.Core
-		currentAnimTrack:Play(transitionTime)
-		currentAnim = animName
-		currentAnimInstance = anim
-
-		if (currentAnimKeyframeHandler ~= nil) then
-			currentAnimKeyframeHandler:disconnect()
-		end
-		currentAnimKeyframeHandler = currentAnimTrack.KeyframeReached:connect(keyFrameReachedFunc)
-	end
-end
-
 local function tweenFOV(targetFOV)
 	if fovTween then
 		fovTween:Cancel()
 	end
 	local tweenInfo = TweenInfo.new(FOV_TWEEN_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-	fovTween = TweenService:Create(camera, tweenInfo, {FieldOfView = targetFOV})
+	fovTween = TweenService:Create(camera, tweenInfo, { FieldOfView = targetFOV })
 	fovTween:Play()
 end
 
-function onRunning(speed)
-	if speed > 0.01 then
-		local backwards = false
-		if HumanoidRootPart then
-			local velocity = HumanoidRootPart.AssemblyLinearVelocity
-			local look = HumanoidRootPart.CFrame.LookVector
-			if velocity.Magnitude > 0.1 then
-				local dot = velocity.Unit:Dot(look)
-				if dot < -0.1 then
-					backwards = true
-				end
-			end
-		end
+-- ============================================
+-- ANIMATOR / TRACK LOADING
+-- ============================================
+-- Wait for the template's replicated Animator; a client-created fallback
+-- would not give observers the same animation owner.
+local animator = Humanoid:WaitForChild("Animator")
 
-		local animToPlay = "walk"
-		local transition = idleWalkTransitionTime
+-- {profileName -> {Walk=track, RunStart=track, RunLoop=track}}, built
+-- lazily per profile the first time it's needed.
+local trackCache = {}
 
-		if backwards then
-			targetWalkSpeed = originalWalkSpeed
-			animToPlay = "walk"
-			tweenFOV(defaultFOV)
-			if currentAnim == "walk" then
-				transition = 0.1
-			end
-			playAnimation(animToPlay, transition, Humanoid)
-			setAnimationSpeed(-(speed / WALK_SPEED_SCALE) * WALK_ANIM_SPEED * BACKWARDS_WALK_SPEED)
-		else
-			-- Check if crouching - if so, don't allow running
-			if IsCrouching() then
-				-- While crouching, ignore running input and keep default FOV
-				targetWalkSpeed = originalWalkSpeed
-				animToPlay = "walk"
-				tweenFOV(defaultFOV)
-				if currentAnim == "walk" then
-					transition = 0.1
-				end
-				playAnimation(animToPlay, transition, Humanoid)
-				setAnimationSpeed((speed / WALK_SPEED_SCALE) * WALK_ANIM_SPEED)
-			else
-				-- Not crouching, allow running normally
-				if isRunning then
-					targetWalkSpeed = originalWalkSpeed + runSpeedBoost
-				else
-					targetWalkSpeed = originalWalkSpeed
-				end
-
-				if isRunning and animNames.run[1].id ~= "" then
-					animToPlay = "run"
-					tweenFOV(defaultFOV + RUN_FOV_BOOST)
-					if currentAnim == "run" then
-						transition = 0.1
-					end
-				else
-					animToPlay = "walk"
-					tweenFOV(defaultFOV)
-					if currentAnim == "walk" then
-						transition = 0.1
-					end
-				end
-				playAnimation(animToPlay, transition, Humanoid)
-
-				if animToPlay == "run" then
-					setAnimationSpeed(RUN_ANIM_SPEED)
-				else
-					setAnimationSpeed((speed / WALK_SPEED_SCALE) * WALK_ANIM_SPEED)
-				end
-			end
-		end
-		pose = "Running"
-	else
-		local transition = idleWalkTransitionTime
-		if currentAnim == "idle" then
-			transition = 0.1
-		end
-		playAnimation("idle", transition, Humanoid)
-		setAnimationSpeed(IDLE_ANIM_SPEED)
-		pose = "Standing"
-		tweenFOV(defaultFOV)
+local function loadTrack(id)
+	if not id then
+		return nil
 	end
-end
-
-function onDied()
-	pose = "Dead"
-end
-
-function onJumping()
-	playAnimation("jump", 0.1, Humanoid)
-	setAnimationSpeed(JUMP_ANIM_SPEED)
-	jumpAnimTime = jumpAnimDuration
-	pose = "Jumping"
-end
-
-function onClimbing(speed)
-	playAnimation("climb", 0.1, Humanoid)
-	setAnimationSpeed(speed / CLIMB_ANIM_SPEED_SCALE)
-	pose = "Climbing"
-end
-
-function onGettingUp()
-	pose = "GettingUp"
-end
-
-function onFreeFall()
-	if (jumpAnimTime <= 0) then
-		playAnimation("fall", fallTransitionTime, Humanoid)
-		setAnimationSpeed(FALL_ANIM_SPEED)
+	local anim = Instance.new("Animation")
+	anim.AnimationId = id
+	local ok, track = pcall(function()
+		return animator:LoadAnimation(anim)
+	end)
+	if not ok then
+		warn("[Animate2] Failed to load animation", id, track)
+		return nil
 	end
-	pose = "FreeFall"
+	-- Fetch in the background. LoadAnimation can return a track before its
+	-- clip is available; transitions below also wait for a nonzero Length.
+	task.spawn(function()
+		local loaded, err = pcall(function() ContentProvider:PreloadAsync({ anim }) end)
+		if not loaded then warn("[Animate2] Animation preload failed", id, err) end
+	end)
+	return track
 end
 
-function onFallingDown()
-	pose = "FallingDown"
-end
-
-function onSeated()
-	pose = "Seated"
-end
-
-function onPlatformStanding()
-	pose = "PlatformStanding"
-end
-
-function onSwimming(speed)
-	if speed > 0 then
-		pose = "Running"
-	else
-		pose = "Standing"
-	end
-end
-
-local lastTick = 0
-
-function move(time)
-	local deltaTime = time - lastTick
-	lastTick = time
-
-	-- WalkSpeed is server-authoritative (EnergyServer); this script only drives feel/animation.
-
-	if (jumpAnimTime > 0) then
-		jumpAnimTime = jumpAnimTime - deltaTime
+local function getProfileTracks(profileName)
+	local cached = trackCache[profileName]
+	if cached then
+		return cached
 	end
 
-	if (pose == "FreeFall" and jumpAnimTime <= 0) then
-		playAnimation("fall", fallTransitionTime, Humanoid)
-		setAnimationSpeed(FALL_ANIM_SPEED)
-	elseif (pose == "Seated") then
-		playAnimation("sit", 0.5, Humanoid)
-		setAnimationSpeed(SIT_ANIM_SPEED)
-		return
-	elseif (pose == "Running") then
-		-- handled by onRunning
-	elseif (pose == "Dead" or pose == "GettingUp" or pose == "FallingDown" or pose == "PlatformStanding") then
-		stopAllAnimations()
+	local cfg = CharacterAnimProfiles.Profiles[profileName]
+	if not cfg then
+		return nil
 	end
+
+	local tracks = {}
+	tracks.Idle = loadTrack(cfg.Idle)
+	tracks.Walk = loadTrack(cfg.Walk)
+	tracks.RunStart = loadTrack(cfg.RunStart)
+	tracks.RunLoop = loadTrack(cfg.RunLoop)
+
+	if tracks.Idle then
+		tracks.Idle.Priority = Enum.AnimationPriority.Core
+		tracks.Idle.Looped = true
+	end
+	if tracks.Walk then
+		tracks.Walk.Priority = Enum.AnimationPriority.Core
+		tracks.Walk.Looped = true
+	end
+	if tracks.RunLoop then
+		tracks.RunLoop.Priority = Enum.AnimationPriority.Core
+		tracks.RunLoop.Looped = true
+	end
+	if tracks.RunStart then
+		tracks.RunStart.Priority = Enum.AnimationPriority.Core
+		tracks.RunStart.Looped = false
+	end
+
+	trackCache[profileName] = tracks
+	return tracks
 end
 
 -- ============================================
--- INPUT HANDLING
+-- STATE MACHINE -- "Idle" | "Walk" | "RunStart" | "RunLoop"
+-- ============================================
+local currentState = "Idle"
+local currentTrack = nil
+local playingState = nil
+local currentProfileName = "Unarmed"
+local runStartFinishedConn = nil
+local pendingTrackConn = nil
+local trackGeneration = 0
+local walkPlaybackSpeed = 1
+local locomotionSpeed = 0
+
+local function resolveProfileName()
+	local tool = ActiveEquipment.GetTool(Figure)
+	return CharacterAnimProfiles.GetProfileForTool(tool)
+end
+
+local function cancelTransition()
+	trackGeneration += 1
+	if pendingTrackConn then
+		pendingTrackConn:Disconnect()
+		pendingTrackConn = nil
+	end
+	if runStartFinishedConn then
+		runStartFinishedConn:Disconnect()
+		runStartFinishedConn = nil
+	end
+end
+
+local function stopCurrentTrack(fadeTime)
+	cancelTransition()
+	if currentTrack then
+		currentTrack:Stop(fadeTime or 0.15)
+	end
+	currentTrack = nil
+	playingState = nil
+end
+
+-- Plays `stateName`'s track for the current profile. If `preservePhase` is
+-- true and a track was already playing, seeks the new track to the same
+-- normalized (0-1) position instead of starting from 0 -- used for
+-- armed/unarmed swaps mid-stride and mid-acceleration so equip/unequip
+-- never restarts RunStart's burst or resets Walk's foot cycle.
+local function playState(stateName, fadeTime, preservePhase)
+	cancelTransition()
+	local generation = trackGeneration
+	local profileName = currentProfileName
+	currentState = stateName
+	local tracks = getProfileTracks(currentProfileName)
+	local track = tracks and tracks[stateName]
+
+	local function startReadyTrack()
+		if generation ~= trackGeneration or Humanoid.Health <= 0 or not Figure.Parent then return end
+		if pendingTrackConn then pendingTrackConn:Disconnect(); pendingTrackConn = nil end
+		local previousTrack = currentTrack
+		local previousPhase
+		if preservePhase and playingState == stateName and previousTrack and previousTrack.Length > 0 then
+			previousPhase = previousTrack.TimePosition / previousTrack.Length
+		end
+		-- Read the latest gait speed, including movement changes while loading.
+		local playbackSpeed = stateName == "Walk" and walkPlaybackSpeed or 1
+		if track.IsPlaying then
+			-- A quick toggle can return to a track that is still fading out.
+			-- Bring its existing weight back instead of restarting from zero.
+			track:AdjustWeight(1, fadeTime or 0.15)
+			track:AdjustSpeed(playbackSpeed)
+		else
+			-- Start the loaded replacement BEFORE fading the outgoing pose.
+			track:Play(fadeTime or 0.15, 1, playbackSpeed)
+		end
+		if previousPhase then track.TimePosition = previousPhase * track.Length end
+		if previousTrack and previousTrack ~= track then previousTrack:Stop(fadeTime or 0.15) end
+		currentTrack = track
+		playingState = stateName
+		Figure:SetAttribute("LocomotionProfile", profileName)
+		Figure:SetAttribute("LocomotionState", stateName)
+		Figure:SetAttribute("LocomotionPlaybackSpeed", playbackSpeed)
+		Figure:SetAttribute("LocomotionTransitionStatus", "Ready")
+		if stateName == "RunStart" then
+			runStartFinishedConn = track.Stopped:Connect(function()
+				if generation == trackGeneration and currentTrack == track
+					and currentState == "RunStart" and isRunning and locomotionSpeed > 0.01 then
+					playState("RunLoop", 0)
+				end
+			end)
+		end
+	end
+
+	if track and track.Length > 0 then
+		startReadyTrack()
+		return
+	end
+	-- Keep looped idle/walk playing while the next clip loads. A one-shot
+	-- must hold its current pose instead of finishing and exposing the rest pose.
+	if currentTrack and not currentTrack.Looped then
+		if currentTrack.IsPlaying then
+			currentTrack:AdjustSpeed(0)
+		elseif currentTrack.Length > 0 then
+			-- RunStart can request RunLoop from its natural Stopped event.
+			-- Keep its final pose if that next clip has not loaded yet.
+			currentTrack:Play(0, 1, 0)
+			currentTrack.TimePosition = math.max(0, currentTrack.Length - 1 / 60)
+		end
+		Figure:SetAttribute("LocomotionPlaybackSpeed", 0)
+	end
+	if not track then
+		Figure:SetAttribute("LocomotionTransitionStatus", "MissingClip")
+		return
+	end
+	Figure:SetAttribute("LocomotionTransitionStatus", "Loading")
+	local startedAt, warned = os.clock(), false
+	pendingTrackConn = RunService.Heartbeat:Connect(function()
+		if generation ~= trackGeneration then return end
+		if track.Length > 0 then
+			startReadyTrack()
+		elseif not warned and os.clock() - startedAt > 5 then
+			warned = true
+			warn("[Animate2] Keeping previous pose while waiting for clip", profileName, stateName)
+		end
+	end)
+end
+
+-- Re-resolves the active profile (Unarmed/Sword/...) and, if it changed,
+-- swaps the currently-playing state's track to the new profile's
+-- equivalent track at the SAME phase -- never restarts Idle/Walk/RunLoop,
+-- and never restarts RunStart's acceleration burst. Idle now has real
+-- per-profile clips too (armed vs unarmed rest pose), so an equip/unequip
+-- while standing still swaps those the same way as any other state.
+local function refreshProfile()
+	local newProfile = resolveProfileName()
+	if newProfile == currentProfileName then
+		return
+	end
+	currentProfileName = newProfile
+	playState(currentState, 0.1, true)
+end
+
+local stopObservingEquipment = ActiveEquipment.Observe(Figure, refreshProfile)
+
+-- ============================================
+-- LOCOMOTION
+-- ============================================
+local function onRunning(speed)
+	if Humanoid.Health <= 0 then return end
+	locomotionSpeed = speed
+	if speed <= 0.01 then
+		if currentState ~= "Idle" then
+			playState("Idle", 0.2)
+		end
+		tweenFOV(defaultFOV())
+		return
+	end
+
+	local backwards = false
+	local velocity = HumanoidRootPart.AssemblyLinearVelocity
+	local look = HumanoidRootPart.CFrame.LookVector
+	if velocity.Magnitude > 0.1 then
+		if velocity.Unit:Dot(look) < -0.1 then
+			backwards = true
+		end
+	end
+
+	if backwards or IsCrouching() then
+		-- Never sprint backwards or while crouching -- same rule the old
+		-- script enforced.
+		tweenFOV(defaultFOV())
+		local dirScale = backwards and -1 or 1
+		walkPlaybackSpeed = dirScale * (speed / WALK_SPEED_SCALE) * WALK_ANIM_SPEED * BACKWARDS_WALK_SPEED
+		if currentState ~= "Walk" then
+			playState("Walk", 0.2)
+		end
+		if currentTrack and playingState == "Walk" then
+			currentTrack:AdjustSpeed(walkPlaybackSpeed)
+			Figure:SetAttribute("LocomotionPlaybackSpeed", walkPlaybackSpeed)
+		end
+		return
+	end
+
+	if isRunning then
+		tweenFOV(defaultFOV() + RUN_FOV_BOOST)
+		if currentState == "Idle" or currentState == "Walk" then
+			playState("RunStart", 0.15)
+		end
+		-- else: already RunStart (let it finish -> auto-hands-off to
+		-- RunLoop) or already RunLoop (its own authored pace is used as-is,
+		-- no per-frame speed scaling needed for a looped cycle).
+	else
+		tweenFOV(defaultFOV())
+		walkPlaybackSpeed = (speed / WALK_SPEED_SCALE) * WALK_ANIM_SPEED
+		if currentState ~= "Walk" then
+			playState("Walk", 0.2)
+		end
+		if currentTrack and playingState == "Walk" then
+			currentTrack:AdjustSpeed(walkPlaybackSpeed)
+			Figure:SetAttribute("LocomotionPlaybackSpeed", walkPlaybackSpeed)
+		end
+	end
+end
+
+local function onDied()
+	stopObservingEquipment()
+	stopCurrentTrack(0)
+end
+
+-- Jump/fall/landing/climb/sit clips were not supplied for this skeleton
+-- (see CharacterAnimProfiles.lua) -- deliberately no handlers for those
+-- Humanoid states, so the last active locomotion state/track keeps
+-- playing straight through a jump or fall instead of snapping to a
+-- wrong-rig substitute. Movement itself (Humanoid physics) is entirely
+-- unaffected either way.
+
+-- ============================================
+-- INPUT HANDLING (unchanged from before)
 -- ============================================
 local function onInputBegan(input, gameProcessed)
 	if gameProcessed then return end
 	if input.KeyCode == Enum.KeyCode.LeftShift or input.KeyCode == Enum.KeyCode.RightShift or input.KeyCode == Enum.KeyCode.ButtonL2 then
 		if not isRunning then
 			isRunning = true
-			-- Only change speed if not crouching
-			if not IsCrouching() then
-				targetWalkSpeed = originalWalkSpeed + runSpeedBoost
-			end
 			RequestSprint:FireServer(true)
+			onRunning(locomotionSpeed)
 		end
 	end
 end
@@ -465,8 +391,8 @@ local function onInputEnded(input, gameProcessed)
 	if input.KeyCode == Enum.KeyCode.LeftShift or input.KeyCode == Enum.KeyCode.RightShift or input.KeyCode == Enum.KeyCode.ButtonL2 then
 		if isRunning then
 			isRunning = false
-			targetWalkSpeed = originalWalkSpeed
 			RequestSprint:FireServer(false)
+			onRunning(locomotionSpeed)
 		end
 	end
 end
@@ -475,7 +401,7 @@ end
 EnergyChanged.OnClientEvent:Connect(function(_, isPanting)
 	if isPanting and isRunning then
 		isRunning = false
-		targetWalkSpeed = originalWalkSpeed
+		onRunning(locomotionSpeed)
 	end
 end)
 
@@ -500,22 +426,24 @@ end)
 -- ============================================
 -- HUMANOID EVENT CONNECTIONS
 -- ============================================
-Humanoid.Died:connect(onDied)
-Humanoid.Running:connect(onRunning)
-Humanoid.Jumping:connect(onJumping)
-Humanoid.Climbing:connect(onClimbing)
-Humanoid.GettingUp:connect(onGettingUp)
-Humanoid.FreeFalling:connect(onFreeFall)
-Humanoid.FallingDown:connect(onFallingDown)
-Humanoid.Seated:connect(onSeated)
-Humanoid.PlatformStanding:connect(onPlatformStanding)
-Humanoid.Swimming:connect(onSwimming)
+Humanoid.Died:Connect(onDied)
+script.Destroying:Connect(function()
+	stopObservingEquipment()
+	stopCurrentTrack(0)
+end)
+Humanoid.Running:Connect(onRunning)
 
-playAnimation("idle", idleWalkTransitionTime, Humanoid)
-setAnimationSpeed(IDLE_ANIM_SPEED)
-pose = "Standing"
+currentProfileName = resolveProfileName()
 
-while Figure.Parent ~= nil do
-	local _, time = wait(0.1)
-	move(time)
-end
+-- Humanoid.Running only fires on a movement-state TRANSITION -- a
+-- character that spawns already standing still never gets an initial
+-- Running(0) call, so without this the mesh would sit in its raw bind
+-- pose until the player's first step. Start Idle explicitly instead of
+-- waiting on an event that may never come.
+playState("Idle", 0)
+
+-- Warm both profiles while idle is playing, reducing first-equip loading.
+task.defer(function()
+	if Humanoid.Health <= 0 or not Figure.Parent then return end
+	for profileName in pairs(CharacterAnimProfiles.Profiles) do getProfileTracks(profileName) end
+end)

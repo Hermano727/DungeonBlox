@@ -22,7 +22,8 @@
 --       Food items without a ToolPrefabName fall back to "DefaultFoodTool" (generated at runtime).
 --   MountSpeed     : optional. Saddle tools: cloned Horse model Humanoid.WalkSpeed (tier scaling).
 --   Food fields (Kind="Food"):
---     HungerAmount : hunger restored on eat (HungerData.addHunger).
+--     HungerAmount : hunger pips restored on eat (HungerData.eat). Pip scale is 0-5
+--                    (Minecraft-style rework, 2026-09-07) -- NOT the old 0-100 scale.
 --     TimeToEat    : seconds the player must hold right-click while equipped before the eat resolves. Fish use 0 for instant eat.
 --     Buffs        : optional array of { type=string, amount=number, duration=number } applied via BuffService on eat.
 --                    Buff types currently consumed: "WalkSpeedPct" (EnergyServer), "LuckPct" (LootService).
@@ -94,7 +95,7 @@ local Items = {
 	T4MountSaddle = { Stackable = false, MaxStack = 1, Kind = "Material", Tier = 4, Rarity = "Epic", DisplayName = "T4 Mount Saddle", HotbarEquippable = true, ProtectedOnDeath = false, ToolPrefabName = "DungeonMountSaddleTool", MountSpeed = 50 },
 
 	-- Key fragments + forged keys (Dungeoneer: 40 fragments -> 1 key per tier)
-	T1KeyFragment = { Stackable = true, MaxStack = 100, Kind = "Material", Tier = 1, Rarity = "Uncommon", DisplayName = "T1 Key Fragment", HotbarEquippable = false, ProtectedOnDeath = false },
+	T1KeyFragment = { Icon = "rbxassetid://96030572412553", Stackable = true, MaxStack = 100, Kind = "Material", Tier = 1, Rarity = "Uncommon", DisplayName = "T1 Key Fragment", HotbarEquippable = false, ProtectedOnDeath = false },
 	T2KeyFragment = { Stackable = true, MaxStack = 100, Kind = "Material", Tier = 2, Rarity = "Uncommon", DisplayName = "T2 Key Fragment", HotbarEquippable = false, ProtectedOnDeath = false },
 	T3KeyFragment = { Stackable = true, MaxStack = 100, Kind = "Material", Tier = 3, Rarity = "Rare", DisplayName = "T3 Key Fragment", HotbarEquippable = false, ProtectedOnDeath = false },
 	T4KeyFragment = { Stackable = true, MaxStack = 100, Kind = "Material", Tier = 4, Rarity = "Epic",      DisplayName = "T4 Key Fragment", HotbarEquippable = false, ProtectedOnDeath = false },
@@ -125,18 +126,18 @@ local Items = {
 
 	-- Food (Kind="Food"). HotbarEquippable; right-click hold while equipped to eat (TimeToEat seconds).
 	-- Fish are a sub-class (SubKind="Fish") with TimeToEat=0 for instant eat.
-	Fish        = { Stackable = true, MaxStack = 100, Kind = "Food", SubKind = "Fish", Tier = 1, Rarity = "Common",   DisplayName = "Fish",        HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 25, TimeToEat = 0,
+	Fish        = { Stackable = true, MaxStack = 100, Kind = "Food", SubKind = "Fish", Tier = 1, Rarity = "Common",   DisplayName = "Fish",        HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 1, TimeToEat = 0,
 	                Buffs = { { type = "WalkSpeedPct", amount = 10, duration = 15 } } },
-	SwiftFish   = { Stackable = true, MaxStack = 100, Kind = "Food", SubKind = "Fish", Tier = 2, Rarity = "Uncommon", DisplayName = "Swift Fish",  HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 30, TimeToEat = 0,
+	SwiftFish   = { Stackable = true, MaxStack = 100, Kind = "Food", SubKind = "Fish", Tier = 2, Rarity = "Uncommon", DisplayName = "Swift Fish",  HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 2, TimeToEat = 0,
 	                Buffs = { { type = "WalkSpeedPct", amount = 25, duration = 30 } } },
-	LuckyFish   = { Stackable = true, MaxStack = 100, Kind = "Food", SubKind = "Fish", Tier = 2, Rarity = "Uncommon", DisplayName = "Lucky Fish",  HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 25, TimeToEat = 0,
+	LuckyFish   = { Stackable = true, MaxStack = 100, Kind = "Food", SubKind = "Fish", Tier = 2, Rarity = "Uncommon", DisplayName = "Lucky Fish",  HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 1, TimeToEat = 0,
 	                Buffs = { { type = "LuckPct", amount = 15, duration = 30 } } },
-	GoldenFish  = { Stackable = true, MaxStack = 100, Kind = "Food", SubKind = "Fish", Tier = 3, Rarity = "Rare",     DisplayName = "Golden Fish", HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 35, TimeToEat = 0,
+	GoldenFish  = { Stackable = true, MaxStack = 100, Kind = "Food", SubKind = "Fish", Tier = 3, Rarity = "Rare",     DisplayName = "Golden Fish", HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 2, TimeToEat = 0,
 	                Buffs = { { type = "WalkSpeedPct", amount = 20, duration = 30 }, { type = "LuckPct", amount = 15, duration = 30 } } },
 
 	-- Regular (non-fish) food: TimeToEat > 0, no buffs by default.
-	Bread       = { Stackable = true, MaxStack = 100, Kind = "Food", Tier = 1, Rarity = "Common",   DisplayName = "Bread",       HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 40, TimeToEat = 2.0 },
-	CookedMeat  = { Stackable = true, MaxStack = 100, Kind = "Food", Tier = 1, Rarity = "Uncommon", DisplayName = "Cooked Meat", HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 60, TimeToEat = 3.0 },
+	Bread       = { Stackable = true, MaxStack = 100, Kind = "Food", Tier = 1, Rarity = "Common",   DisplayName = "Bread",       HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 2, TimeToEat = 2.0 },
+	CookedMeat  = { Stackable = true, MaxStack = 100, Kind = "Food", Tier = 1, Rarity = "Uncommon", DisplayName = "Cooked Meat", HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 3, TimeToEat = 3.0 },
 	WoodenPickaxe = { Icon = ItemConfig.TOOL_ICONS.Pickaxe, Stackable = false, MaxStack = 1, Kind = "Material", Tier = 1, Rarity = "Common", DisplayName = "Wooden Pickaxe", HotbarEquippable = true, ProtectedOnDeath = true, ToolPrefabName = "WoodenPickaxe" },
 	WoodenSpear   = { Icon = ItemConfig.TOOL_ICONS.FishingRod, Stackable = false, MaxStack = 1, Kind = "Material", Tier = 1, Rarity = "Common", DisplayName = "Wooden Fishing Rod", HotbarEquippable = true, ProtectedOnDeath = true, ToolPrefabName = "WoodenSpear" },
 
@@ -153,11 +154,11 @@ local Items = {
 	-- Icons pulled from ItemConfig.GENERATED_ITEM_ICONS so training gear always matches the
 	-- same wooden/leather assets mob-dropped T1 gear uses (ItemDefinitions.GetIconForItem) --
 	-- one shared table, no drift.
-	TrainingHelm   = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Helm,   Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Helm",   Tier = 1, Rarity = "Common", Armor = 0, HotbarEquippable = false, ProtectedOnDeath = false, DisplayName = "Training Helmet" },
-	TrainingChest  = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Chest,  Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Chest",  Tier = 1, Rarity = "Common", Armor = 0, HotbarEquippable = false, ProtectedOnDeath = false, DisplayName = "Training Chestplate" },
-	TrainingLegs   = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Legs,   Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Legs",   Tier = 1, Rarity = "Common", Armor = 0, HotbarEquippable = false, ProtectedOnDeath = false, DisplayName = "Training Leggings" },
-	TrainingBoots  = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Boots,  Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Boots",  Tier = 1, Rarity = "Common", Armor = 0, HotbarEquippable = false, ProtectedOnDeath = false, DisplayName = "Training Boots" },
-	TrainingShield = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Shield, Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Shield", Tier = 1, Rarity = "Common", Armor = 0, HotbarEquippable = false, ProtectedOnDeath = false, DisplayName = "Training Shield" },
+	TrainingHelm   = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Helm,   Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Helm",   Tier = 1, Rarity = "Common", Armor = 3, HotbarEquippable = false, ProtectedOnDeath = false, DisplayName = "Training Helmet" },
+	TrainingChest  = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Chest,  Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Chest",  Tier = 1, Rarity = "Common", Armor = 6, HotbarEquippable = false, ProtectedOnDeath = false, DisplayName = "Training Chestplate" },
+	TrainingLegs   = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Legs,   Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Legs",   Tier = 1, Rarity = "Common", Armor = 5, HotbarEquippable = false, ProtectedOnDeath = false, DisplayName = "Training Leggings" },
+	TrainingBoots  = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Boots,  Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Boots",  Tier = 1, Rarity = "Common", Armor = 3, HotbarEquippable = false, ProtectedOnDeath = false, DisplayName = "Training Boots" },
+	TrainingShield = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Shield, Untradeable = true, Stackable = false, MaxStack = 1, Kind = "Armor", Slot = "Shield", Tier = 1, Rarity = "Common", Armor = 4, HotbarEquippable = false, ProtectedOnDeath = false, DisplayName = "Training Shield" },
 
 	-- Starter profession tools (reuse T1 wooden tool prefabs). Slot here is what
 	-- src/shared/Items/MaterialItem.lua reads to stamp equipSlot onto the owned item --
@@ -439,7 +440,7 @@ end
 -- always carry their own `rarity` (ItemGenerator/ItemClass stamp it onto the granted
 -- template), but a catalog-granted item (an itemId-only owned record -- e.g. a dev-granted
 -- AdminSword) may not have `rarity` copied onto the owned record depending on how
--- DungeonProfileService's grant-by-itemId path built it. Fall back to the catalog's own
+-- ProfileService's grant-by-itemId path built it. Fall back to the catalog's own
 -- Rarity field so the UI never silently renders a Legendary catalog item with a plain/white
 -- border just because `item.rarity` itself came back nil.
 function ItemDefinitions.GetRarityForItem(item)

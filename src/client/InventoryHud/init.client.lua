@@ -25,6 +25,7 @@ local MenuMouse = require(ReplicatedStorage:WaitForChild("CursorUtils"))
 local ReactRoblox = require(ReplicatedStorage.Packages.ReactRoblox)
 local React = require(ReplicatedStorage.Packages.React)
 local Inventory = require(script:WaitForChild("Inventory"))
+local ProfileMenusState = require(ReplicatedStorage:WaitForChild("ProfileMenusState"))
 
 -- The three FigBloxUI-imported copies stay as design references but must
 -- never render themselves -- this new ScreenGui is what players see.
@@ -50,7 +51,7 @@ for _, guiName in ipairs({ "Player Preview", "Inv Slots", "quick nav" }) do
 end
 
 local gui = Instance.new("ScreenGui")
-gui.Name = "InventoryReact"
+gui.Name = "ProfileMenusReact"
 gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
 gui.DisplayOrder = 120 -- same tier as the old SkillsPopupUI it replaces
@@ -99,6 +100,7 @@ local function setOpen(v: boolean)
 		render()
 	end
 	gui.Enabled = v
+	ProfileMenusState.SetOpen(v)
 	TweenService:Create(blur :: BlurEffect, BLUR_TWEEN, { Size = v and BLUR_SIZE or 0 }):Play()
 	if v then
 		MenuMouse.acquire()

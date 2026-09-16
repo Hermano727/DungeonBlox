@@ -180,7 +180,14 @@ function main:GetCached(SoundGroup:SoundGroup, Type)
 
 		local function constructsound(id,name,set)
 			if not SoundGroup:FindFirstChild(set) then
-				newdirectory(SoundGroup,set)
+				-- FIX: this call was missing the instancetype argument, so it
+				-- silently fell back to `Instance.new("Folder")` instead of a
+				-- SoundGroup. Nested SoundGroup volume compounding only walks
+				-- up through SoundGroup ancestors -- a plain Folder here (e.g.
+				-- "Grass") breaks that chain, so everything below it (every
+				-- actual footstep Sound) became deaf to Main.Character's
+				-- Volume and, by extension, the Settings menu's SFX slider.
+				newdirectory(SoundGroup,set,"SoundGroup")
 			end
 
 			local parent = newdirectory(SoundGroup[set],name,"SoundGroup")

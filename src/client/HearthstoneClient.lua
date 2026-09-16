@@ -10,6 +10,7 @@
 local Players           = game:GetService("Players")
 local RunService        = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
 
 local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -18,7 +19,7 @@ local DungeonMenuNet    = require(script.Parent:WaitForChild("DungeonMenuNet"))
 local HearthstoneConfig = require(ReplicatedStorage:WaitForChild("HearthstoneConfig"))
 local MenuMouse         = require(ReplicatedStorage:WaitForChild("CursorUtils"))
 
--- RemoteFunctions created by DungeonBootstrap at server start.
+-- RemoteFunctions created by ProfileBootstrap at server start.
 local rfTele     = ReplicatedStorage:WaitForChild("HearthstoneTeleport",  30)
 local rfSwap     = ReplicatedStorage:WaitForChild("HearthstoneSwap",      30)
 local rfSync     = ReplicatedStorage:WaitForChild("HearthstoneSync",      30)
@@ -108,7 +109,7 @@ local pickerTitle = Instance.new("TextLabel", pickerPanel)
 pickerTitle.BackgroundTransparency = 1
 pickerTitle.Size                   = UDim2.new(1, -80, 0, 32)
 pickerTitle.Position               = UDim2.new(0, 12, 0, 6)
-pickerTitle.Font                   = Enum.Font.GothamBold
+pickerTitle.FontFace                   = UIFonts.BodyBold
 pickerTitle.TextSize               = 15
 pickerTitle.TextColor3             = Color3.new(1, 1, 1)
 pickerTitle.TextXAlignment         = Enum.TextXAlignment.Left
@@ -121,7 +122,7 @@ pickerCancelBtn.AnchorPoint      = Vector2.new(1, 0)
 pickerCancelBtn.Position         = UDim2.new(1, -10, 0, 8)
 pickerCancelBtn.BackgroundColor3 = Color3.fromRGB(60, 40, 40)
 pickerCancelBtn.BorderSizePixel  = 0
-pickerCancelBtn.Font             = Enum.Font.GothamMedium
+pickerCancelBtn.FontFace             = UIFonts.BodyMedium
 pickerCancelBtn.TextSize         = 11
 pickerCancelBtn.TextColor3       = Color3.fromRGB(200, 180, 180)
 pickerCancelBtn.Text             = "Cancel"
@@ -208,7 +209,7 @@ local function rebuildPickerGrid(unlockedIds)
         lbl.BackgroundTransparency = 1
         lbl.Size           = UDim2.new(1, -6, 0.65, 0)
         lbl.Position       = UDim2.new(0, 3, 0.12, 0)
-        lbl.Font           = Enum.Font.GothamMedium
+        lbl.FontFace           = UIFonts.BodyMedium
         lbl.TextSize       = 11
         lbl.TextWrapped    = true
         lbl.TextColor3     = isActive
@@ -223,7 +224,7 @@ local function rebuildPickerGrid(unlockedIds)
             al.Size          = UDim2.new(1, 0, 0, 13)
             al.AnchorPoint   = Vector2.new(0.5, 1)
             al.Position      = UDim2.new(0.5, 0, 1, -4)
-            al.Font          = Enum.Font.GothamBold
+            al.FontFace          = UIFonts.BodyBold
             al.TextSize      = 8
             al.TextColor3    = Color3.fromRGB(200, 158, 58)
             al.Text          = "ACTIVE"
@@ -280,7 +281,7 @@ local shopTitle = Instance.new("TextLabel", shopPanel)
 shopTitle.BackgroundTransparency = 1
 shopTitle.Size           = UDim2.new(1, -90, 0, 32)
 shopTitle.Position       = UDim2.new(0, 12, 0, 6)
-shopTitle.Font           = Enum.Font.GothamBold
+shopTitle.FontFace           = UIFonts.BodyBold
 shopTitle.TextSize       = 15
 shopTitle.TextColor3     = Color3.new(1, 1, 1)
 shopTitle.TextXAlignment = Enum.TextXAlignment.Left
@@ -292,7 +293,7 @@ shopCoinLabel.Name               = "CoinBalance"
 shopCoinLabel.BackgroundTransparency = 1
 shopCoinLabel.Size               = UDim2.new(1, -24, 0, 16)
 shopCoinLabel.Position           = UDim2.new(0, 12, 0, 38)
-shopCoinLabel.Font               = Enum.Font.Gotham
+shopCoinLabel.FontFace               = UIFonts.Body
 shopCoinLabel.TextSize           = 11
 shopCoinLabel.TextColor3         = Color3.fromRGB(200, 178, 98)
 shopCoinLabel.TextXAlignment     = Enum.TextXAlignment.Left
@@ -305,7 +306,7 @@ shopCloseBtn.AnchorPoint      = Vector2.new(1, 0)
 shopCloseBtn.Position         = UDim2.new(1, -10, 0, 8)
 shopCloseBtn.BackgroundColor3 = Color3.fromRGB(60, 40, 40)
 shopCloseBtn.BorderSizePixel  = 0
-shopCloseBtn.Font             = Enum.Font.GothamMedium
+shopCloseBtn.FontFace             = UIFonts.BodyMedium
 shopCloseBtn.TextSize         = 11
 shopCloseBtn.TextColor3       = Color3.fromRGB(200, 180, 180)
 shopCloseBtn.Text             = "Close"
@@ -317,7 +318,7 @@ shopStatusLabel.Name               = "Status"
 shopStatusLabel.BackgroundTransparency = 1
 shopStatusLabel.Size               = UDim2.new(1, -24, 0, 14)
 shopStatusLabel.Position           = UDim2.new(0, 12, 0, 56)
-shopStatusLabel.Font               = Enum.Font.Gotham
+shopStatusLabel.FontFace               = UIFonts.Body
 shopStatusLabel.TextSize           = 10
 shopStatusLabel.TextColor3         = Color3.fromRGB(140, 218, 140)
 shopStatusLabel.TextXAlignment     = Enum.TextXAlignment.Left
@@ -388,7 +389,7 @@ local function rebuildShop(unlockedIds, coinBalance)
             nameLbl.BackgroundTransparency = 1
             nameLbl.Size           = UDim2.new(1, -110, 1, 0)
             nameLbl.Position       = UDim2.new(0, 10, 0, 0)
-            nameLbl.Font           = Enum.Font.GothamMedium
+            nameLbl.FontFace           = UIFonts.BodyMedium
             nameLbl.TextSize       = 13
             nameLbl.TextColor3     = Color3.fromRGB(220, 208, 192)
             nameLbl.TextXAlignment = Enum.TextXAlignment.Left
@@ -400,7 +401,7 @@ local function rebuildShop(unlockedIds, coinBalance)
             costLbl.Size         = UDim2.fromOffset(52, 48)
             costLbl.AnchorPoint  = Vector2.new(1, 0.5)
             costLbl.Position     = UDim2.new(1, -72, 0.5, 0)
-            costLbl.Font         = Enum.Font.GothamMedium
+            costLbl.FontFace         = UIFonts.BodyMedium
             costLbl.TextSize     = 12
             costLbl.TextColor3   = Color3.fromRGB(218, 188, 98)
             costLbl.Text         = loc.cost == 0 and "Free" or (tostring(loc.cost) .. "c")
@@ -412,7 +413,7 @@ local function rebuildShop(unlockedIds, coinBalance)
             buyBtn.Position         = UDim2.new(1, -6, 0.5, 0)
             buyBtn.BackgroundColor3 = Color3.fromRGB(48, 98, 58)
             buyBtn.BorderSizePixel  = 0
-            buyBtn.Font             = Enum.Font.GothamBold
+            buyBtn.FontFace             = UIFonts.BodyBold
             buyBtn.TextSize         = 11
             buyBtn.TextColor3       = Color3.new(1, 1, 1)
             buyBtn.Text             = "Buy"
@@ -449,7 +450,7 @@ local function rebuildShop(unlockedIds, coinBalance)
         local emptyLbl = Instance.new("TextLabel", shopScroll)
         emptyLbl.BackgroundTransparency = 1
         emptyLbl.Size          = UDim2.new(1, 0, 0, 40)
-        emptyLbl.Font          = Enum.Font.Gotham
+        emptyLbl.FontFace          = UIFonts.Body
         emptyLbl.TextSize      = 12
         emptyLbl.TextColor3    = Color3.fromRGB(110, 92, 92)
         emptyLbl.Text          = "All locations unlocked."

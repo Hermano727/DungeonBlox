@@ -45,6 +45,18 @@ sourcemap.json
 .claude/mcp_*.json
 .claude/enchant_*
 
+# Local agent state and generated Studio mirrors
+/.codex/
+/studio-mirror/
+
+# Timestamped safety copies created beside source files by local tools
+*.bak_*
+
+# Local playtest recordings and visual verification artifacts
+/vids/
+/_verify_*.png
+/_eyefix_*.json
+
 # OS noise
 Thumbs.db
 desktop.ini

@@ -53,7 +53,7 @@ local function bootstrap(model, npcId)
 	local head = model:FindFirstChild("Head")
 	if head and head:IsA("BasePart") then
 		local okGui, errGui = pcall(function()
-			NPCBootstrapKit.EnsureHeadGui(head, NPC_NAME, HEAD_COLORS)
+			NPCBootstrapKit.EnsureHeadGui(head, NPC_NAME, HEAD_COLORS, "AnimalTrainer")
 		end)
 		if not okGui then
 			warn("[AnimalTrainerBootstrap] Head.gui setup failed:", errGui)

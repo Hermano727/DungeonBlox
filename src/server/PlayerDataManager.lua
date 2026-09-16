@@ -5,7 +5,7 @@
 -- SECOND PROFILE SYSTEM: this is the persistence layer for the older of
 -- DungeonBlox's two parallel profile systems (see the header comment at the
 -- top of shared/DataSchema.lua for the full picture and a known live bug).
--- The short version: DungeonProfileService owns currencies/equipment/the
+-- The short version: ProfileService owns currencies/equipment/the
 -- visible inventory UI now, but THIS module is still the only source of
 -- truth for a player's HP/MaxHP/Armor and RPG stats, and is still required
 -- (live, not dead) by DamageService.lua, InventoryService.lua, and

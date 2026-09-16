@@ -8,7 +8,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 local Workspace = game:GetService("Workspace")
 
-local DungeonProfile = require(ServerScriptService:WaitForChild("DungeonProfileService"))
+local DungeonProfile = require(ServerScriptService:WaitForChild("ProfileService"))
 
 local ALTAR_MAX_DISTANCE = 18
 

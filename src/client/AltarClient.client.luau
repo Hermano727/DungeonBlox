@@ -9,7 +9,7 @@ local ProximityPromptService = game:GetService("ProximityPromptService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
 
-local Types = require(ReplicatedStorage:WaitForChild("DungeonProfileTypes"))
+local Types = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
 local MenuMouse = require(ReplicatedStorage:WaitForChild("CursorUtils"))
 local DungeonMenuNet = require(script.Parent:WaitForChild("DungeonMenuNet"))
 

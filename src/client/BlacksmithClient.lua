@@ -6,6 +6,7 @@
 
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
 
 local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -70,7 +71,7 @@ local titleLbl = Instance.new("TextLabel", panel)
 titleLbl.Size = UDim2.new(1, -24, 0, 36)
 titleLbl.Position = UDim2.new(0, 12, 0, 8)
 titleLbl.BackgroundTransparency = 1
-titleLbl.Font = Enum.Font.GothamBold
+titleLbl.FontFace = UIFonts.BodyBold
 titleLbl.TextSize = 20
 titleLbl.TextColor3 = Color3.new(1,1,1)
 titleLbl.TextXAlignment = Enum.TextXAlignment.Left
@@ -81,7 +82,7 @@ local coinsLbl = Instance.new("TextLabel", panel)
 coinsLbl.Size = UDim2.new(1, -24, 0, 18)
 coinsLbl.Position = UDim2.new(0, 12, 0, 46)
 coinsLbl.BackgroundTransparency = 1
-coinsLbl.Font = Enum.Font.GothamMedium
+coinsLbl.FontFace = UIFonts.BodyMedium
 coinsLbl.TextSize = 13
 coinsLbl.TextColor3 = Color3.fromRGB(255, 210, 80)
 coinsLbl.TextXAlignment = Enum.TextXAlignment.Left
@@ -114,7 +115,7 @@ repairAllBtn.Position = UDim2.new(0.5, 0, 1, -10)
 repairAllBtn.Size = UDim2.fromOffset(300, 38)
 repairAllBtn.BackgroundColor3 = Color3.fromRGB(70, 50, 20)
 repairAllBtn.BorderSizePixel = 0
-repairAllBtn.Font = Enum.Font.GothamBold
+repairAllBtn.FontFace = UIFonts.BodyBold
 repairAllBtn.TextSize = 14
 repairAllBtn.TextColor3 = Color3.fromRGB(255, 220, 100)
 repairAllBtn.Text = "Repair All"
@@ -126,7 +127,7 @@ statusLbl.AnchorPoint = Vector2.new(0, 1)
 statusLbl.Position = UDim2.new(0, 12, 1, -54)
 statusLbl.Size = UDim2.new(1, -24, 0, 18)
 statusLbl.BackgroundTransparency = 1
-statusLbl.Font = Enum.Font.Gotham
+statusLbl.FontFace = UIFonts.Body
 statusLbl.TextSize = 12
 statusLbl.TextColor3 = Color3.fromRGB(200, 180, 160)
 statusLbl.TextXAlignment = Enum.TextXAlignment.Center
@@ -215,7 +216,7 @@ local function buildList()
 		nameLbl.Position = UDim2.new(0, 8, 0, 4)
 		nameLbl.Size = UDim2.new(0.5, 0, 0, 18)
 		nameLbl.BackgroundTransparency = 1
-		nameLbl.Font = Enum.Font.GothamMedium
+		nameLbl.FontFace = UIFonts.BodyMedium
 		nameLbl.TextSize = 13
 		nameLbl.TextColor3 = rarityColor(item.rarity)
 		nameLbl.TextXAlignment = Enum.TextXAlignment.Left
@@ -234,7 +235,7 @@ local function buildList()
 		durLbl.Position = UDim2.new(0, 8, 0, 24)
 		durLbl.Size = UDim2.new(0.5, 0, 0, 16)
 		durLbl.BackgroundTransparency = 1
-		durLbl.Font = Enum.Font.Gotham
+		durLbl.FontFace = UIFonts.Body
 		durLbl.TextSize = 11
 		durLbl.TextColor3 = durColor
 		durLbl.TextXAlignment = Enum.TextXAlignment.Left
@@ -245,7 +246,7 @@ local function buildList()
 		costLbl.Position = UDim2.new(0.5, 4, 0, 4)
 		costLbl.Size = UDim2.new(0, 100, 0, 18)
 		costLbl.BackgroundTransparency = 1
-		costLbl.Font = Enum.Font.GothamMedium
+		costLbl.FontFace = UIFonts.BodyMedium
 		costLbl.TextSize = 13
 		costLbl.TextColor3 = Color3.fromRGB(255, 210, 80)
 		costLbl.TextXAlignment = Enum.TextXAlignment.Left
@@ -258,7 +259,7 @@ local function buildList()
 		repairBtn.Size = UDim2.fromOffset(72, 32)
 		repairBtn.BackgroundColor3 = cost <= coins and Color3.fromRGB(40,65,30) or Color3.fromRGB(50,30,30)
 		repairBtn.BorderSizePixel = 0
-		repairBtn.Font = Enum.Font.GothamBold
+		repairBtn.FontFace = UIFonts.BodyBold
 		repairBtn.TextSize = 12
 		repairBtn.TextColor3 = cost <= coins and Color3.fromRGB(140,220,100) or Color3.fromRGB(180,100,100)
 		repairBtn.Text = "Repair"

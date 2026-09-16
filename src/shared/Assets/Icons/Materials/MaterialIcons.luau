@@ -7,9 +7,9 @@
 ]]
 
 return {
-    T1_SCRAP = "", -- rbxassetid://00000000000
-    T2_SCRAP = "", -- rbxassetid://00000000000
-    T3_SCRAP = "", -- rbxassetid://00000000000
-    T4_SCRAP = "", -- rbxassetid://00000000000
-    T5_SCRAP = "", -- rbxassetid://00000000000
+    T1_SCRAP = "rbxassetid://140184052977855",
+    T2_SCRAP = "rbxassetid://99748696862001",
+    T3_SCRAP = "rbxassetid://76333609407100",
+    T4_SCRAP = "rbxassetid://126747341526231",
+    T5_SCRAP = "rbxassetid://94367706624740",
 }

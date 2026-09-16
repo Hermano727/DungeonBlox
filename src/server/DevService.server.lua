@@ -45,10 +45,14 @@ local evDelete   = makeEvent("DevDeleteSpawner")
 local rfList     = makeFunc("DevListSpawners")
 local rfPlaceZone = makeFunc("DevPlaceZone")
 local rfSetZoneMusic = makeFunc("DevSetZoneMusic")
+local rfSpawnItem = makeFunc("DevSpawnItem")
 
 local MobDevSpawnStore = require(ServerScriptService:WaitForChild("MobDevSpawnStore"))
 local NpcDevSpawnStore = require(ServerScriptService:WaitForChild("NpcDevSpawnStore"))
 local ZoneService      = require(ServerScriptService:WaitForChild("ZoneService"))
+local ItemGenerator         = require(ServerScriptService:WaitForChild("ItemGenerator"))
+local ProfileService = require(ServerScriptService:WaitForChild("ProfileService"))
+local ItemConfig             = require(ReplicatedStorage:WaitForChild("ItemConfig"))
 
 ---------------------------------------------------------------------------
 -- Spawner folders (created by SpawnerService; wait for them)
@@ -355,6 +359,25 @@ evPlace.OnServerEvent:Connect(function(player, data)
                 .. (persist and " (DataStore)" or " (session only — enable Studio API access or MobDevSpawnsPersistInLive)")
         )
 
+    elseif data.SpawnerType == "NamedElite" then
+        -- F8 "Force Spawn Elite": no persisted marker/spawner camp, just an
+        -- instant one-off elite spawn through the exact same code path a
+        -- real elite pity/chance trigger uses (rise-from-ground intro,
+        -- PlayerActiveEliteMob HP-bar tracking) -- see
+        -- MobManager.ForceSpawnNamedElite.
+        local mobId = data.MobId
+        if type(mobId) ~= "string" or mobId == "" then return end
+        if not waitForMobSystem(12) or not _G.MobSystem.ForceSpawnNamedElite then
+            warn("[DevService] ForceSpawnNamedElite not ready — MobManager not loaded")
+            return
+        end
+        local mob = _G.MobSystem.ForceSpawnNamedElite(player, mobId)
+        if mob then
+            print("[DevService] " .. player.Name .. " force-spawned named elite: " .. mobId)
+        else
+            warn("[DevService] Force-spawn named elite failed for MobID: " .. mobId)
+        end
+
     elseif data.SpawnerType == "NPC" then
         local npcType = data.NpcType
         local npcName = data.NpcName
@@ -558,6 +581,126 @@ rfSetZoneMusic.OnServerInvoke = function(player, data)
 	print(string.format("[DevService] %s set zone music for %s -> %s",
 		player.Name, zOrErr.name, musicId == "" and "(none)" or musicId))
 	return { ok = true, zone = zOrErr }
+end
+
+-------------------------------------------------------------------------
+-- DevSpawnItem: procedurally rolls an item via ItemGenerator (the same RNG
+-- engine mob drops use) and grants it to the requesting dev. Nothing here
+-- is hardcoded to a specific item -- tier/rarity/weaponType/armorSlot pools
+-- all come from ItemConfig, so this stays correct as that config evolves.
+-------------------------------------------------------------------------
+
+-- Dev-tool-only literal boundary (per spec): level 1-21 maps to T1; nothing
+-- above that is wired up yet. Intentionally NOT derived from
+-- ItemConfig.TIER_MEDIANS (10/30/50/70/90) -- that's a different concept
+-- (the scaling midpoint within a tier), not the level cutoff between tiers.
+local ITEM_SPAWN_TIER1_MAX_LEVEL = 21
+
+local RARITY_LOOKUP = {}
+for _, r in ipairs(ItemConfig.RARITY_ORDER) do
+    RARITY_LOOKUP[r] = true
+end
+
+rfSpawnItem.OnServerInvoke = function(player, data)
+    if not isDev(player) then
+        return { ok = false, error = "unauthorized" }
+    end
+    if type(data) ~= "table" then
+        return { ok = false, error = "bad_data" }
+    end
+
+    local level = math.floor(tonumber(data.Level) or 0)
+    if level < 1 then
+        return { ok = false, error = "bad_level" }
+    end
+    if level > ITEM_SPAWN_TIER1_MAX_LEVEL then
+        return { ok = false, error = "T2 and above not implemented" }
+    end
+
+    -- Mythic: hand-authored, never procedurally rolled. Bypasses RARITY_LOOKUP
+    -- (Mythic is deliberately absent from ItemConfig.RARITY_ORDER so it cannot
+    -- drop from ordinary kills). Routed through MythicItemBuilder so the dev
+    -- tool grants the REAL item with its fixed substats, not a random roll.
+    if type(data.Mythic) == "string" and data.Mythic ~= "" then
+        local MythicItemBuilder = require(script.Parent:WaitForChild("MythicItemBuilder"))
+        local mOk, mItem = pcall(MythicItemBuilder.Build, data.Mythic)
+        if not mOk or not mItem then
+            return { ok = false, error = "bad_mythic_key" }
+        end
+        local mCount = math.clamp(math.floor(tonumber(data.Count) or 1), 1, 20)
+        local gOk, gErr = ProfileService.GrantItem(player, mItem:toGrantTemplate(), mCount)
+        if not gOk then
+            return { ok = false, error = tostring(gErr) }
+        end
+        print(string.format("[DevService] %s spawned MYTHIC: %s x%d", player.Name, tostring(mItem.name), mCount))
+        return {
+            ok = true,
+            item = { name = mItem.name, rarity = mItem.rarity, tier = mItem.tier, level = mItem.level },
+        }
+    end
+
+    local rarity = nil
+    if type(data.Rarity) == "string" and data.Rarity ~= "" then
+        if not RARITY_LOOKUP[data.Rarity] then
+            return { ok = false, error = "bad_rarity" }
+        end
+        rarity = data.Rarity
+    end
+
+    local options = {
+        tier   = 1,
+        level  = level,
+        rarity = rarity,
+    }
+    if data.SubstatCount ~= nil then
+        local sc = tonumber(data.SubstatCount)
+        if sc ~= nil then
+            options.substatCount = sc
+        end
+    end
+    -- Dev-tool-only: force one specific substat id to an exact value (e.g.
+    -- critical=100 for a guaranteed-crit test weapon/armor). ItemGenerator
+    -- validates the id against the real effect tables, so a stale/bad id from
+    -- the client just gets silently ignored rather than trusted blindly.
+    if type(data.ForceSubstatId) == "string" and data.ForceSubstatId ~= "" then
+        local fv = tonumber(data.ForceSubstatValue)
+        if fv ~= nil then
+            options.forceSubstat = { id = data.ForceSubstatId, value = fv }
+        end
+    end
+
+    local kind = data.Kind
+    if kind == "Weapon" then
+        if type(data.WeaponType) == "string" and data.WeaponType ~= "" then
+            options.weaponType = data.WeaponType
+        end
+    elseif kind == "Armor" then
+        if type(data.ArmorSlot) == "string" and data.ArmorSlot ~= "" then
+            options.armorSlot = data.ArmorSlot
+        end
+    end
+    -- kind == "Random" (or anything else): leave both nil, ItemGenerator.generate picks.
+
+    local genOk, itemOrErr = pcall(ItemGenerator.generate, options)
+    if not genOk then
+        warn("[DevService] ItemGenerator.generate failed: " .. tostring(itemOrErr))
+        return { ok = false, error = "generate_failed" }
+    end
+    local item = itemOrErr
+
+    local count = math.clamp(math.floor(tonumber(data.Count) or 1), 1, 20)
+    local grantOk, grantErr = ProfileService.GrantItem(player, item:toGrantTemplate(), count)
+    if not grantOk then
+        return { ok = false, error = tostring(grantErr) }
+    end
+
+    print(string.format("[DevService] %s spawned item: %s (T%d %s L%d) x%d",
+        player.Name, item.name, item.tier, item.rarity, item.level, count))
+
+    return {
+        ok = true,
+        item = { name = item.name, rarity = item.rarity, tier = item.tier, level = item.level },
+    }
 end
 
 task.defer(function()

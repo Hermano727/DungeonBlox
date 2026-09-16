@@ -1,6 +1,6 @@
 --[[
 	BlacksmithBootstrap
-	Wires any Model named "Blacksmith" in Workspace into the NPC system:
+	Wires the T1_Blacksmith_R15 Model in Workspace into the NPC system:
 	attributes, CollectionService "NPC" tag, ProximityPrompt, Head.gui (name label).
 	Mirrors InnkeeperBootstrap — place/paste the Blacksmith model anywhere in
 	Workspace and this script wires it automatically.
@@ -18,16 +18,20 @@ local NPCBootstrapKit = require(ReplicatedStorage:WaitForChild("NPCBootstrapKit"
 local NPC_ID_BASE = "blacksmith_01"
 local NPC_TYPE    = "Blacksmith"
 local NPC_NAME    = "Blacksmith"
+-- Previously "Blacksmith" (game.Workspace.T1REGION.T1Towns.OakHaven.Blacksmith).
+-- Repointed to the new R15-rigged model; NPC_TYPE/NPC_NAME above are unaffected
+-- since they key NPCRegistry/dialog trees/quests, not this Workspace lookup.
+local MODEL_NAME  = "T1_Blacksmith_R15"
 
 local HEAD_COLORS = {
 	text   = Color3.fromRGB(255, 230, 200),
 	stroke = Color3.fromRGB(60, 40, 25),
 }
 
--- Wires every Model named "Blacksmith" anywhere in Workspace, not just the first one found.
+-- Wires every Model named MODEL_NAME anywhere in Workspace, not just the first one found.
 -- Sorted by full path so id assignment (blacksmith_01, blacksmith_02, ...) stays stable across restarts.
 local function findAllModels()
-	return NPCBootstrapKit.FindAllModelsByName("Blacksmith")
+	return NPCBootstrapKit.FindAllModelsByName(MODEL_NAME)
 end
 
 local function setupProximity(root)
@@ -51,7 +55,7 @@ local function bootstrap(model, npcId)
 
 	local head = model:FindFirstChild("Head")
 	if head and head:IsA("BasePart") then
-		local ok, err = pcall(NPCBootstrapKit.EnsureHeadGui, head, NPC_NAME, HEAD_COLORS)
+		local ok, err = pcall(NPCBootstrapKit.EnsureHeadGui, head, NPC_NAME, HEAD_COLORS, "Blacksmith")
 		if not ok then warn("[BlacksmithBootstrap] Head.gui failed:", err) end
 	else
 		warn("[BlacksmithBootstrap] missing Head on", model:GetFullName())
@@ -74,13 +78,13 @@ end
 NPCBootstrapKit.ScheduleRetries(tryBootstrap, {0, 1.0, 3.0})
 
 workspace.ChildAdded:Connect(function(ch)
-	if ch.Name == "Blacksmith" and ch:IsA("Model") then
+	if ch.Name == MODEL_NAME and ch:IsA("Model") then
 		task.defer(tryBootstrap)
 	end
 end)
 
 workspace.DescendantAdded:Connect(function(inst)
-	if inst:IsA("Model") and inst.Name == "Blacksmith" then
+	if inst:IsA("Model") and inst.Name == MODEL_NAME then
 		task.defer(tryBootstrap)
 	end
 end)

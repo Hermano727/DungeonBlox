@@ -6,7 +6,7 @@
 --  RPG-UI styling for now, per request ("we can make custom UI later").
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local React = require(ReplicatedStorage.Packages.React)
-local Types = require(ReplicatedStorage:WaitForChild("DungeonProfileTypes"))
+local Types = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
 local ItemConfig = require(ReplicatedStorage:WaitForChild("ItemConfig"))
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
 local UITheme = require(ReplicatedStorage:WaitForChild("UITheme"))
@@ -87,7 +87,7 @@ local function SectionHeader(text: string, layoutOrder: number)
 		Size = UDim2.new(1, 0, 0, 16),
 		BackgroundTransparency = 1,
 		Text = text,
-		Font = UIFonts.BodyBold,
+		FontFace = UIFonts.BodyBold,
 		TextSize = 13,
 		TextColor3 = UITheme.Gold,
 		TextXAlignment = Enum.TextXAlignment.Left,
@@ -108,14 +108,21 @@ local function StatLine(text: string, layoutOrder: number)
 		Size = UDim2.new(1, 0, 0, 16),
 		BackgroundTransparency = 1,
 		Text = text,
-		Font = UIFonts.Body,
+		FontFace = UIFonts.Body,
 		TextSize = 13,
 		TextColor3 = Color3.fromRGB(210, 205, 195),
 		TextXAlignment = Enum.TextXAlignment.Left,
 	})
 end
 
-local function Tooltip(props: { item: any, position: Vector2 })
+-- Exact same height math the render function below builds, kept in one place
+-- (TOOLTIP_LINE_HEIGHTS-shaped constants) so EstimateSize can never drift from what
+-- actually renders -- callers use this to clamp the tooltip on-screen (see
+-- Inventory/init.lua) before the real AutomaticSize frame ever exists.
+local NAME_H, RARITY_H, SPACER_H, HEADER_H, STAT_LINE_H, LIST_PADDING = 20, 16, 8, 16, 16, 2
+local OUTER_PADDING_Y, CONTENT_WIDTH, OUTER_PADDING_X = 16, 230, 20 -- 8+8 top/bottom, 10+10 left/right
+
+local function renderTooltip(props: { item: any, position: Vector2 })
 	local item = props.item
 	if type(item) ~= "table" then
 		return nil :: any
@@ -143,7 +150,7 @@ local function Tooltip(props: { item: any, position: Vector2 })
 		Size = UDim2.new(1, 0, 0, 20),
 		BackgroundTransparency = 1,
 		Text = name,
-		Font = UIFonts.BodyBold,
+		FontFace = UIFonts.BodyBold,
 		TextSize = 16,
 		TextColor3 = Color3.fromRGB(240, 230, 210),
 		TextXAlignment = Enum.TextXAlignment.Left,
@@ -156,7 +163,7 @@ local function Tooltip(props: { item: any, position: Vector2 })
 			Size = UDim2.new(1, 0, 0, 16),
 			BackgroundTransparency = 1,
 			Text = rarityText,
-			Font = UIFonts.BodyBold,
+			FontFace = UIFonts.BodyBold,
 			TextSize = 12,
 			TextColor3 = rarityColor,
 			TextXAlignment = Enum.TextXAlignment.Left,
@@ -185,8 +192,11 @@ local function Tooltip(props: { item: any, position: Vector2 })
 		end
 	end
 
+	-- Position is the final, already-clamped/offset top-left corner -- the caller
+	-- (Inventory/init.lua) decides where that is (near the cursor, flipped/clamped to
+	-- stay on screen), using EstimateSize below to know how big this will render.
 	return e("Frame", {
-		Position = UDim2.fromOffset(props.position.X + 18, props.position.Y + 18),
+		Position = UDim2.fromOffset(props.position.X, props.position.Y),
 		AutomaticSize = Enum.AutomaticSize.XY,
 		Size = UDim2.fromOffset(0, 0),
 		BackgroundColor3 = Color3.fromRGB(20, 14, 9),
@@ -199,7 +209,7 @@ local function Tooltip(props: { item: any, position: Vector2 })
 			PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
 		}),
 		Content = e("Frame", {
-			Size = UDim2.fromOffset(230, 0),
+			Size = UDim2.fromOffset(CONTENT_WIDTH, 0),
 			AutomaticSize = Enum.AutomaticSize.Y,
 			BackgroundTransparency = 1,
 			ZIndex = 61,
@@ -207,4 +217,49 @@ local function Tooltip(props: { item: any, position: Vector2 })
 	})
 end
 
-return Tooltip
+-- Predicts the AutomaticSize box's real rendered size for `item`, without ever
+-- creating one -- lets the caller clamp/flip the tooltip's position against the
+-- viewport before the first frame renders (an AutomaticSize frame's real size isn't
+-- known until after it's already on screen, which would show one frame in the wrong
+-- place otherwise). Must stay in lockstep with renderTooltip's actual line list above.
+local function estimateSize(item: any): Vector2
+	if type(item) ~= "table" then
+		return Vector2.new(0, 0)
+	end
+	local rarity = ItemDefinitions.GetRarityForItem(item)
+	local hasRarity = type(rarity) == "string" and rarity ~= ""
+	local baseLines = baseStatLines(item.subStats)
+	local subLines = substatLines(item.subStats)
+
+	local lineHeights = { NAME_H }
+	if hasRarity then
+		table.insert(lineHeights, RARITY_H)
+	end
+	if #baseLines > 0 then
+		table.insert(lineHeights, SPACER_H)
+		table.insert(lineHeights, HEADER_H)
+		for _ = 1, #baseLines do
+			table.insert(lineHeights, STAT_LINE_H)
+		end
+	end
+	if #subLines > 0 then
+		table.insert(lineHeights, SPACER_H)
+		table.insert(lineHeights, HEADER_H)
+		for _ = 1, #subLines do
+			table.insert(lineHeights, STAT_LINE_H)
+		end
+	end
+
+	local contentHeight = 0
+	for _, h in ipairs(lineHeights) do
+		contentHeight += h
+	end
+	contentHeight += math.max(0, #lineHeights - 1) * LIST_PADDING
+
+	return Vector2.new(CONTENT_WIDTH + OUTER_PADDING_X, contentHeight + OUTER_PADDING_Y)
+end
+
+return {
+	Component = renderTooltip,
+	EstimateSize = estimateSize,
+}

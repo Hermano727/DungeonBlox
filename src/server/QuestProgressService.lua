@@ -4,8 +4,10 @@
 ]]
 
 local ServerScriptService = game:GetService("ServerScriptService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local DungeonProfile = require(ServerScriptService:WaitForChild("DungeonProfileService"))
+local DungeonProfile = require(ServerScriptService:WaitForChild("ProfileService"))
+local QuestRegistry = require(ReplicatedStorage:WaitForChild("QuestRegistry"))
 
 local QuestProgress = {}
 
@@ -186,6 +188,112 @@ function QuestProgress.OnSpearFishCaught(player, amount)
 		end
 	end
 	DungeonProfile.PushProfile(player)
+end
+
+---------------------------------------------------------------------------
+-- Generic quest bucket (profile.flags.quests[id]) -- for quests declared in
+-- QuestRegistry, as opposed to the three legacy named-flag quests above.
+-- Kept as a separate, additive path so nothing about the legacy quests'
+-- shape or hooks needs to change. Dialog trees call these via
+-- NPCService's AcceptQuest/TurnInQuest handlers (see DialogActions.lua).
+---------------------------------------------------------------------------
+
+local function getGenericQuestTable(profile, questId)
+	if type(profile.flags) ~= "table" then
+		profile.flags = {}
+	end
+	if type(profile.flags.quests) ~= "table" then
+		profile.flags.quests = {}
+	end
+	local q = profile.flags.quests[questId]
+	if type(q) ~= "table" then
+		q = { active = false, completed = false, rewardPaid = false }
+		profile.flags.quests[questId] = q
+	end
+	return q
+end
+
+--- Marks a QuestRegistry-declared quest active for the player.
+--- Returns true, or false + an error code string.
+function QuestProgress.AcceptQuest(player, questId)
+	local def = QuestRegistry.Get(questId)
+	if not def then
+		return false, "unknown_quest"
+	end
+
+	local profile = DungeonProfile.Get(player) or DungeonProfile.Load(player)
+	if not profile then
+		return false, "no_profile"
+	end
+
+	if def.Prereq then
+		local prereqQ = getGenericQuestTable(profile, def.Prereq)
+		if not prereqQ.completed then
+			return false, "prereq_incomplete"
+		end
+	end
+
+	local q = getGenericQuestTable(profile, questId)
+	if q.active or q.completed then
+		return false, "already_active_or_complete"
+	end
+
+	q.active = true
+	DungeonProfile.PushProfile(player)
+	return true
+end
+
+--- Checks the quest's objective, consumes/grants as needed, and marks it
+--- completed. Returns true, or false + an error code string (including
+--- "objective_incomplete" when the player hasn't met the objective yet --
+--- the caller is expected to retry later, same as an unaffordable repair).
+function QuestProgress.TurnInQuest(player, questId)
+	local def = QuestRegistry.Get(questId)
+	if not def then
+		return false, "unknown_quest"
+	end
+
+	local profile = DungeonProfile.Get(player) or DungeonProfile.Load(player)
+	if not profile then
+		return false, "no_profile"
+	end
+
+	local q = getGenericQuestTable(profile, questId)
+	if q.completed then
+		return false, "already_active_or_complete"
+	end
+	if not q.active then
+		return false, "not_active"
+	end
+
+	local obj = def.Objective
+	if obj and obj.Type == "HaveItemCount" then
+		local have = DungeonProfile.CountItemId(player, obj.ItemId)
+		if have < obj.Count then
+			return false, "objective_incomplete"
+		end
+		local consumedOk = DungeonProfile.ConsumeItemId(player, obj.ItemId, obj.Count)
+		if not consumedOk then
+			return false, "consume_failed"
+		end
+	end
+
+	q.active = false
+	q.completed = true
+
+	if not q.rewardPaid then
+		local coins = math.max(0, math.floor(tonumber(def.RewardCoins) or 0))
+		if coins > 0 then
+			DungeonProfile.GrantItemId(player, "Coins", coins)
+		end
+		if def.RewardItemId then
+			DungeonProfile.GrantItemId(player, def.RewardItemId, def.RewardItemCount or 1)
+		end
+		q.rewardPaid = true
+	end
+
+	DungeonProfile.PushProfile(player)
+	return true
 end
 
 return QuestProgress

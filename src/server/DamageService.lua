@@ -15,7 +15,17 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
+local HungerConfig = require(ReplicatedStorage:WaitForChild("HungerConfig"))
+
 local DamageService = {}
+
+local _hgr
+local function hgr()
+	if not _hgr then
+		_hgr = require(ServerScriptService:WaitForChild("HungerData"))
+	end
+	return _hgr
+end
 
 local _css
 local function getCombatState()
@@ -81,6 +91,7 @@ function DamageService.ApplyToPlayer(player, rawDamage, source)
 	local armor = profile and profile.Combat and profile.Combat.Armor or 0
 	local final = DamageService.ComputeFinal(rawDamage, armor)
 	if final <= 0 then return 0 end
+	pcall(hgr().addExhaustion, player, HungerConfig.EXHAUSTION.DAMAGE_TAKEN)
 
 	if profile then
 		profile.Combat.HP = math.max(0, profile.Combat.HP - final)
@@ -124,9 +135,26 @@ function DamageService.AwardKill(player, mob)
 	profile.Progression[killsKey] = (profile.Progression[killsKey] or 0) + 1
 	profile.Progression[scoreKey] = (profile.Progression[scoreKey] or 0) + score
 
-	local xpEvent = ReplicatedStorage:FindFirstChild("CombatXPEvent")
-	if xpEvent then
-		xpEvent:FireClient(player, mob.MobID or "Unknown", score, tier)
+	-- Inside a dungeon, combat XP BANKS instead of being awarded per kill,
+	-- and is only paid out on a completed run (forfeit on death). The
+	-- Progression kill/score counters above still tick immediately -- those
+	-- are lifetime stats, not a reward.
+	local banked = false
+	do
+		local ok, DungeonScore = pcall(function()
+			return require(ServerScriptService:WaitForChild("DungeonScoreService", 5))
+		end)
+		if ok and DungeonScore and DungeonScore.IsInRun(player) then
+			DungeonScore.AddXP(player, score)
+			banked = true
+		end
+	end
+
+	if not banked then
+		local xpEvent = ReplicatedStorage:FindFirstChild("CombatXPEvent")
+		if xpEvent then
+			xpEvent:FireClient(player, mob.MobID or "Unknown", score, tier)
+		end
 	end
 
 	pcall(function()

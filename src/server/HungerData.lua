@@ -7,10 +7,18 @@ local EnergyData = require(SSS:WaitForChild("EnergyData"))
 local HungerData = {}
 local _d = {}
 
+local function pushValues(player, d)
+	local hv = player:FindFirstChild("Hunger")
+	if hv and hv:IsA("NumberValue") then
+		hv.Value = d.hunger
+	end
+end
+
 function HungerData.init(player)
 	_d[player] = {
 		hunger = Config.MAX_HUNGER,
 		maxHunger = Config.MAX_HUNGER,
+		exhaustion = 0,
 	}
 	local v = Instance.new("NumberValue")
 	v.Name = "Hunger"
@@ -46,28 +54,44 @@ function HungerData.canDash(player)
 	return d.hunger > 0
 end
 
-function HungerData.addHunger(player, amount)
+-- Central exhaustion accumulator (Minecraft-style, 2026-09-07 rework). Every
+-- tracked action -- movement, jumping, attacking, taking damage -- calls this
+-- with its Minecraft-mapped cost (see HungerConfig.EXHAUSTION). Nothing calls
+-- this while a player stands still, so hunger truly never drains at rest,
+-- same as real Minecraft. Drains Hunger directly (Saturation was removed
+-- 2026-09-07, same day it was added, per direct feedback).
+function HungerData.addExhaustion(player, amount)
 	local d = _d[player]
 	if not d or type(amount) ~= "number" or amount <= 0 then
 		return
 	end
-	d.hunger = math.clamp(d.hunger + amount, 0, d.maxHunger)
-	local nv = player:FindFirstChild("Hunger")
-	if nv and nv:IsA("NumberValue") then
-		nv.Value = d.hunger
+	d.exhaustion += amount
+	local changed = false
+	while d.exhaustion >= Config.EXHAUSTION_PER_PIP do
+		d.exhaustion -= Config.EXHAUSTION_PER_PIP
+		if d.hunger > 0 then
+			d.hunger = math.max(0, d.hunger - 1)
+			changed = true
+		else
+			-- Already empty -- nothing left to drain. (Real Minecraft starts
+			-- damaging the player once hunger hits 0; we don't do that yet.)
+			d.exhaustion = 0
+			break
+		end
+	end
+	if changed then
+		pushValues(player, d)
 	end
 end
 
-function HungerData.applyTick(player, dt)
+-- Eating: restores Hunger pips directly, capped at max.
+function HungerData.eat(player, hungerPips)
 	local d = _d[player]
-	if not d then
+	if not d or type(hungerPips) ~= "number" or hungerPips <= 0 then
 		return
 	end
-	d.hunger = math.clamp(d.hunger - Config.PASSIVE_DRAIN_PER_SEC * dt, 0, d.maxHunger)
-	local nv = player:FindFirstChild("Hunger")
-	if nv and nv:IsA("NumberValue") then
-		nv.Value = d.hunger
-	end
+	d.hunger = math.clamp(d.hunger + hungerPips, 0, d.maxHunger)
+	pushValues(player, d)
 end
 
 -- If too hungry to sprint, clear sprint request and snap walk speed (EnergyServer owns RequestSprint).

@@ -130,6 +130,21 @@ function PartyService.GetSameZoneMemberCount(player)
 	return countSameZonePartyMembers(player, party)
 end
 
+-- Returns the UserId of player's party leader, or nil if they aren't in a party.
+function PartyService.GetLeaderUserId(player)
+	local party = getPartyForPlayer(player)
+	if not party then
+		return nil
+	end
+	return party.leaderUserId
+end
+
+-- True if player is currently the leader of their own party (false if solo/not in a party).
+function PartyService.IsPartyLeader(player)
+	local party = getPartyForPlayer(player)
+	return party ~= nil and party.leaderUserId == player.UserId
+end
+
 function PartyService.GetRewardMultiplier(player)
 	local party = getPartyForPlayer(player)
 	if not party then return 1 end
@@ -161,6 +176,19 @@ local function buildMemberRows(party)
 		return a.name < b.name
 	end)
 	return rows
+end
+
+-- Returns the array of { userId, name } rows for player's current party (same shape
+-- buildMemberRows already produces for the network payload), or nil if they aren't in a
+-- party. Exposed for callers outside this module -- e.g. the dungeon system building its
+-- ready-check roster with real display names -- instead of reaching into PartyService's
+-- private `parties`/`playerParty` tables directly.
+function PartyService.GetPartyMembers(player)
+	local party = getPartyForPlayer(player)
+	if not party then
+		return nil
+	end
+	return buildMemberRows(party)
 end
 
 local function buildPayloadFor(player)

@@ -8,7 +8,7 @@
 --
 -- NOTE: this bootstraps the OLDER of DungeonBlox's two parallel profile
 -- systems (PlayerDataManager/DataSchema -- see the header comment at the top
--- of shared/DataSchema.lua for the full map). DungeonProfileService is
+-- of shared/DataSchema.lua for the full map). ProfileService is
 -- bootstrapped separately and owns currencies/equipment/the visible
 -- inventory UI; this file's profile is still the sole owner of HP/MaxHP/
 -- Armor and RPG stats, so both systems genuinely run per-player at once.

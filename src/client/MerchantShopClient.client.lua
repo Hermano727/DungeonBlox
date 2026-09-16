@@ -5,7 +5,7 @@
 local Players                = game:GetService("Players")
 local ProximityPromptService = game:GetService("ProximityPromptService")
 
-local BlacksmithClient    = require(script.Parent:WaitForChild("BlacksmithClient"))
+local DialogRuntime       = require(script.Parent:WaitForChild("DialogHud"):WaitForChild("DialogRuntime"))
 local HearthstoneClient   = require(script.Parent:WaitForChild("HearthstoneClient"))
 local AuctionHouseClient  = require(script.Parent:WaitForChild("AuctionHouseClient"))
 local MerchantClient      = require(script.Parent:WaitForChild("MerchantClient"))
@@ -39,7 +39,8 @@ ProximityPromptService.PromptTriggered:Connect(function(prompt, triggeringPlayer
 	if triggeringPlayer ~= player then return end
 	-- Each NPC type routes to its own fully-isolated client module.
 	-- Add new types at the bottom; never modify existing lines.
-	local _,bsId  = resolvePrompt(prompt, "Blacksmith");    if bsId  then BlacksmithClient.open(bsId);    return end
+	local bsModel,bsId = resolvePrompt(prompt, "Blacksmith")
+	if bsId then DialogRuntime.startConversation(bsModel, bsId, "Blacksmith"); return end
 	local _,innId = resolveInnkeeper(prompt);               if innId then HearthstoneClient.openInnkeeperShop(); return end
 	local _,aucId = resolvePrompt(prompt, "Auctioneer");    if aucId then AuctionHouseClient.open();       return end
 	local _,merId = resolvePrompt(prompt, "Merchant");      if merId then MerchantClient.open(merId);     return end

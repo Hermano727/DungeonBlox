@@ -7,14 +7,14 @@
 -- SECOND PROFILE SYSTEM -- read this before touching anything in here.
 -- ============================================================================
 -- DungeonBlox actually runs two parallel player-profile systems side by side:
---   1. DungeonProfileService + DungeonProfileTypes (shared/DungeonProfileTypes.lua)
+--   1. ProfileService + ProfileTypes (shared/ProfileTypes.lua)
 --      -- the CURRENT system. Owns currencies, equipped gear, the bag/inventory
 --      shown in the live UI (InventoryHud -> DungeonMenuUI/DungeonMenuNet), and
 --      skills. This is what new features should build on.
 --   2. This schema (DataSchema + PlayerDataManager + InventoryService) -- the
 --      OLDER system that predates it. It is NOT dead code, so do not delete it:
 --        * HP / MaxHP / Armor and the RPG stat block (Vitality etc.) below are
---          the ONLY place those values live. DungeonProfileTypes has no
+--          the ONLY place those values live. ProfileTypes has no
 --          equivalent fields. DamageService.ApplyToPlayer reads Combat.Armor
 --          from THIS profile to compute damage mitigation for every hit, both
 --          PvE and PvP (see src/server/DamageService.lua).
@@ -28,19 +28,19 @@
 --          InventoryService.AddItem/RemoveItem, which PlayerBootstrap (starter
 --          kit) and NPCService (buy/sell -- see its countLegacySlots /
 --          removeItemAcrossStores helpers, which deliberately read+write BOTH
---          this Inventory AND DungeonProfileService's inventory so items don't
+--          this Inventory AND ProfileService's inventory so items don't
 --          go missing depending which store they happened to land in) still
 --          call directly. It is NOT rendered by any current client UI though:
 --          grep across src/client finds zero references to the
 --          InventoryReplicate/InventoryRequest RemoteEvents outside
 --          InventoryService.lua itself -- InventoryHud's UI tree is wired to
---          DungeonMenuNet/DungeonProfileTypes instead. So this Inventory table
+--          DungeonMenuNet/ProfileTypes instead. So this Inventory table
 --          is a real, mutated, server-authoritative data store with no visible
 --          client representation of its own.
 --   KNOWN BUG (found during this audit, not fixed here -- fix belongs in
---   DamageService.lua / DungeonBootstrap.server.lua, both out of this
---   aspect's scope): the live equip UI (DungeonBootstrap-owned equip
---   RemoteFunctions, backed by DungeonProfileService.equipped) never calls
+--   DamageService.lua / ProfileBootstrap.server.lua, both out of this
+--   aspect's scope): the live equip UI (ProfileBootstrap-owned equip
+--   RemoteFunctions, backed by ProfileService.equipped) never calls
 --   InventoryService.RecomputeArmor. That function only runs from this legacy
 --   path (PlayerBootstrap's starter-kit equip, and InventoryService.UseItem
 --   which nothing calls anymore either). So Combat.Armor gets set once from
@@ -62,6 +62,24 @@ function DataSchema.Default()
 		progression["Tier" .. tier .. "Kills"] = 0
 		progression["Tier" .. tier .. "Score"] = 0
 	end
+
+	-- Per-rarity dry streaks for the score-driven pity system
+	-- (see LootPityService). ONE pool per player, shared by overworld kills
+	-- and dungeon runs -- resetting one rarity never touches the others.
+	-- Without these persisted here, streaks reset every session and pity
+	-- never actually accrues.
+	progression.DryStreaks = {
+		Common    = 0,
+		Uncommon  = 0,
+		Rare      = 0,
+		Epic      = 0,
+		Legendary = 0,
+	}
+
+	-- Loot buff multiplier feeding the core progression system. 1.0 = one
+	-- score per kill. 1.1 = 10% chance of a second point, 2.5 = always two
+	-- plus a 50% chance of a third.
+	progression.LootBuff = 1.0
 
 	return {
 		Version = DataSchema.Version,

@@ -36,7 +36,7 @@ function WeaponItem:GetEquipSlot(): string?
 	return Config.WEAPON_TYPE_EQUIP_SLOT[self.weaponKind] or "Weapon"
 end
 
--- Deliberately NOT stamping `tags` here (see Item:GetTags doc) -- DungeonEquippedHotbar
+-- Deliberately NOT stamping `tags` here (see Item:GetTags doc) -- EquippedHotbar
 -- reads a weapon's tags to apply EnergyConfig.WEAPON_SWING_MULT, so doing this
 -- automatically would silently change training gear's swing-energy cost. Uncomment (and
 -- have someone sanity-check the resulting swing costs in a real playtest) if that's ever

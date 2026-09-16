@@ -12,9 +12,12 @@ local CombatRemote = ReplicatedStorage:WaitForChild("CombatRemote")
 local PvPHitRemote = ReplicatedStorage:WaitForChild("DungeonPvPHit")
 local TrySwing     = ReplicatedStorage:WaitForChild("GameEvents"):WaitForChild("TrySwing")
 local WeaponData   = require(ReplicatedStorage:WaitForChild("WeaponData"))
+local ActiveEquipment = require(ReplicatedStorage:WaitForChild("ActiveEquipment"))
+local ProfileMenusState = require(ReplicatedStorage:WaitForChild("ProfileMenusState"))
 local Config       = require(ReplicatedStorage:WaitForChild("EnergyConfig"))
 local CombatSfxConfig  = require(ReplicatedStorage:WaitForChild("CombatSfxConfig"))
 local CombatAnimConfig = require(ReplicatedStorage:WaitForChild("CombatAnimConfig"))
+local SfxService       = require(ReplicatedStorage:WaitForChild("SfxService"))
 
 local partyMemberUserIds = {}
 task.defer(function()
@@ -38,88 +41,147 @@ task.defer(function()
     end
 end)
 
-local animator = nil
-local attackTracks = {}
-local currentAttackTrack = nil
-local attackComboIndex = 1
-local isAttacking = false
+local attackTrack = nil
+local attackCharacter = nil
+local swingTool = nil
+local characterGeneration = 0
+local characterConnections = {}
+local stopObservingEquipment = nil
+local queuedSwingAt = nil
+local lastSwingClickAt = nil
+local smoothedClickInterval = 1 / CombatAnimConfig.SWING_DEFAULT_CPS
+local swingStoppedConnection = nil
+local swingGeneration = 0
 
-local function InitAnimator(character)
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    if not humanoid then
-        warn("[CombatClient] No Humanoid found in character")
-        return nil
-    end
-
-    -- WaitForChild ensures we get Roblox's real Animator (created by the Animate
-    -- LocalScript). FindFirstChildOfClass too early returns nil and causes a
-    -- duplicate Animator that silently swallows all animation calls.
-    local anim = humanoid:FindFirstChildOfClass("Animator")
-        or humanoid:WaitForChild("Animator", 10)
-
-    if not anim then
-        warn("[CombatClient] No Animator found — creating fallback")
-        anim = Instance.new("Animator")
-        anim.Parent = humanoid
-    end
-
-    return anim
+local function resetSwing()
+    swingGeneration += 1
+    if swingStoppedConnection then swingStoppedConnection:Disconnect(); swingStoppedConnection = nil end
+    queuedSwingAt = nil
+    lastSwingClickAt = nil
+    smoothedClickInterval = 1 / CombatAnimConfig.SWING_DEFAULT_CPS
+    if attackTrack then attackTrack:Stop(CombatAnimConfig.CANCEL_FADE) end
 end
 
-local function LoadAttackAnimations()
-    if not animator then return end
-    local animObj = Instance.new("Animation")
-    animObj.AnimationId = CombatAnimConfig.SWING_ANIM_ID
-    local track = animator:LoadAnimation(animObj)
-    track.Priority = CombatAnimConfig.ANIM_PRIORITY
-    table.insert(attackTracks, track)
-    animObj:Destroy()
-    print("[CombatClient] Loaded swing animation: " .. CombatAnimConfig.SWING_ANIM_ID)
-    -- [[ DEBUG: uncomment to inspect rig type and track on load
-    -- if CombatAnimConfig.DEBUG then
-    --     local char = Player.Character
-    --     local hum  = char and char:FindFirstChildOfClass("Humanoid")
-    --     warn("[CombatAnim] RigType:", hum and hum.RigType)
-    --     warn("[CombatAnim] AnimId:", CombatAnimConfig.SWING_ANIM_ID)
-    --     warn("[CombatAnim] Track length:", track.Length)
-    -- end
-    --]]
+local function canPresentSwing(character, tool)
+    local hum = character and character:FindFirstChildOfClass("Humanoid")
+    local gui = Player:FindFirstChildOfClass("PlayerGui")
+    local menu = gui and gui:FindFirstChild("SkillsPopupUI", true)
+    return character == Player.Character and hum and hum.Health > 0
+        and tool ~= nil and ActiveEquipment.GetTool(character) == tool
+        and WeaponData.ShouldUseClientHitDetection(WeaponData.GetWeaponIdFromTool(tool))
+        and Player:GetAttribute("EnergyPanting") ~= true
+        and not ProfileMenusState.IsOpen()
+        and not UserInputService:GetFocusedTextBox()
+        and not (menu and menu:IsA("ScreenGui") and menu.Enabled)
 end
 
-local function PlayAttackAnimation()
-    if not animator then
-        warn("[CombatClient] No animator")
-        return
+local function recordSwingClick(now)
+    if not lastSwingClickAt or now - lastSwingClickAt > CombatAnimConfig.SWING_IDLE_RESET_SEC then
+        smoothedClickInterval = 1 / CombatAnimConfig.SWING_DEFAULT_CPS
+    else
+        local interval = math.clamp(now - lastSwingClickAt,
+            1 / CombatAnimConfig.SWING_MAX_CPS, 1 / CombatAnimConfig.SWING_MIN_CPS)
+        smoothedClickInterval += CombatAnimConfig.SWING_INTERVAL_ALPHA * (interval - smoothedClickInterval)
     end
+    lastSwingClickAt = now
+end
 
-    if #attackTracks == 0 then
-        warn("[CombatClient] No attack tracks loaded")
-        return
+local function swingPlaybackSpeed()
+    local cps = math.clamp(1 / smoothedClickInterval,
+        CombatAnimConfig.SWING_MIN_CPS, CombatAnimConfig.SWING_MAX_CPS)
+    local speed = math.clamp(attackTrack.Length * cps / CombatAnimConfig.SWING_CYCLE_FRACTION,
+        CombatAnimConfig.SWING_MIN_PLAYBACK_SPEED, CombatAnimConfig.SWING_MAX_PLAYBACK_SPEED)
+    attackCharacter:SetAttribute("MeleeSwingCps", cps)
+    attackCharacter:SetAttribute("MeleeSwingPlaybackSpeed", speed)
+    attackCharacter:SetAttribute("MeleeSwingClipLength", attackTrack.Length)
+    return speed
+end
+
+local function startSwing()
+    if not attackTrack or attackTrack.Length <= 0 or not canPresentSwing(attackCharacter, swingTool) then return end
+    if swingStoppedConnection then swingStoppedConnection:Disconnect() end
+    swingGeneration += 1
+    local generation, track = swingGeneration, attackTrack
+    queuedSwingAt = nil
+    track:Play(CombatAnimConfig.SWING_FADE_IN, 1, swingPlaybackSpeed())
+    swingStoppedConnection = track.Stopped:Connect(function()
+        if generation ~= swingGeneration or attackTrack ~= track or track.IsPlaying then return end
+        local queuedAt = queuedSwingAt
+        queuedSwingAt = nil
+        if queuedAt and os.clock() - queuedAt <= CombatAnimConfig.SWING_QUEUE_MAX_AGE_SEC
+            and canPresentSwing(attackCharacter, swingTool) then
+            startSwing()
+        end
+    end)
+end
+
+local function PlayAttackAnimation(character, tool)
+    if character ~= attackCharacter or not canPresentSwing(character, tool) then return end
+    if tool ~= swingTool then resetSwing(); swingTool = tool end
+    recordSwingClick(os.clock())
+    -- Preserve locomotion while loading; never stop idle/walk to attempt a swing.
+    if not attackTrack or attackTrack.Length <= 0 then return end
+    if attackTrack.IsPlaying then
+        attackTrack:AdjustSpeed(swingPlaybackSpeed())
+        -- At most one follow-up visual. Fast bursts cannot create a backlog,
+        -- and don't keep resetting the slash before it reaches its hit pose.
+        queuedSwingAt = os.clock()
+    else
+        startSwing()
     end
+end
 
-    -- Cancel current attack if playing (snappy high-CPS cancellation)
-    if currentAttackTrack and currentAttackTrack.IsPlaying then
-        currentAttackTrack:Stop(CombatAnimConfig.CANCEL_FADE)
-    end
+local function clearAttackCharacter()
+    characterGeneration += 1
+    if stopObservingEquipment then stopObservingEquipment(); stopObservingEquipment = nil end
+    for _, connection in ipairs(characterConnections) do connection:Disconnect() end
+    table.clear(characterConnections)
+    resetSwing()
+    if attackTrack then attackTrack:Destroy(); attackTrack = nil end
+    attackCharacter, swingTool = nil, nil
+end
 
-    attackComboIndex = (attackComboIndex % #attackTracks) + 1
-    currentAttackTrack = attackTracks[attackComboIndex]
-
-    currentAttackTrack:Play()
-    currentAttackTrack:AdjustSpeed(CombatAnimConfig.ANIM_SPEED_MULT)
-    -- [[ DEBUG: uncomment to inspect per-swing playback
-    -- if CombatAnimConfig.DEBUG then
-    --     warn("[CombatAnim] Play() | Length:", currentAttackTrack.Length,
-    --          "| IsPlaying:", currentAttackTrack.IsPlaying,
-    --          "| Speed:", CombatAnimConfig.ANIM_SPEED_MULT,
-    --          "| AnimId:", CombatAnimConfig.SWING_ANIM_ID)
-    -- end
-    --]]
-
-    isAttacking = true
-    task.delay(currentAttackTrack.Length / CombatAnimConfig.ANIM_SPEED_MULT, function()
-        if currentAttackTrack == attackTracks[attackComboIndex] then
-            isAttacking = false
+local function bindAttackCharacter(character)
+    if character == attackCharacter then return end
+    clearAttackCharacter()
+    attackCharacter = character
+    swingTool = ActiveEquipment.GetTool(character)
+    local generation = characterGeneration
+    stopObservingEquipment = ActiveEquipment.Observe(character, function(tool)
+        if tool ~= swingTool then resetSwing(); swingTool = tool end
+    end)
+    task.spawn(function()
+        local hum = character:WaitForChild("Humanoid", 10)
+        local animator = hum and hum:WaitForChild("Animator", 10)
+        if generation ~= characterGeneration or character ~= Player.Character then return end
+        if not animator then warn("[CombatClient] Replicated Animator missing"); return end
+        table.insert(characterConnections, hum.Died:Connect(resetSwing))
+        local anim = Instance.new("Animation")
+        anim.AnimationId = CombatAnimConfig.SWING_ANIM_ID
+        local ok, track = pcall(function() return animator:LoadAnimation(anim) end)
+        if not ok then
+            anim:Destroy()
+            warn("[CombatClient] Swing animation load failed:", track)
+            return
+        end
+        if generation ~= characterGeneration or character ~= Player.Character then
+            track:Destroy()
+            anim:Destroy()
+            return
+        end
+        attackTrack = track
+        track.Priority = CombatAnimConfig.ANIM_PRIORITY
+        track.Looped = false
+        local loaded, err = pcall(function()
+            ContentProvider:PreloadAsync({ anim }, function(_, status)
+                if generation == characterGeneration and status ~= Enum.AssetFetchStatus.Success then
+                    warn("[CombatClient] Swing asset unavailable:", status.Name)
+                end
+            end)
+        end)
+        anim:Destroy()
+        if not loaded and generation == characterGeneration then
+            warn("[CombatClient] Swing preload failed:", err)
         end
     end)
 end
@@ -127,7 +189,7 @@ end
 local HITBOX_SIZE = CombatAnimConfig.HITBOX_SIZE
 
 local function GetEquippedTool(character)
-    return character and character:FindFirstChildOfClass("Tool")
+    return ActiveEquipment.GetTool(character)
 end
 
 local function ReportMobHit(mobUID, hitPos, weaponId)
@@ -162,7 +224,18 @@ local function PerformRaycastAttack(character, attackRange)
     ray.FilterDescendantsInstances = {character}
     ray.FilterType = Enum.RaycastFilterType.Exclude
     ray.IgnoreWater = true
-    local result = workspace:Raycast(hrp.Position, workspace.CurrentCamera.CFrame.LookVector * attackRange, ray)
+    -- Origin MUST be the camera's own position, not hrp.Position. This is a
+    -- first-person game -- HRP sits at torso height, noticeably below the
+    -- camera/eye position, so a ray fired from HRP along the camera's
+    -- LookVector traces a different line through the world than what the
+    -- player actually sees down their crosshair. At close range that gap
+    -- means aiming above a short mob's body can still trace back down
+    -- through it, registering a hit the player visually shouldn't have
+    -- landed. Firing from the camera's actual position makes the ray match
+    -- the view exactly.
+    local camera = workspace.CurrentCamera
+    local origin = camera.CFrame.Position
+    local result = workspace:Raycast(origin, camera.CFrame.LookVector * attackRange, ray)
     if result then
         local model = result.Instance:FindFirstAncestorOfClass("Model")
         local weaponId = WeaponData.GetWeaponIdFromTool(GetEquippedTool(character))
@@ -213,21 +286,14 @@ local function PerformHitboxAttack(character, attackRange)
 end
 
 local function OnAttackInput()
+    if ProfileMenusState.IsOpen() or UserInputService:GetFocusedTextBox() then return end
+    local gui = Player:FindFirstChildOfClass("PlayerGui")
+    local menu = gui and gui:FindFirstChild("SkillsPopupUI", true)
+    if menu and menu:IsA("ScreenGui") and menu.Enabled then return end
     local character = Player.Character
     if not character then 
         warn("[CombatClient] No character")
         return 
-    end
-
-    -- Initialize animator if needed
-    if not animator then
-        print("[CombatClient] Initializing animator...")
-        animator = InitAnimator(character)
-        if animator then
-            LoadAttackAnimations()
-        else
-            warn("[CombatClient] Failed to initialize animator")
-        end
     end
 
     local tool = GetEquippedTool(character)
@@ -262,8 +328,10 @@ local function OnAttackInput()
         return  -- still skip animation and hit detection
     end
 
-    -- Play attack animation (with cancellation for high CPS)
-    PlayAttackAnimation()
+    -- Visual timing follows eligible melee clicks; hit/energy timing is unchanged.
+    if WeaponData.ShouldUseClientHitDetection(weaponId) then
+        PlayAttackAnimation(character, tool)
+    end
 
     -- Deduct energy server-side
     TrySwing:FireServer(weaponId)
@@ -284,30 +352,18 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
     end
 end)
 
--- Reinitialize animator on character respawn
-Player.CharacterAdded:Connect(function(character)
-    animator = nil
-    attackTracks = {}
-    currentAttackTrack = nil
-    attackComboIndex = 1
-    isAttacking = false
-    
-    -- InitAnimator uses WaitForChild internally — no fixed wait needed
-    animator = InitAnimator(character)
-    if animator then
-        LoadAttackAnimations()
-    end
+Player.CharacterAdded:Connect(bindAttackCharacter)
+Player.CharacterRemoving:Connect(function(character)
+    if character == attackCharacter then clearAttackCharacter() end
 end)
-
--- Initial setup if character already exists
-task.spawn(function()
-    if Player.Character then
-        animator = InitAnimator(Player.Character)
-        if animator then
-            LoadAttackAnimations()
-        end
-    end
+Player:GetAttributeChangedSignal("EnergyPanting"):Connect(function()
+    if Player:GetAttribute("EnergyPanting") == true then resetSwing() end
 end)
+ProfileMenusState.Subscribe(function()
+    if ProfileMenusState.IsOpen() then resetSwing() end
+end)
+script.Destroying:Connect(clearAttackCharacter)
+if Player.Character then bindAttackCharacter(Player.Character) end
 
 print("CombatClient initialized with animation system")
 
@@ -337,18 +393,36 @@ task.defer(function()
 		snd.TimePosition = math.max(0, trim)
 	end
 
-	ev.OnClientEvent:Connect(function()
+	-- soundId: server-resolved per mob type (MobClass:GetHitSoundId() /
+	-- overrides like SkeletonMobClass) -- nil/empty means the mob had no
+	-- override, so this falls back to the shared default glass clip exactly
+	-- like before soundId existed.
+	ev.OnClientEvent:Connect(function(soundId)
 		local cfg = CombatSfxConfig
+		local usingDefaultClip = type(soundId) ~= "string" or soundId == ""
 		local snd = Instance.new("Sound")
 		snd.Name = "MeleeHitGlass"
-		snd.SoundId = cfg.MELEE_HIT_GLASS_SOUND_ID
+		snd.SoundId = usingDefaultClip and cfg.MELEE_HIT_GLASS_SOUND_ID or soundId
 		snd.Volume = cfg.VOLUME or 0.95
 		snd.Looped = false
 		snd.RollOffMode = Enum.RollOffMode.Linear
 		snd.MaxDistance = 80
 		snd.PlaybackSpeed = rng:NextNumber(cfg.PITCH_MIN or 0.9, cfg.PITCH_MAX or 1.15)
+		-- Route through the same SoundService.Main.Effects bus as
+		-- SfxService.PlayEffect (crit hits, item pickups) so the Settings
+		-- menu's "VFX" slider actually reaches the single most frequent
+		-- combat sound in the game -- this was the whole reason the
+		-- SFX/VFX sliders looked broken: every other one-shot effect sound
+		-- was correctly grouped, but this one (played on EVERY hit) never
+		-- was, so dragging either slider never seemed to change anything.
+		snd.SoundGroup = SfxService.GetEffectsGroup()
 		snd.Parent = SoundService
-		applyConfiguredTrim(snd, cfg)
+		-- MELEE_HIT_GLASS_TRIM_START_SEC is tuned for the default clip's own
+		-- leading silence -- only apply it when that's actually what's
+		-- playing, never to a mob-specific override sound with unknown padding.
+		if usingDefaultClip then
+			applyConfiguredTrim(snd, cfg)
+		end
 		local played = false
 		pcall(function()
 			if SoundService.PlayLocalSound then

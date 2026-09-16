@@ -8,7 +8,7 @@
 	throttle how often one player can fire the request -- so that shape now lives in one place
 	instead of being hand-copied (previously verbatim, drift-prone) across both scripts.
 
-	Deliberately NOT folded in here: anything that reads DungeonProfileService or
+	Deliberately NOT folded in here: anything that reads ProfileService or
 	ItemDefinitions, since the two services diverge there (potions use a per-tier charge pool,
 	food applies hunger + BuffService buffs). This module only owns the remote-wiring/hotbar/
 	throttle boilerplate that was byte-for-byte identical between them.
@@ -64,7 +64,7 @@ function ConsumableRequestUtil.EnsureRemoteFunction(parent: Instance, name: stri
 	return rf :: RemoteFunction
 end
 
--- Hotbar is always exactly 9 slots (see DungeonEquippedHotbar) -- the item must be sitting in
+-- Hotbar is always exactly 9 slots (see EquippedHotbar) -- the item must be sitting in
 -- one of them for a right-click eat/drink to be honored, i.e. the player actually had it
 -- equipped/selected client-side rather than it merely existing somewhere in the bag.
 local HOTBAR_SLOTS = 9

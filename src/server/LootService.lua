@@ -17,12 +17,14 @@ local ReplicatedStorage   = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local Config         = require(ReplicatedStorage:WaitForChild("ItemConfig"))
-local Types          = require(ReplicatedStorage:WaitForChild("DungeonProfileTypes"))
+local Types          = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
 local ItemGenerator  = require(ServerScriptService:WaitForChild("ItemGenerator"))
-local DungeonProfile = require(ServerScriptService:WaitForChild("DungeonProfileService"))
+local DungeonProfile = require(ServerScriptService:WaitForChild("ProfileService"))
 local BuffService    = require(ServerScriptService:WaitForChild("BuffService"))
 local PartyService   = require(ServerScriptService:WaitForChild("PartyService"))
-local WorldLoot      = require(ServerScriptService:WaitForChild("DungeonWorldLootService"))
+local WorldLoot      = require(ServerScriptService:WaitForChild("WorldLootService"))
+
+local Players = game:GetService("Players")
 
 local LootService = {}
 
@@ -166,6 +168,16 @@ local function tryDropCoins(tier, elite, killingBlowPlayer, deathPos, ownerUserI
         return scatterIndex
     end
 
+    -- Inside a dungeon, coins BANK instead of dropping -- you don't see what
+    -- you earned until the run resolves. Forfeit entirely if you fail.
+    do
+        local DungeonScore = require(ServerScriptService:WaitForChild("DungeonScoreService"))
+        if DungeonScore.IsInRun(killingBlowPlayer) then
+            DungeonScore.AddCoins(killingBlowPlayer, coins)
+            return scatterIndex
+        end
+    end
+
     WorldLoot.SpawnMobDrop(deathPos, ownerUserId, {
         kind = "coins",
         amount = coins,
@@ -175,13 +187,24 @@ local function tryDropCoins(tier, elite, killingBlowPlayer, deathPos, ownerUserI
 end
 
 -- Key fragment drop: independent roll, scales by mob tier.
-local function tryDropKeyFragment(tier, deathPos, ownerUserId, scatterIndex)
+local function tryDropKeyFragment(tier, deathPos, ownerUserId, scatterIndex, killingBlowPlayer)
+    -- Key fragments do not exist inside dungeons. They neither drop nor bank:
+    -- fragments are the way you EARN entry to a dungeon, so farming them from
+    -- inside one would let a run pay for its own successor.
+    if killingBlowPlayer then
+        local DungeonScore = require(ServerScriptService:WaitForChild("DungeonScoreService"))
+        if DungeonScore.IsInRun(killingBlowPlayer) then
+            return scatterIndex
+        end
+    end
+
     local fragTier = math.clamp(math.floor(tonumber(tier) or 1), 1, 5)
     if math.random() > KEY_FRAG_CHANCES[fragTier] then
         return scatterIndex  -- no key fragment this kill
     end
 
     local fragId = KEY_FRAG_IDS[fragTier]
+
     WorldLoot.SpawnMobDrop(deathPos, ownerUserId, {
         kind = "item_id",
         itemId = fragId,
@@ -251,6 +274,85 @@ end
 -- Called from MobManager.ProcessMobDeath.
 -- mob fields used: mob.Tier, mob.Stats.Level, mob.MobID
 ------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------
+-- Score-driven gear drops (replaces the flat per-kill TIER_DROP_CHANCE
+-- roll for GEAR only -- coins and key fragments are untouched).
+--
+--   * Inside a dungeon: the kill BANKS score. Nothing drops now; the whole
+--     total is cashed out through the same pity pools on run end.
+--   * Overworld: the kill converts to score immediately and rolls every
+--     rarity independently against its own dry streak.
+--
+-- Both paths share ONE dry-streak pool per player (LootPityService), so
+-- dungeon progress and overworld progress are the same pity.
+-- ---------------------------------------------------------------------
+local function spawnGeneratedItem(item, killingBlowPlayer, deathPos, ownerUserId, scatterIndex)
+    local okTpl, template = pcall(function() return item:toGrantTemplate() end)
+    if not okTpl or not template then return scatterIndex end
+    local valid, errTpl = Types.ValidateItemTemplate(template)
+    if not valid then
+        warn("[LootService] invalid template: " .. tostring(errTpl))
+        return scatterIndex
+    end
+    local okSpawn, lootId = pcall(function()
+        return WorldLoot.SpawnMobDrop(deathPos, ownerUserId, {
+            kind = "item_template", template = template,
+        }, scatterIndex)
+    end)
+    if okSpawn and lootId then
+        print(string.format("[LootService] %s dropped %s (%s)",
+            killingBlowPlayer.Name, template.name, tostring(template.rarity)))
+        return scatterIndex + 1
+    end
+    return scatterIndex
+end
+
+local function tryDropGearByScore(mob, tier, level, killingBlowPlayer, deathPos, ownerUserId, scatterIndex)
+    local Pity = require(ServerScriptService:WaitForChild("LootPityService"))
+    local DungeonScore = require(ServerScriptService:WaitForChild("DungeonScoreService"))
+
+    local contribution = 1
+    if mob.DamageTracker then
+        local total, mine = 0, 0
+        for uid, dmg in pairs(mob.DamageTracker) do
+            total = total + dmg
+            if uid == ownerUserId then mine = dmg end
+        end
+        if total > 0 then contribution = mine / total end
+    end
+
+    -- In a dungeon the score is banked, not spent.
+    if DungeonScore.IsInRun(killingBlowPlayer) then
+        DungeonScore.AddKill(killingBlowPlayer, mob, contribution)
+        return scatterIndex
+    end
+
+    local items = Pity.OnKill(killingBlowPlayer, mob, contribution)
+    for _, item in ipairs(items) do
+        scatterIndex = spawnGeneratedItem(item, killingBlowPlayer, deathPos, ownerUserId, scatterIndex)
+    end
+    return scatterIndex
+end
+
+-- Boss / named-elite Mythic: FLAT chance, no pity, no score. Only players
+-- alive at the moment of death are eligible.
+local function tryDropMythic(mob, killingBlowPlayer, deathPos, scatterIndex)
+    local mobId = mob.MobID
+    if not mobId then return scatterIndex end
+    local MythicDefs = require(ReplicatedStorage:WaitForChild("MythicItemDefs"))
+    if not MythicDefs.GetDropSpec(mobId) then return scatterIndex end
+
+    local BossLoot = require(ServerScriptService:WaitForChild("DungeonBossLootService"))
+    local results = BossLoot.OnBossKilledForAll(mob, deathPos)
+    if #results > 0 then
+        for _, r in ipairs(results) do
+            print(string.format("[LootService] MYTHIC to %s: %s", r.player.Name, tostring(r.item.name)))
+        end
+    end
+    return scatterIndex + #results
+end
+
 function LootService.onMobDied(mob, killingBlowPlayer)
     if not killingBlowPlayer or not killingBlowPlayer.Parent then return end
 
@@ -267,8 +369,35 @@ function LootService.onMobDied(mob, killingBlowPlayer)
     -- Each roll is independent; scatterIndex only advances when a roll
     -- actually spawns a pickup, so drops stay tightly clustered.
     scatterIndex = tryDropCoins(tier, elite, killingBlowPlayer, deathPos, ownerUserId, scatterIndex)
-    scatterIndex = tryDropKeyFragment(tier, deathPos, ownerUserId, scatterIndex)
-    tryDropGear(tier, level, elite, killingBlowPlayer, deathPos, ownerUserId, scatterIndex)
+    scatterIndex = tryDropKeyFragment(tier, deathPos, ownerUserId, scatterIndex, killingBlowPlayer)
+    scatterIndex = tryDropGearByScore(mob, tier, level, killingBlowPlayer, deathPos, ownerUserId, scatterIndex)
+    scatterIndex = tryDropMythic(mob, killingBlowPlayer, deathPos, scatterIndex)
+
+    -- Boss death ends the run: cash everyone out, then open the exit window.
+    -- Players are NOT ejected -- they get a grace period to loot and regroup
+    -- before being pulled to hearthstone.
+    if mob.Stats and mob.Stats.IsBoss then
+        task.defer(function()
+            local okRun, runSvc = pcall(function()
+                return require(ServerScriptService:WaitForChild("DungeonRunService", 5))
+            end)
+            if not okRun or not runSvc then return end
+
+            local DungeonScore = require(ServerScriptService:WaitForChild("DungeonScoreService"))
+            local cleared = {}
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if DungeonScore.IsInRun(plr) then
+                    table.insert(cleared, plr)
+                end
+            end
+            if #cleared == 0 then return end
+
+            for _, plr in ipairs(cleared) do
+                pcall(runSvc.EndRunFor, plr, "cleared")
+            end
+            pcall(runSvc.BeginExitWindow, cleared)
+        end)
+    end
 end
 
 return LootService

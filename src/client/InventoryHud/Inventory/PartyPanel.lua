@@ -11,6 +11,7 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
 
 local React = require(ReplicatedStorage.Packages.React)
 local PanelShell = require(script.Parent:WaitForChild("PanelShell"))
@@ -85,7 +86,7 @@ local function PartyPanel(props: { onClose: () -> () })
 				LayoutOrder = i,
 				Size = UDim2.new(1, 0, 0, 24),
 				BackgroundTransparency = 1,
-				Font = Enum.Font.GothamMedium,
+				FontFace = UIFonts.BodyMedium,
 				TextSize = 14,
 				TextColor3 = (m.userId == myParty.leaderUserId) and Color3.fromRGB(255, 220, 130)
 					or Color3.fromRGB(220, 220, 225),
@@ -106,7 +107,7 @@ local function PartyPanel(props: { onClose: () -> () })
 				Size = UDim2.new(1, 0, 0, 28),
 				BackgroundColor3 = Color3.fromRGB(55, 95, 65),
 				BorderSizePixel = 0,
-				Font = Enum.Font.GothamBold,
+				FontFace = UIFonts.BodyBold,
 				TextSize = 13,
 				TextColor3 = Color3.new(1, 1, 1),
 				Text = "Invite " .. display,
@@ -129,7 +130,7 @@ local function PartyPanel(props: { onClose: () -> () })
 			Status = e("TextLabel", {
 				Size = UDim2.new(1, 0, 0, 18),
 				BackgroundTransparency = 1,
-				Font = Enum.Font.Gotham,
+				FontFace = UIFonts.Body,
 				TextSize = 12,
 				TextColor3 = Color3.fromRGB(150, 200, 150),
 				TextXAlignment = Enum.TextXAlignment.Left,
@@ -140,7 +141,7 @@ local function PartyPanel(props: { onClose: () -> () })
 				Position = UDim2.fromOffset(0, 26),
 				Size = UDim2.new(1, 0, 0, 24),
 				BackgroundTransparency = 1,
-				Font = Enum.Font.GothamBold,
+				FontFace = UIFonts.BodyBold,
 				TextSize = 16,
 				TextColor3 = Color3.fromRGB(200, 190, 175),
 				TextXAlignment = Enum.TextXAlignment.Left,
@@ -158,7 +159,7 @@ local function PartyPanel(props: { onClose: () -> () })
 				Size = UDim2.fromOffset(140, 32),
 				BackgroundColor3 = inParty and Color3.fromRGB(40, 40, 40) or Color3.fromRGB(50, 80, 55),
 				BorderSizePixel = 0,
-				Font = Enum.Font.GothamBold,
+				FontFace = UIFonts.BodyBold,
 				TextSize = 14,
 				TextColor3 = inParty and Color3.fromRGB(120, 120, 120) or Color3.new(1, 1, 1),
 				Text = "Create Party",
@@ -173,7 +174,7 @@ local function PartyPanel(props: { onClose: () -> () })
 				Size = UDim2.fromOffset(120, 32),
 				BackgroundColor3 = inParty and Color3.fromRGB(120, 45, 45) or Color3.fromRGB(40, 40, 40),
 				BorderSizePixel = 0,
-				Font = Enum.Font.GothamBold,
+				FontFace = UIFonts.BodyBold,
 				TextSize = 14,
 				TextColor3 = inParty and Color3.new(1, 1, 1) or Color3.fromRGB(120, 120, 120),
 				Text = "Leave Party",
@@ -188,7 +189,7 @@ local function PartyPanel(props: { onClose: () -> () })
 				Size = UDim2.fromOffset(140, 32),
 				BackgroundColor3 = Color3.fromRGB(50, 70, 90),
 				BorderSizePixel = 0,
-				Font = Enum.Font.GothamBold,
+				FontFace = UIFonts.BodyBold,
 				TextSize = 14,
 				TextColor3 = Color3.new(1, 1, 1),
 				Text = inviteOpen and "Hide Players" or "Invite...",

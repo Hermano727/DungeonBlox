@@ -16,7 +16,7 @@ local UserInputService = game:GetService("UserInputService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Types = require(ReplicatedStorage:WaitForChild("DungeonProfileTypes"))
+local Types = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
 local DungeonMenuNet = require(script.Parent:WaitForChild("DungeonMenuNet"))
 local InventoryHotbarRules = require(script.Parent:WaitForChild("InventoryHotbarRules"))
@@ -232,14 +232,24 @@ local function isMenuOpen()
 	return g and g:IsA("ScreenGui") and g.Enabled
 end
 
-local KEY_TO_SLOT = Keys.HotbarSlot
+-- Hover + number-key QUICK-EQUIP (post hotbar-refactor shape): Keys.ToolSlot maps a
+-- keycode to an equip-panel SLOT NAME ("Weapon"|"Bow"|"Pickaxe"|"FishingSpear"), not a
+-- 1-9 hotbar index -- the freeform 9-slot hotbar this used to key off of
+-- (Keys.HotbarSlot, SetHotbar/SwapHotbar) no longer exists: KeybindConfig dropped
+-- HotbarSlot for ToolSlot, and ProfileBootstrap.server.lua's DungeonInventoryAct
+-- dispatcher never implemented SetHotbar/SwapHotbar in the first place (only
+-- SetBagSlot/SwapBagSlot). Indexing the old (now-nil) Keys.HotbarSlot table crashed with
+-- "attempt to index nil with EnumItem" every time a 1-4 key was pressed with the Skills
+-- menu open. Rewritten to equip the hovered bag item into its matching tool slot via the
+-- same real DungeonMenuNet.requestEquip(...) call the drag-to-equip gesture already uses.
+local KEY_TO_TOOL_SLOT = Keys.ToolSlot
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if gameProcessed then
 		return
 	end
-	local targetSlot = KEY_TO_SLOT[input.KeyCode]
-	if not targetSlot then
+	local targetToolSlot = KEY_TO_TOOL_SLOT[input.KeyCode]
+	if not targetToolSlot then
 		return
 	end
 	if not isMenuOpen() then
@@ -252,9 +262,9 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 			return
 		end
 		local it = getItemFromProfile(profile, hover.bagUuid)
-		performAssignToHotbar(hover.bagUuid, targetSlot, it)
-	elseif hover.kind == "hotbar" and type(hover.hotbarIndex) == "number" then
-		performHotbarToHotbarSwap(hover.hotbarIndex, targetSlot)
+		if it and allowedEquipSlotForItem(it) == targetToolSlot then
+			DungeonMenuNet.requestEquip(hover.bagUuid)
+		end
 	end
 end)
 

@@ -54,7 +54,7 @@ local panel = Instance.new("Frame")
 panel.Name            = "Panel"
 panel.AnchorPoint     = Vector2.new(0.5, 0.5)
 panel.Position        = UDim2.new(0.5, 0, 0.5, 0)
-panel.Size            = UDim2.fromOffset(420, 440)
+panel.Size            = UDim2.fromOffset(840, 440)
 panel.BackgroundColor3 = Color3.fromRGB(22, 15, 15)
 panel.BorderSizePixel = 0
 panel.ZIndex          = 2
@@ -295,8 +295,73 @@ for i, c in ipairs(consumables) do
         conW, c.label, ITEM_COLOR, c.id, c.qty)
 end
 
+local setStatus
+
+-- Mythics row.
+-- Mythic is deliberately absent from ItemConfig.RARITY_ORDER (so it can never
+-- roll from an ordinary kill), which means the normal rarity dropdown cannot
+-- express it. These buttons instead route through DevSpawnItem's Mythic
+-- branch -> MythicItemBuilder, so what you get is the REAL boss drop with its
+-- hand-authored fixed substats, not a random roll wearing a Mythic label.
+-- Populated from MythicItemDefs so adding a boss item shows up here for free.
+local MythicDefs = require(ReplicatedStorage:WaitForChild("MythicItemDefs"))
+local rfSpawn = ReplicatedStorage:WaitForChild("GameEvents", 30)
+rfSpawn = rfSpawn and rfSpawn:WaitForChild("DevSpawnItem", 30)
+
+local mythLabel = Instance.new("TextLabel", content)
+mythLabel.BackgroundTransparency = 1
+mythLabel.Position = UDim2.new(0, 0, 0, 296)
+mythLabel.Size     = UDim2.fromOffset(70, 13)
+mythLabel.Font     = Enum.Font.Gotham
+mythLabel.TextSize = 9
+mythLabel.TextColor3 = MythicDefs.RARITY_COLOR
+mythLabel.Text     = "Mythics"
+mythLabel.ZIndex   = 4
+
+local function makeMythicBtn(x, y, w, key, def)
+    local btn = Instance.new("TextButton", content)
+    btn.Position         = UDim2.new(0, x, 0, y)
+    btn.Size             = UDim2.fromOffset(w, 26)
+    btn.BackgroundColor3 = MythicDefs.RARITY_COLOR
+    btn.BorderSizePixel  = 0
+    btn.Font             = Enum.Font.GothamMedium
+    btn.TextSize         = 10
+    btn.TextColor3       = Color3.new(1, 1, 1)
+    btn.Text             = def.DisplayName or key
+    btn.ZIndex           = 4
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
+    btn.Activated:Connect(function()
+        if not rfSpawn then
+            setStatus("DevSpawnItem remote missing", true)
+            return
+        end
+        btn.Active = false
+        local ok, res = pcall(function()
+            return rfSpawn:InvokeServer({
+                Mythic = key,
+                Level  = (def.BaseStatsAs and def.BaseStatsAs.level) or 21,
+                Count  = 1,
+            })
+        end)
+        btn.Active = true
+        local good = ok and type(res) == "table" and res.ok
+        setStatus(good and ("Granted: " .. (def.DisplayName or key))
+                       or ("Failed: " .. tostring(ok and (res and res.error) or res)), not good)
+    end)
+end
+
+do
+    local keys = {}
+    for k in pairs(MythicDefs.Items) do table.insert(keys, k) end
+    table.sort(keys)
+    local mw = 118
+    for i, k in ipairs(keys) do
+        makeMythicBtn(fragX + (i-1)*(mw+3), 292, mw, k, MythicDefs.Items[k])
+    end
+end
+
 -- ─── Logic ───
-local function setStatus(msg, isError)
+function setStatus(msg, isError)
     statusLbl.Text       = msg
     statusLbl.TextColor3 = isError
         and Color3.fromRGB(255, 98, 98)

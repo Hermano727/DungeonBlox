@@ -24,6 +24,7 @@ return {
 	TRAINING_SWORD = {
 		MeshId    = "rbxassetid://88260580369470",
 		TextureId = "rbxassetid://94891321674818",
-		GripDrop  = -1.295,
+		-- 70% overall scale, with 5% extra length along the blade axis.
+		GripDrop  = -0.951825,
 	},
 }

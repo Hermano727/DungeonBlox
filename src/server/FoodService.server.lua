@@ -7,14 +7,14 @@
 	  2. Tool LocalScript counts down TimeToEat (instant for fish), then fires EatFoodRequest with the
 	     item UUID. Cancellation (release / unequip) prevents the fire.
 	  3. This service validates ownership + Kind, then applies hunger and BuffService buffs, then
-	     consumes 1 of the item via DungeonProfileService.ConsumeItemId.
+	     consumes 1 of the item via ProfileService.ConsumeItemId.
 ]]
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
-local DungeonProfile = require(ServerScriptService:WaitForChild("DungeonProfileService"))
+local DungeonProfile = require(ServerScriptService:WaitForChild("ProfileService"))
 local HungerData = require(ServerScriptService:WaitForChild("HungerData"))
 local BuffService = require(ServerScriptService:WaitForChild("BuffService"))
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
@@ -53,7 +53,7 @@ EatFoodRequest.OnServerEvent:Connect(function(player, itemUuid)
 	end
 
 	if cfg.hungerAmount > 0 then
-		HungerData.addHunger(player, cfg.hungerAmount)
+		HungerData.eat(player, cfg.hungerAmount)
 	end
 
 	if #cfg.buffs > 0 then

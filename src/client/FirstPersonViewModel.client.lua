@@ -1,10 +1,26 @@
 -- First Person ViewModel System
--- Allows player to see their own body in first person with realistic camera
+-- Custom Scriptable camera: lets the player see their own body in first
+-- person, drives a fixed-distance Minecraft-style over-the-shoulder view
+-- on Keys.TogglePerspective (R), and (since it never touches
+-- Player.CameraMode) never fights CursorManager -- Ctrl-freelook works
+-- correctly here because Roblox's stock camera controller, which forces
+-- MouseBehavior back to LockCenter every frame in real first person, is
+-- never in the loop at all.
+--
+-- This is the ACTIVE perspective/camera system. It replaced
+-- PerspectiveToggle.client.lua (now disabled, kept for reference), which
+-- used Roblox's stock camera modes specifically to avoid an old conflict
+-- with the movement system. That conflict no longer reproduces -- verified
+-- by re-enabling this script and playtesting -- so this is back to being
+-- the one true camera driver. If movement ever visibly jitters/fights
+-- again, that's the thing to suspect first.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindConfig"))
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Keys = require(ReplicatedStorage:WaitForChild("KeybindConfig"))
+local VideoSettings = require(ReplicatedStorage:WaitForChild("VideoSettings"))
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
@@ -12,17 +28,21 @@ local camera = workspace.CurrentCamera
 
 -- CAMERA POSITION SETTINGS - ADJUST HERE
 
--- CAMERA_OFFSET controls where the camera sits relative to your head
+-- The 5-stud StarterCharacter's invisible Head is already at eye height:
+-- 4.5 studs above the mesh's feet (0.5 below the top of the head).
+-- The old rig's +0.95 Y correction put the camera above this model.
+-- CAMERA_OFFSET is relative to that anchor, rotated by yaw only.
 -- Vector3.new(X, Y, Z) where:
 --   X = left/right offset (negative = left, positive = right)
 --   Y = up/down offset (negative = down, positive = up)
 --   Z = forward/back offset (negative = forward, positive = back)
 -- Example: Vector3.new(0, 0, 0) = center of head
---          Vector3.new(0, 0.2, 0.3) = slightly up and forward
-local CAMERA_OFFSET = Vector3.new(0, 0.95, 0)
+--          Vector3.new(0, 0.2, -0.3) = slightly up and forward
+local CAMERA_OFFSET = Vector3.new(0, 0, -0.5)
 
--- Camera rotation sensitivity
-local SENSITIVITY = 0.003
+-- Camera rotation sensitivity now lives in VideoSettings.sensitivity (Settings
+-- menu Video tab) -- read live below instead of a cached local, so dragging
+-- the slider takes effect immediately without a respawn.
 
 -- PERSPECTIVE MODES (Minecraft-style F5 cycling, bound to Keys.TogglePerspective)
 --   1 = first person       - camera at the head, original behaviour
@@ -79,6 +99,7 @@ local function setupFirstPersonCamera(character)
 	local humanoid = character:WaitForChild("Humanoid")
 	local head = character:WaitForChild("Head")
 	local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+	local headBone = nil
 
 	print("[FirstPersonViewModel] Setting up first person camera")
 
@@ -114,11 +135,12 @@ local function setupFirstPersonCamera(character)
 				return
 			end
 			local delta = input.Delta
+			local sensitivity = VideoSettings.sensitivity
 
 			-- Update rotation (yaw and pitch)
 			cameraRotation = Vector2.new(
-				math.clamp(cameraRotation.X - delta.Y * SENSITIVITY, -math.pi/2 + 0.1, math.pi/2 - 0.1), -- Pitch (up/down) with limits
-				cameraRotation.Y - delta.X * SENSITIVITY  -- Yaw (left/right)
+				math.clamp(cameraRotation.X - delta.Y * sensitivity, -math.pi/2 + 0.1, math.pi/2 - 0.1), -- Pitch (up/down) with limits
+				cameraRotation.Y - delta.X * sensitivity  -- Yaw (left/right)
 			)
 		end
 	end)
@@ -126,11 +148,32 @@ local function setupFirstPersonCamera(character)
 	-- Camera update function
 	local function updateCamera()
 		if head and head.Parent and humanoidRootPart and humanoidRootPart.Parent then
-			-- Create rotation CFrame from camera angles
-			local cameraCFrame = CFrame.new(head.Position) *
-				CFrame.Angles(0, cameraRotation.Y, 0) *  -- Yaw (horizontal rotation)
-				CFrame.Angles(cameraRotation.X, 0, 0) *  -- Pitch (vertical rotation)
-				CFrame.new(CAMERA_OFFSET)  -- Apply offset
+			local yaw = CFrame.Angles(0, cameraRotation.Y, 0)
+			-- Align the character before measuring its animated forward lean.
+			humanoidRootPart.CFrame = CFrame.new(humanoidRootPart.Position) * yaw
+			local eyePosition = head.Position
+			if perspective == PERSPECTIVE_FIRST then
+				if not headBone or not headBone.Parent then
+					local mesh = character:FindFirstChild("Hero_Character")
+					local candidate = mesh and mesh:FindFirstChild("Head", true)
+					headBone = candidate and candidate:IsA("Bone") and candidate or nil
+				end
+				if headBone then
+					-- The helper Head stays still while walk/run poses lean forward.
+					-- Follow only that forward displacement, keeping height and lateral
+					-- position steady. Blended poses also ease this back when stopping.
+					local displacement = headBone.TransformedWorldCFrame.Position - headBone.WorldPosition
+					local forwardLean = math.max(0, displacement:Dot(yaw.LookVector))
+					eyePosition += yaw.LookVector * forwardLean
+				end
+			end
+
+			-- Position at eye height before pitching, so looking up/down cannot
+			-- orbit the camera around the head if an offset is tuned later.
+			local cameraCFrame = CFrame.new(eyePosition) *
+				yaw *
+				CFrame.new(CAMERA_OFFSET) *
+				CFrame.Angles(cameraRotation.X, 0, 0)  -- Pitch (vertical rotation)
 
 			if perspective == PERSPECTIVE_THIRD then
 				local focus = cameraCFrame.Position + Vector3.new(0, THIRD_HEIGHT, 0)
@@ -146,8 +189,6 @@ local function setupFirstPersonCamera(character)
 
 			camera.CFrame = cameraCFrame
 
-			-- Rotate character to face camera direction (only horizontal)
-			humanoidRootPart.CFrame = CFrame.new(humanoidRootPart.Position) * CFrame.Angles(0, cameraRotation.Y, 0)
 		end
 	end
 

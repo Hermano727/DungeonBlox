@@ -2,7 +2,7 @@
 	RemoteUtils
 	Small "ensure this Instance exists with the right ClassName, recreate it if
 	something else squatted the name" helpers. Several services (PartyService,
-	ZoneService, PotionService, DungeonBootstrap, and others) each hand-rolled
+	ZoneService, PotionService, ProfileBootstrap, and others) each hand-rolled
 	their own copy of this exact pattern; this module gives new/updated services
 	a single place to pull it from instead of pasting another copy.
 

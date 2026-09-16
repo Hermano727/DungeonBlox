@@ -1,12 +1,20 @@
 --!strict
---  ContextMenu -- small right-click popup. First pass only offers Equip / Swap / Unequip
---  (per spec); more actions (apply scroll, salvage, etc.) come later.
+--  ContextMenu -- small right-click popup. Options are supplied by the caller
+--  (Equip/Swap/Unequip, Drop, Trash today; more -- apply scroll, salvage, etc. --
+--  can come later the same way).
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
 local React = require(ReplicatedStorage.Packages.React)
 local UITheme = require(ReplicatedStorage:WaitForChild("UITheme"))
 local e = React.createElement
 
 export type MenuOption = { text: string, onClick: () -> () }
+
+-- Kept in lockstep with the render function's actual box below (240 fixed width, 36px
+-- rows, 2px UIListLayout padding, 6px frame padding on every side) so EstimateSize can
+-- predict the real rendered size exactly -- see Tooltip.lua's EstimateSize for why this
+-- matters (clamping an AutomaticSize box against the viewport before it ever renders).
+local ROW_HEIGHT, ROW_PADDING, FRAME_PADDING, WIDTH = 36, 2, 12, 240
 
 local function ContextMenu(props: { position: Vector2, options: { MenuOption }, onDismiss: () -> () })
 	local rows: { [string]: any } = {
@@ -23,7 +31,7 @@ local function ContextMenu(props: { position: Vector2, options: { MenuOption }, 
 			BorderSizePixel = 0,
 			Text = opt.text,
 			TextWrapped = true,
-			Font = Enum.Font.GothamMedium,
+			FontFace = UIFonts.BodyMedium,
 			TextSize = 15,
 			TextColor3 = Color3.new(1, 1, 1),
 			[React.Event.Activated] = function()
@@ -35,10 +43,12 @@ local function ContextMenu(props: { position: Vector2, options: { MenuOption }, 
 		})
 	end
 
+	-- Position is the final, already-clamped top-left corner -- the caller
+	-- (Inventory/init.lua) decides where that is, using EstimateSize below.
 	return e("Frame", {
 		Position = UDim2.fromOffset(props.position.X, props.position.Y),
 		AutomaticSize = Enum.AutomaticSize.Y,
-		Size = UDim2.fromOffset(240, 0),
+		Size = UDim2.fromOffset(WIDTH, 0),
 		BackgroundColor3 = Color3.fromRGB(26, 18, 11),
 		BorderSizePixel = 0,
 		ZIndex = 50,
@@ -57,4 +67,16 @@ local function ContextMenu(props: { position: Vector2, options: { MenuOption }, 
 	})
 end
 
-return ContextMenu
+-- Predicts the real rendered size for a menu with `numOptions` rows -- see
+-- Tooltip.EstimateSize for why: clamping needs this before the AutomaticSize frame
+-- above has ever actually rendered.
+local function estimateSize(numOptions: number): Vector2
+	local n = math.max(0, numOptions)
+	local height = FRAME_PADDING + n * ROW_HEIGHT + math.max(0, n - 1) * ROW_PADDING
+	return Vector2.new(WIDTH, height)
+end
+
+return {
+	Component = ContextMenu,
+	EstimateSize = estimateSize,
+}

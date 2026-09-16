@@ -6,13 +6,15 @@
 	  1. Client fires DrinkPotionRequest with an inventory item uuid (must be in hotbar).
 	  2. This service validates ownership + that the item is a known potion, checks/consumes
 	     1 charge from that potion's charge pool, consumes 1 inventory stack via
-	     DungeonProfileService.ConsumeItemId, then starts a heal-over-time tick.
+	     ProfileService.ConsumeItemId, then starts a heal-over-time tick.
 	  3. PotionChargesSync (RemoteEvent) and RequestPotionCharges (RemoteFunction) let the
 	     client show charge count + seconds-until-next-charge (mirrors BuffService's
 	     ActiveBuffsSync / RequestActiveBuffs dual-remote convention).
 
-	Charge regen model (per potion tier, per player):
-	  Each tier has its own pool of up to maxCharges. Charges regenerate ONE AT A TIME via a
+	Charge regen model (ONE shared pool per player, not per tier -- see PotionConfig.
+	SharedCharges header comment, 2026-09-10: "it should be 3 potions IN GENERAL", replacing
+	the old per-tier pools that let 3 Minor + 3 Medium be drunk back to back):
+	  The pool holds up to SharedCharges.maxCharges. Charges regenerate ONE AT A TIME via a
 	  single chained timer (NOT one independent timer per missing charge): when below max,
 	  `nextReadyAt` holds the absolute time the next charge arrives. On completion, if still
 	  below max, nextReadyAt is pushed forward by another regenInterval (chained). Drinking
@@ -28,16 +30,18 @@ local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
-local DungeonProfile = require(ServerScriptService:WaitForChild("DungeonProfileService"))
+local DungeonProfile = require(ServerScriptService:WaitForChild("ProfileService"))
 local ConsumableRequestUtil = require(ReplicatedStorage:WaitForChild("ConsumableRequestUtil"))
 local PotionConfig = require(ReplicatedStorage:WaitForChild("PotionConfig"))
 
--- itemId -> { healPerSecond, duration (seconds healed), maxCharges, regenInterval (seconds per
--- charge), displayName }. Lives in shared/PotionConfig now (see that file's header) so
--- PotionClient's HUD can read the same maxCharges/displayName instead of hardcoding its own copy.
+-- itemId -> { healPerSecond, duration (seconds healed), displayName }. Lives in
+-- shared/PotionConfig now (see that file's header) -- charge count/regen no longer live per
+-- tier here, see SHARED_CHARGES below.
 local POTION_CONFIG = PotionConfig.Tiers
+local SHARED_CHARGES = PotionConfig.SharedCharges
 
--- [userId] = { [itemId] = { count = n, nextReadyAt = clockOrNil } }
+-- [userId] = { count = n, nextReadyAt = clockOrNil } -- ONE shared pool per player (2026-09-10),
+-- not one per potion tier -- see PotionConfig.SharedCharges header comment.
 local chargeState = {}
 -- [userId] = array of { healPerSecond = n, expiresAt = clock }
 local activeHeals = {}
@@ -48,47 +52,23 @@ local DrinkPotionRequest = ConsumableRequestUtil.EnsureRemoteEvent(gameEventsFol
 local PotionChargesSync = ConsumableRequestUtil.EnsureRemoteEvent(gameEventsFolder, "PotionChargesSync")
 local RequestPotionCharges = ConsumableRequestUtil.EnsureRemoteFunction(gameEventsFolder, "RequestPotionCharges")
 
-local function getChargeTable(userId)
-	local t = chargeState[userId]
-	if not t then
-		t = {}
-		chargeState[userId] = t
-	end
-	return t
-end
-
-local function getChargeEntry(userId, itemId)
-	local cfg = POTION_CONFIG[itemId]
-	if not cfg then
-		return nil, nil
-	end
-	local t = getChargeTable(userId)
-	local e = t[itemId]
+local function getChargeEntry(userId)
+	local e = chargeState[userId]
 	if not e then
-		e = { count = cfg.maxCharges, nextReadyAt = nil }
-		t[itemId] = e
+		e = { count = SHARED_CHARGES.maxCharges, nextReadyAt = nil }
+		chargeState[userId] = e
 	end
-	return e, cfg
+	return e
 end
 
 local function snapshotCharges(userId)
-	local t = chargeState[userId]
-	if not t then
-		return {}
-	end
+	local e = chargeState[userId]
 	local now = os.clock()
-	local out = {}
-	for itemId, e in pairs(t) do
-		local cfg = POTION_CONFIG[itemId]
-		out[itemId] = {
-			count = e.count,
-			secondsUntilNext = e.nextReadyAt and math.max(0, e.nextReadyAt - now) or nil,
-			-- Sent so PotionClient never has to assume a fixed charge cap (previously a
-			-- hardcoded "/3" in the HUD label) -- it can read the real per-tier max instead.
-			maxCharges = cfg and cfg.maxCharges or nil,
-		}
-	end
-	return out
+	return {
+		count = e and e.count or SHARED_CHARGES.maxCharges,
+		maxCharges = SHARED_CHARGES.maxCharges,
+		secondsUntilNext = (e and e.nextReadyAt) and math.max(0, e.nextReadyAt - now) or nil,
+	}
 end
 
 local function pushCharges(player)
@@ -125,14 +105,17 @@ DrinkPotionRequest.OnServerEvent:Connect(function(player, itemUuid)
 	if type(item) ~= "table" then return end
 
 	local itemId = item.itemId
-	local entry, cfg = getChargeEntry(player.UserId, itemId)
-	if not entry then return end -- not a known potion
+	local cfg = POTION_CONFIG[itemId]
+	if not cfg then return end -- not a known potion
 
 	-- Item must be in the player's hotbar (i.e. they actually had it equipped/selected to drink).
 	if not ConsumableRequestUtil.FindHotbarSlotForUuid(profile, itemUuid) then
 		return
 	end
 
+	-- Shared pool: whichever tier is drunk, it draws from the same count (see
+	-- PotionConfig.SharedCharges).
+	local entry = getChargeEntry(player.UserId)
 	if entry.count <= 0 then
 		return
 	end
@@ -144,7 +127,7 @@ DrinkPotionRequest.OnServerEvent:Connect(function(player, itemUuid)
 
 	entry.count -= 1
 	if entry.nextReadyAt == nil then
-		entry.nextReadyAt = now + cfg.regenInterval
+		entry.nextReadyAt = now + SHARED_CHARGES.regenInterval
 	end
 
 	local heals = activeHeals[player.UserId]
@@ -188,22 +171,16 @@ RunService.Heartbeat:Connect(function(dt)
 		end
 	end
 
-	-- Charge regen (chained single-timer-per-tier model, see header comment).
-	for uid, t in pairs(chargeState) do
-		local changed = false
-		for itemId, e in pairs(t) do
-			local cfg = POTION_CONFIG[itemId]
-			if cfg and e.nextReadyAt and now >= e.nextReadyAt then
-				e.count = math.min(cfg.maxCharges, e.count + 1)
-				changed = true
-				if e.count < cfg.maxCharges then
-					e.nextReadyAt = e.nextReadyAt + cfg.regenInterval
-				else
-					e.nextReadyAt = nil
-				end
+	-- Charge regen (chained single-timer model, see header comment) -- one shared pool per
+	-- player now, not one per tier.
+	for uid, e in pairs(chargeState) do
+		if e.nextReadyAt and now >= e.nextReadyAt then
+			e.count = math.min(SHARED_CHARGES.maxCharges, e.count + 1)
+			if e.count < SHARED_CHARGES.maxCharges then
+				e.nextReadyAt = e.nextReadyAt + SHARED_CHARGES.regenInterval
+			else
+				e.nextReadyAt = nil
 			end
-		end
-		if changed then
 			local player = Players:GetPlayerByUserId(uid)
 			if player then
 				pushCharges(player)
@@ -214,9 +191,7 @@ end)
 
 Players.PlayerAdded:Connect(function(player)
 	task.defer(function()
-		for itemId in pairs(POTION_CONFIG) do
-			getChargeEntry(player.UserId, itemId)
-		end
+		getChargeEntry(player.UserId)
 		pushCharges(player)
 	end)
 end)

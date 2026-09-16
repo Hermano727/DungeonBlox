@@ -12,6 +12,7 @@ local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindC
 
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
 local UserInputService  = game:GetService("UserInputService")
 
 local MenuMouse       = require(ReplicatedStorage:WaitForChild("CursorUtils"))
@@ -117,7 +118,7 @@ cr(panel,12); sk(panel,2,T.PanelDark)
 local closeBtn=Instance.new("TextButton")
 closeBtn.Size=UDim2.fromOffset(32,32); closeBtn.AnchorPoint=Vector2.new(1,0)
 closeBtn.Position=UDim2.new(1,-8,0,8); closeBtn.BackgroundColor3=T.CloseBtn
-closeBtn.Font=Enum.Font.GothamBold; closeBtn.TextSize=16
+closeBtn.FontFace=UIFonts.BodyBold; closeBtn.TextSize=16
 closeBtn.TextColor3=Color3.new(1,1,1); closeBtn.Text="X"; closeBtn.ZIndex=6; closeBtn.Parent=panel
 cr(closeBtn,6)
 
@@ -139,7 +140,7 @@ for i,tabName in ipairs(TABS) do
 	local b=Instance.new("TextButton")
 	b.Size=UDim2.new(1,-12,0,52); b.Position=UDim2.fromOffset(6,6+(i-1)*58)
 	b.BackgroundColor3=T.SidebarInact; b.BorderSizePixel=0
-	b.Font=Enum.Font.GothamBold; b.TextSize=16; b.TextColor3=T.TextPrimary
+	b.FontFace=UIFonts.BodyBold; b.TextSize=16; b.TextColor3=T.TextPrimary
 	b.Text=tabName; b.ZIndex=4; b.AutoButtonColor=false; b.Parent=sidebar
 	cr(b,8); tabBtns[tabName]=b
 end
@@ -154,7 +155,7 @@ contentArea.ZIndex=3; contentArea.Parent=panel; cr(contentArea,10)
 local tierBtn=Instance.new("TextButton")
 tierBtn.Size=UDim2.fromOffset(124,32); tierBtn.Position=UDim2.fromOffset(10,8)
 tierBtn.BackgroundColor3=T.TierBtn; tierBtn.BorderSizePixel=0
-tierBtn.Font=Enum.Font.GothamBold; tierBtn.TextSize=14
+tierBtn.FontFace=UIFonts.BodyBold; tierBtn.TextSize=14
 tierBtn.TextColor3=Color3.new(1,1,1); tierBtn.Text="Tier 1"
 tierBtn.ZIndex=6; tierBtn.Visible=false; tierBtn.Parent=contentArea; cr(tierBtn,6)
 
@@ -167,7 +168,7 @@ for i=1,5 do
 	local tb=Instance.new("TextButton")
 	tb.Size=UDim2.new(1,-8,0,32); tb.Position=UDim2.fromOffset(4,4+(i-1)*36)
 	tb.BackgroundColor3=Color3.fromRGB(60,38,22); tb.BorderSizePixel=0
-	tb.Font=Enum.Font.GothamMedium; tb.TextSize=14
+	tb.FontFace=UIFonts.BodyMedium; tb.TextSize=14
 	tb.TextColor3=T.TextPrimary; tb.Text="Tier "..i; tb.ZIndex=13; tb.Parent=tierDD; cr(tb,5)
 	local ti=i
 	tb.Activated:Connect(function()
@@ -340,7 +341,7 @@ local function buildSalvageCard(entry,lo)
 	local btn=Instance.new("TextButton")
 	btn.Size=UDim2.fromOffset(96,32); btn.AnchorPoint=Vector2.new(1,0.5)
 	btn.Position=UDim2.new(1,-8,0.5,0); btn.BackgroundColor3=T.Salvage
-	btn.Font=Enum.Font.GothamBold; btn.TextSize=13
+	btn.FontFace=UIFonts.BodyBold; btn.TextSize=13
 	btn.TextColor3=Color3.new(1,1,1); btn.Text="Salvage"; btn.ZIndex=6; btn.Parent=card; cr(btn,6)
 	local capturedItem=item
 	local capturedUuid=itemUuid
@@ -388,7 +389,7 @@ rebuild = function()
 		end)
 		if #rows==0 then
 			local e=Instance.new("TextLabel"); e.BackgroundTransparency=1
-			e.Size=UDim2.new(1,0,0,50); e.Font=Enum.Font.GothamMedium; e.TextSize=13
+			e.Size=UDim2.new(1,0,0,50); e.FontFace=UIFonts.BodyMedium; e.TextSize=13
 			e.TextColor3=T.TextSecond; e.TextWrapped=true
 			e.Text="No unequipped weapons or armor in your bags."; e.Parent=salvScroll
 			return

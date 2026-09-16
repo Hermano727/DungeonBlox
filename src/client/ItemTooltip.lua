@@ -16,7 +16,7 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
-local Types = require(ReplicatedStorage:WaitForChild("DungeonProfileTypes"))
+local Types = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
 local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
 local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
 
@@ -64,7 +64,7 @@ local PCT_STATS     = {
     coinFind=true, block=true, reflect=true, dodge=true, elemRes=true,
 }
 
--- Rarity colors used to live here as a second literal copy of DungeonProfileTypes'
+-- Rarity colors used to live here as a second literal copy of ProfileTypes'
 -- RARITY_COLORS table -- byte-for-byte identical values, just pasted twice. Retuning a
 -- rarity color meant remembering to edit both files (or silently drifting out of sync).
 -- Types.GetRarityColor is the one canonical source DungeonMenuUI and the InventoryHud
@@ -126,10 +126,11 @@ local function addRow(text, color, size, bold, order)
     local l = Instance.new("TextLabel", frame)
     l.BackgroundTransparency = 1
     l.Size             = UDim2.new(1, 0, 0, size + 5)
-    -- Routed through the shared UIFonts table (BodyBold/BodyMedium == GothamBold/GothamMedium,
-    -- so this is a no-op visually) rather than hardcoding Enum.Font here -- if the body font
-    -- family ever changes, this tooltip picks it up automatically instead of being missed.
-    l.Font             = bold and UIFonts.BodyBold or UIFonts.BodyMedium
+    -- Routed through the shared UIFonts table rather than hardcoding a font here -- if the
+    -- body font family ever changes, this tooltip picks it up automatically instead of being
+    -- missed. UIFonts.Body* are Font datatype values (Work Sans via Font.new), not Enum.Font,
+    -- so this must go through FontFace -- assigning them to the legacy .Font property hard-errors.
+    l.FontFace         = bold and UIFonts.BodyBold or UIFonts.BodyMedium
     l.TextSize         = size
     l.TextColor3       = color
     l.TextXAlignment   = Enum.TextXAlignment.Left

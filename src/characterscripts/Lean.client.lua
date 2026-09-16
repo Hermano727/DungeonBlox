@@ -30,11 +30,21 @@ local originalM6dC0 = nil
 -- Track our last applied offset so we can work additively
 local lastLeanOffset = CFrame.new()
 
+-- New custom skeleton (bone-driven skinned mesh, no LowerTorso/RootJoint) has neither
+-- of this script's expected R15/R6 joints -- FindFirstChild (non-yielding) instead of
+-- the old WaitForChild (no timeout, would hang this script's thread forever) here, so
+-- this safely no-ops instead. Lean effect is lost on that rig until a bone-based
+-- rewrite (Bone.Transform can carry the same kind of additive offset Motor6D.C0 did
+-- here) -- not required for the character migration itself.
 if humanoid.RigType == Enum.HumanoidRigType.R15 then
-	local lowerTorso = character:WaitForChild("LowerTorso")
-	m6d = lowerTorso:WaitForChild("Root")
+	local lowerTorso = character:FindFirstChild("LowerTorso")
+	m6d = lowerTorso and lowerTorso:FindFirstChild("Root")
 else
-	m6d = humanoidRootPart.RootJoint
+	m6d = humanoidRootPart:FindFirstChild("RootJoint")
+end
+
+if not m6d then
+	return
 end
 
 -- Store original C0 once

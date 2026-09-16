@@ -7,7 +7,7 @@
 
 local ServerScriptService = game:GetService("ServerScriptService")
 
-local DungeonProfile = require(ServerScriptService:WaitForChild("DungeonProfileService"))
+local DungeonProfile = require(ServerScriptService:WaitForChild("ProfileService"))
 
 local COIN_ITEM_ID = "Coins"
 
