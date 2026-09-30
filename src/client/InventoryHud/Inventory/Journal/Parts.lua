@@ -37,6 +37,27 @@ function Parts.ArtFrame(props: any)
 		BorderSizePixel = 0,
 	}
 	local children = props.children or {}
+	if art and art.Pad and art.SliceCenter then
+		-- Glow around the plate: draw the art bigger than the box by the glow's size, so the
+		-- plate itself fills the box exactly (lines up with the unselected state).
+		local s = props.SliceScale or art.SliceScale or 1
+		local l, t, r, b = art.Pad[1] * s, art.Pad[2] * s, art.Pad[3] * s, art.Pad[4] * s
+		local inner = table.clone(children)
+		inner.Art = e("ImageLabel", {
+			Position = UDim2.fromOffset(-l, -t),
+			Size = UDim2.new(1, l + r, 1, t + b),
+			BackgroundTransparency = 1,
+			Image = art.Image,
+			ImageColor3 = props.ImageColor3,
+			ImageTransparency = props.ImageTransparency or 0,
+			ScaleType = Enum.ScaleType.Slice,
+			SliceCenter = art.SliceCenter,
+			SliceScale = s,
+			ZIndex = props.ZIndex,
+		})
+		base.BackgroundTransparency = 1
+		return e("Frame", base, inner)
+	end
 	if art then
 		base.BackgroundTransparency = 1
 		base.Image = art.Image
@@ -135,7 +156,8 @@ function Parts.ChromeButton(props: any)
 			Size = UDim2.fromOffset(14, 14),
 			BackgroundTransparency = 1,
 			Image = (Style.Art("lock_icon") :: any).Image,
-			ImageTransparency = 0.3,
+			ImageTransparency = 0.2,
+			ScaleType = Enum.ScaleType.Fit,
 			ZIndex = 3,
 		}) or nil,
 	})
@@ -338,6 +360,8 @@ function Parts.Gem(props: { rarity: string, scale: number?, Position: UDim2?, An
 end
 
 function Parts.BarTrough(props: { fill: number, color: Color3, Size: UDim2?, Position: UDim2?, AnchorPoint: Vector2? })
+	local inset = Style.Art("bar_trough") and 4 or 2 -- the art's bronze rim is ~3 px on screen
+	local fill = math.clamp(props.fill, 0, 1)
 	return e(Parts.ArtFrame, {
 		art = "bar_trough",
 		flat = { color = Style.Flat.Trough, edge = Style.Flat.Edge, edgeTransparency = 0.6, corner = 4 },
@@ -346,8 +370,8 @@ function Parts.BarTrough(props: { fill: number, color: Color3, Size: UDim2?, Pos
 		AnchorPoint = props.AnchorPoint,
 		children = {
 			Fill = e("Frame", {
-				Position = UDim2.fromOffset(2, 2),
-				Size = UDim2.new(math.clamp(props.fill, 0, 1), -4 * math.clamp(props.fill, 0, 1), 1, -4),
+				Position = UDim2.fromOffset(inset, inset),
+				Size = UDim2.new(fill, -inset * 2 * fill, 1, -inset * 2),
 				BackgroundColor3 = props.color,
 				BorderSizePixel = 0,
 				ZIndex = 2,
@@ -367,7 +391,8 @@ function Parts.SplitBar(props: { a: number, b: number, height: number?, order: n
 	local share = total > 0 and (math.max(0, props.a) / total) or 0.5
 	local height = props.height or 20
 	return e(Parts.ArtFrame, {
-		art = "split_bar_frame",
+		-- its own ornate frame once one exists; the thin bar track until then
+		art = Style.Art("split_bar_frame") and "split_bar_frame" or "bar_trough",
 		flat = { color = Style.Flat.Trough, edge = Style.Flat.Edge, edgeTransparency = 0.3, corner = 5 },
 		Size = UDim2.new(1, 0, 0, height),
 		LayoutOrder = props.order,
