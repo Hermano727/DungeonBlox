@@ -1964,6 +1964,7 @@ function ProfileService.BuildSnapshotPayload(player)
 	-- The world map's explored bitsets grow with play; the map has its own remote
 	-- (MinimapStateRequest), so they never ride on the profile push.
 	profileWire.map = nil
+	profileWire.activity = nil -- Journal history: served per window by JournalService, not pushed
 	-- Item provenance is server-side forensics; the client has no use for it and
 	-- it would add ~9 KB to every push.
 	--

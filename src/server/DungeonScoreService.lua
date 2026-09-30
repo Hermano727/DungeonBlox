@@ -88,7 +88,7 @@ function DungeonScoreService.EndRun(player, reason, dropPosition)
     elseif reason == "left" then retention = PityConfig.LEAVE_SCORE_RETENTION end
 
     local finalScore = math.floor(run.score * retention)
-    local won   = Pity.ResolveScore(player, run.tier, finalScore)
+    local won, expected = Pity.ResolveScore(player, run.tier, finalScore)
     local items = Pity.GenerateItems(won, run.tier, run.tier * 5)
 
     if #items > 0 and dropPosition then
@@ -109,6 +109,8 @@ function DungeonScoreService.EndRun(player, reason, dropPosition)
         finalScore = finalScore,
         kills      = run.kills,
         rarities   = won,
+        expected   = expected, -- expected drops per rarity (Journal luck), see LootPityService
+        tier       = run.tier,
         items      = items,
         coins      = completed and run.coins or 0,
         xp         = completed and run.xp or 0,

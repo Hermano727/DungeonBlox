@@ -1,39 +1,24 @@
 --!strict
---  QuickNav -- persistent header carousel (StarterGui.quick nav's FigBloxUI export,
---  reworked 2026-09-13 into a sliding carousel per direct request + reference
---  screenshots, then reworked again same day: bigger icons, all 5 visible at once
---  with the two edge ones dimmed, plus arrow buttons and scroll-to-navigate). Lives
---  once at the top of the Inventory panel now (see Inventory/init.lua) instead of
---  being nested inside the main inventory screen -- selecting a destination here
---  (click any icon, the arrow buttons, Left/Right arrow keys, or scrolling while
---  hovering) drives which body Inventory/init.lua renders below it; QuickNav owns
---  its own carousel index internally and reports the selected id (plus which
---  direction the selection moved, for Inventory/init.lua's slide-in/out transition)
---  up via onSelect.
+--  QuickNav -- the Tab menu's top navigation row (2026-09-30 rework: was a sliding
+--  carousel with arrows and 5 visible slots; now EVERY destination sits in one fixed
+--  row across the top at once, like a console game's menu tabs). Click an icon, or use
+--  Left/Right, to move between Inventory / Skills / Stats / Journal / Hearthstone / Party.
 --
---  Carousel mechanics: every destination always exists in the tree, each with a
---  signed offset from the selected one (see computeOffset). Offset drives position
---  (tweened, so changing the selection slides everything). VISIBLE_SPAN slots are
---  shown at once -- 5, per the 2026-09-13 rework ("make it so there is 1 more icon
---  visible on each side... 5 total") -- with the two |offset| == 2 edge icons dimmed
---  to 50% opacity rather than clipped out of view.
+--  Each destination: the backing plate (selected / unselected art), its glyph, and its
+--  name underneath. The selected one is lit and slightly larger; the rest are dimmed
+--  until hovered.
 --
---  2026-09-17: the destination count outgrew the visible row (a 6th, "journal", was
---  added), so offsets beyond VISIBLE_SPAN are no longer guaranteed. Icons outside
---  that range render Visible = false and SNAP rather than tween -- without the snap,
---  the icon wrapping from one end of the ring to the other would visibly fly across
---  the whole carousel. This generalizes to any number of destinations, so adding
---  more later needs no further changes here.
+--  Contract with Inventory/init.lua (unchanged from the carousel, so nothing else moved):
+--    onSelect(key, direction)  fires on every change (and once on mount, direction 0);
+--                              direction is -1 / 1 by where the new tab sits relative to
+--                              the old one, which drives SlidingBody's slide.
+--    resetKey                  bumps when the menu closes -> back to "inventory".
+--  It also publishes the row's bottom-centre point through
+--  ProfileMenusState.SetCarouselAnchor, which HealthClient/EnergyClient hang the vitals
+--  from (name kept for those callers).
 --
---  Backing art: the two reference-image assets (nonselected/selected) sit at
---  ZIndex 1, BEHIND the icon glyph (ZIndex 2, unchanged size/position) -- replacing
---  the hand-drawn procedural diamond Frame the old version drew.
---
---  "Inventory" is a real, selectable destination now (previously panel = nil meant
---  "does nothing, it's already open" back when the main screen was reached by
---  default and QuickNav sat inside it) -- with QuickNav now living in a persistent
---  header above whatever's showing, cycling back to it is how you return to the
---  main bag/equip screen from Skills/Stats/Hearthstone/Party.
+--  Adding a destination: one entry in ICONS (plus its panel in Inventory/init.lua's PANELS).
+--  Tuning: the constants below.
 
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
@@ -43,72 +28,10 @@ local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
 local ProfileMenusState = require(ReplicatedStorage:WaitForChild("ProfileMenusState"))
 local e = React.createElement
 
--- Reference-image backing, layered beneath the icon glyph (per request) instead of the old
--- procedural diamond Frame -- unselected vs. selected are two different source images now,
--- not one shape recolored.
 local BACKING_UNSELECTED = "rbxassetid://131438000506839"
 local BACKING_SELECTED = "rbxassetid://79091640085978"
 
-local LEFT_ARROW_IMAGE = "rbxassetid://84213366573746"
-local RIGHT_ARROW_IMAGE = "rbxassetid://94729541331626"
-
--- Icons + their backing images, sized up from the original baseline (2026-09-13, per direct
--- request). First pass tripled everything (SIZE_MULTIPLIER=3, "200% bigger" taken literally);
--- came back too large on an actual playtest, so dialed back to 2x the same day ("decrease by
--- 33%... instead 2/3 of it" -- 2/3 of the original 3x jump is 2x).
---
--- 2026-09-14 fix: SIZE_MULTIPLIER used to be baked into these design-canvas constants directly,
--- which meant it also scaled DESIGN_H/DESIGN_W below -- the exact values the auto-fit-to-header
--- `scale` (see recompute()) divides the available space by. Since UNIFORM_SIZE and DESIGN_H both
--- carried the same SIZE_MULTIPLIER factor, it canceled out of the final on-screen size
--- (UNIFORM_SIZE * scale) whenever the header's height was the binding dimension -- which it is
--- here, so changing SIZE_MULTIPLIER (tried 0.9) visibly did nothing. Fix: these constants are now
--- fixed baseline design units again, and SIZE_MULTIPLIER is applied once, separately, as an extra
--- factor on top of the auto-fit scale (see the root UIScale + designScale in QuickNav below) --
--- that composes multiplicatively no matter which axis the auto-fit is bound by.
-local SIZE_MULTIPLIER = 0.9
-local UNIFORM_SIZE = 900
-local ICON_SIZE = 740
-local ICON_HOVER_SCALE = 1.18
-local BACKING_HOVER_SCALE = 1.08 -- subtler than the icon's own pop -- it's a big flat image, not a small gem
-local TWEEN_IN = TweenInfo.new(0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-local TWEEN_OUT = TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-
--- Edge icons (|offset| == MAX_VISIBLE_OFFSET) render dimmed instead of clipped out -- both the
--- icon glyph and its backing image share this transparency. Anything beyond that isn't drawn
--- at all (see NavIcon's `hidden`).
-local EDGE_TRANSPARENCY = 0.5
-local VISIBLE_SPAN = 5 -- slots shown at once; must stay odd so the selection sits dead center
-local MAX_VISIBLE_OFFSET = (VISIBLE_SPAN - 1) / 2
-
--- Carousel slide tween -- a touch slower/softer than the hover pop since it's moving a whole
--- icon across the row, not just nudging its own scale.
-local SLIDE_TWEEN = TweenInfo.new(0.26, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-
-local SLOT_SPACING = 1100 -- center-to-center distance between adjacent carousel slots
-local VISIBLE_PAD = 260 -- headroom above/below the icon so a hover-pop scale doesn't clip vertically
-
--- Arrow buttons flank the 5-wide icon row -- their own reserved zone on each side of the
--- design canvas, sized independently of the nav icons themselves.
-local ARROW_SIZE = UNIFORM_SIZE * 0.5
-local ARROW_ZONE = ARROW_SIZE + 400
-local ARROW_HOVER_SCALE = 1.15
-
-local DESIGN_W = SLOT_SPACING * VISIBLE_SPAN + ARROW_ZONE * 2 -- the visible slots plus both arrow zones
-local DESIGN_H = UNIFORM_SIZE + VISIBLE_PAD * 2
-
-local TOOLTIP_OFFSET = 16
-local TOOLTIP_BG = Color3.fromRGB(15, 12, 10)
-local TOOLTIP_TEXT = Color3.fromRGB(255, 255, 255)
-
--- Not too sensitive (per direct request): a mouse-wheel notch only advances the carousel
--- once every SCROLL_COOLDOWN seconds, since a single physical notch can otherwise fire
--- several InputChanged events in a row and skip more than one slot.
-local SCROLL_COOLDOWN = 0.18
-
--- PLACEHOLDER (2026-09-17): the Journal tab has no art of its own yet and is reusing
--- the Stats glyph, so two carousel slots currently show the same image. Swap this one
--- string once a real icon exists.
+-- PLACEHOLDER (2026-09-17): the Journal has no art of its own yet and reuses the Stats glyph.
 local JOURNAL_ICON_PLACEHOLDER = "rbxassetid://113519481797233"
 
 local ICONS = {
@@ -121,453 +44,183 @@ local ICONS = {
 }
 local ICON_COUNT = #ICONS
 
--- Shortest signed distance (in slot units) from `fromIndex` to `toIndex`, wrapped around the
--- ring. With an even icon count the exact antipode has no shorter side and resolves positive,
--- which is fine -- it's outside the visible span either way and renders hidden.
--- Doubles as the left/right "which way did the selection move" signal (see prevIndexRef in
--- QuickNav below) -- a positive result means `toIndex` sits to the right of `fromIndex`.
-local function computeOffset(toIndex: number, fromIndex: number): number
-	local raw = (toIndex - fromIndex) % ICON_COUNT
-	if raw > ICON_COUNT / 2 then
-		raw -= ICON_COUNT
-	end
-	return raw
-end
+local TILE_MAX = 118         -- px, largest a tile gets (the row fits itself to the header)
+local TILE_GAP = 26          -- px between tiles
+local LABEL_H = 22           -- px, the name under each tile
+local GLYPH_FRACTION = 0.72  -- glyph size relative to its backing plate
+local SELECTED_SCALE = 1.08
+local HOVER_SCALE = 1.05
+local DIM_TRANSPARENCY = 0.35 -- unselected, not hovered
+local LABEL_SELECTED = Color3.fromRGB(245, 226, 180)
+local LABEL_IDLE = Color3.fromRGB(176, 164, 150)
+local LABEL_EDGE = Color3.fromRGB(10, 8, 8)
+local TWEEN = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
--- Left/Right, the arrow buttons, and scroll-wheel should only cycle the carousel while the
--- panel is actually open -- this component is mounted once and never torn down
--- (InventoryHud/init.client.lua only toggles the ScreenGui's Enabled), so the connections
--- below stay alive the whole session and need their own visibility check. ProfileMenusState
--- is the same open/closed signal InventoryHud/init.client.lua's setOpen() publishes to.
-local function isMenuOpen(): boolean
-	return ProfileMenusState.IsOpen()
-end
-
-local function NavIcon(props: {
+local function NavTile(props: {
 	image: string,
 	label: string,
-	offset: number,
+	selected: boolean,
+	size: number,
+	order: number,
 	onClick: () -> (),
-	onHoverStart: (string, number, number) -> (),
-	onHoverMove: (number, number) -> (),
-	onHoverEnd: () -> (),
 })
-	local hovered, setHovered = React.useState(false)
-	local backingScaleRef = React.useRef(nil :: UIScale?)
-	local iconScaleRef = React.useRef(nil :: UIScale?)
-	local posRef = React.useRef(nil :: Frame?)
-
-	local selected = props.offset == 0
-	local distance = math.abs(props.offset)
-	local hidden = distance > MAX_VISIBLE_OFFSET
-	local isEdge = distance == MAX_VISIBLE_OFFSET
-	local transparency = isEdge and EDGE_TRANSPARENCY or 0
-
-	-- Hover-pop tweens -- same shape QuickNav has always used. All 5 icons are clickable now
-	-- (even the dimmed edge ones), so hover works everywhere, not just the center 3.
-	React.useEffect(function()
-		local scaleObj = backingScaleRef.current
-		if not scaleObj then
-			return
-		end
-		local target = hovered and BACKING_HOVER_SCALE or 1
-		local info = hovered and TWEEN_IN or TWEEN_OUT
-		TweenService:Create(scaleObj, info, { Scale = target }):Play()
-	end, { hovered })
-
-	React.useEffect(function()
-		local scaleObj = iconScaleRef.current
-		if not scaleObj then
-			return
-		end
-		local target = hovered and ICON_HOVER_SCALE or 1
-		local info = hovered and TWEEN_IN or TWEEN_OUT
-		TweenService:Create(scaleObj, info, { Scale = target }):Play()
-	end, { hovered })
-
-	-- Slide to the new slot whenever `offset` changes -- this (not a snap) is what makes
-	-- selecting a neighbor read as a carousel instead of a row of buttons swapping icons.
-	React.useEffect(function()
-		local inst = posRef.current
-		if not inst then
-			return
-		end
-		local target = UDim2.new(0.5, props.offset * SLOT_SPACING, 0.5, 0)
-		if hidden then
-			-- Nothing to watch, and tweening here is actively wrong: an icon wrapping from
-			-- one end of the ring to the other would slide across the entire carousel.
-			inst.Position = target
-		else
-			TweenService:Create(inst, SLIDE_TWEEN, { Position = target }):Play()
-		end
-	end, { props.offset })
-
-	return e("Frame", {
-		ref = posRef,
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		-- Only matters on first mount -- every offset change after that is picked up by the
-		-- useEffect above instead of this Position prop, since re-setting Position directly on
-		-- every render would fight the in-flight tween.
-		Position = UDim2.new(0.5, props.offset * SLOT_SPACING, 0.5, 0),
-		Size = UDim2.fromOffset(UNIFORM_SIZE, UNIFORM_SIZE),
-		BackgroundTransparency = 1,
-		-- Also kills hit-testing, so an off-row icon can't be clicked or hovered.
-		Visible = not hidden,
-		Active = true,
-		[React.Event.MouseEnter] = function(_, x, y)
-			setHovered(true)
-			props.onHoverStart(props.label, x, y)
-		end,
-		[React.Event.MouseMoved] = function(_, x, y)
-			props.onHoverMove(x, y)
-		end,
-		[React.Event.MouseLeave] = function()
-			setHovered(false)
-			props.onHoverEnd()
-		end,
-	}, {
-		Backing = e("ImageLabel", {
-			Image = selected and BACKING_SELECTED or BACKING_UNSELECTED,
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.fromScale(1, 1),
-			BackgroundTransparency = 1,
-			ImageTransparency = transparency,
-			ScaleType = Enum.ScaleType.Fit,
-			ZIndex = 1,
-		}, {
-			Scale = e("UIScale", { ref = backingScaleRef, Scale = 1 }),
-		}),
-
-		Icon = e("ImageButton", {
-			Image = props.image,
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.fromOffset(ICON_SIZE, ICON_SIZE),
-			BackgroundTransparency = 1,
-			ImageTransparency = transparency,
-			AutoButtonColor = false,
-			Active = true,
-			ZIndex = 2,
-			[React.Event.Activated] = props.onClick,
-		}, {
-			Scale = e("UIScale", { ref = iconScaleRef, Scale = 1 }),
-		}),
-	})
-end
-
-local function ArrowButton(props: { image: string, position: UDim2, onClick: () -> () })
 	local hovered, setHovered = React.useState(false)
 	local scaleRef = React.useRef(nil :: UIScale?)
 
 	React.useEffect(function()
 		local scaleObj = scaleRef.current
-		if not scaleObj then
-			return
-		end
-		local target = hovered and ARROW_HOVER_SCALE or 1
-		local info = hovered and TWEEN_IN or TWEEN_OUT
-		TweenService:Create(scaleObj, info, { Scale = target }):Play()
-	end, { hovered })
+		if not scaleObj then return end
+		local target = props.selected and SELECTED_SCALE or (hovered and HOVER_SCALE or 1)
+		TweenService:Create(scaleObj, TWEEN, { Scale = target }):Play()
+	end, { hovered, props.selected } :: { any })
 
-	return e("ImageButton", {
-		Image = props.image,
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = props.position,
-		Size = UDim2.fromOffset(ARROW_SIZE, ARROW_SIZE),
+	local lit = props.selected or hovered
+	local transparency = lit and 0 or DIM_TRANSPARENCY
+	local size = props.size
+
+	return e("Frame", {
+		LayoutOrder = props.order,
+		Size = UDim2.fromOffset(size, size + LABEL_H),
 		BackgroundTransparency = 1,
-		AutoButtonColor = false,
-		ScaleType = Enum.ScaleType.Fit,
-		ZIndex = 3,
-		[React.Event.Activated] = props.onClick,
-		[React.Event.MouseEnter] = function()
-			setHovered(true)
-		end,
-		[React.Event.MouseLeave] = function()
-			setHovered(false)
-		end,
 	}, {
-		Scale = e("UIScale", { ref = scaleRef, Scale = 1 }),
+		Plate = e("ImageButton", {
+			Size = UDim2.fromOffset(size, size),
+			BackgroundTransparency = 1,
+			Image = props.selected and BACKING_SELECTED or BACKING_UNSELECTED,
+			ImageTransparency = transparency,
+			ScaleType = Enum.ScaleType.Fit,
+			AutoButtonColor = false,
+			[React.Event.Activated] = props.onClick,
+			[React.Event.MouseEnter] = function() setHovered(true) end,
+			[React.Event.MouseLeave] = function() setHovered(false) end,
+		}, {
+			Scale = e("UIScale", { ref = scaleRef, Scale = 1 }),
+			Glyph = e("ImageLabel", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromScale(GLYPH_FRACTION, GLYPH_FRACTION),
+				BackgroundTransparency = 1,
+				Image = props.image,
+				ImageTransparency = transparency,
+				ScaleType = Enum.ScaleType.Fit,
+				ZIndex = 2,
+			}),
+		}),
+		Label = e("TextLabel", {
+			Position = UDim2.fromOffset(0, size),
+			Size = UDim2.new(1, 0, 0, LABEL_H),
+			BackgroundTransparency = 1,
+			Text = props.label,
+			FontFace = UIFonts.DisplayBold,
+			TextSize = 16,
+			TextColor3 = props.selected and LABEL_SELECTED or LABEL_IDLE,
+			TextTransparency = lit and 0 or 0.25,
+			TextStrokeColor3 = LABEL_EDGE,
+			TextStrokeTransparency = 0.5,
+		}),
 	})
 end
 
 local function QuickNav(props: { onSelect: (string, number) -> (), resetKey: number? })
-	local scale, setScale = React.useState(1)
 	local containerRef = React.useRef(nil :: Frame?)
+	local rowRef = React.useRef(nil :: Frame?)
+	local tileSize, setTileSize = React.useState(TILE_MAX)
 	local selectedIndex, setSelectedIndex = React.useState(1)
-	local hover, setHover = React.useState(nil :: { label: string, x: number, y: number }?)
-	local hoveringCarouselRef = React.useRef(false)
-	local lastScrollRef = React.useRef(0)
 	local prevIndexRef = React.useRef(1)
 
+	-- Fit the row to the header: as large as TILE_MAX, smaller if the header is short or narrow.
 	React.useEffect(function()
 		local container = containerRef.current
-		if not container then
-			return
-		end
-		local parent = container.Parent :: GuiObject
+		if not container then return end
 		local function recompute()
-			local avail = parent.AbsoluteSize
-			if avail.X <= 0 or avail.Y <= 0 then
-				return
-			end
-			setScale(math.min(avail.X / DESIGN_W, avail.Y / DESIGN_H))
+			local avail = container.AbsoluteSize
+			if avail.X <= 0 or avail.Y <= 0 then return end
+			local byHeight = avail.Y - LABEL_H
+			local byWidth = (avail.X - TILE_GAP * (ICON_COUNT - 1)) / ICON_COUNT
+			setTileSize(math.max(24, math.floor(math.min(TILE_MAX, byHeight, byWidth))))
 		end
 		recompute()
-		local conn = parent:GetPropertyChangedSignal("AbsoluteSize"):Connect(recompute)
-		return function()
-			conn:Disconnect()
-		end
+		local conn = container:GetPropertyChangedSignal("AbsoluteSize"):Connect(recompute)
+		return function() conn:Disconnect() end
 	end, {})
 
-	-- Publishes the actual rendered icon row's bottom-center point (real screen pixels) so
-	-- HealthClient/EnergyClient can hang the HP/Energy/Hunger/Potion cluster directly beneath
-	-- the carousel (2026-09-13, per direct request) without hand-duplicating this component's
-	-- own scale-to-fit math in two other files -- see ProfileMenusState.SetCarouselAnchor's doc
-	-- comment for why. Reads container.AbsoluteSize/AbsolutePosition directly (not the `scale`
-	-- state above) so this always reflects what actually got rendered, not what render pass is
-	-- mid-flight. UNIFORM_SIZE/2 (not half of DESIGN_H) because DESIGN_H also includes
-	-- VISIBLE_PAD headroom above/below the icons for the hover-pop scale -- using the full
-	-- container bottom would leave an oversized, unintended gap between the icons and whatever
-	-- hangs below them.
+	-- The row's real bottom-centre in screen pixels, for the vitals that hang beneath it.
 	React.useEffect(function()
-		local container = containerRef.current
-		if not container then
-			return
-		end
+		local row = rowRef.current
+		if not row then return end
 		local function publishAnchor()
-			local size = container.AbsoluteSize
-			local pos = container.AbsolutePosition
-			if size.Y <= 0 then
-				return
-			end
-			local scaleY = size.Y / DESIGN_H
-			local centerX = pos.X + size.X / 2
-			local iconBottomY = pos.Y + size.Y / 2 + (UNIFORM_SIZE / 2) * scaleY
-			ProfileMenusState.SetCarouselAnchor(Vector2.new(centerX, iconBottomY))
+			local size, pos = row.AbsoluteSize, row.AbsolutePosition
+			if size.Y <= 0 then return end
+			ProfileMenusState.SetCarouselAnchor(Vector2.new(pos.X + size.X / 2, pos.Y + size.Y))
 		end
 		publishAnchor()
-		local c1 = container:GetPropertyChangedSignal("AbsolutePosition"):Connect(publishAnchor)
-		local c2 = container:GetPropertyChangedSignal("AbsoluteSize"):Connect(publishAnchor)
+		local c1 = row:GetPropertyChangedSignal("AbsolutePosition"):Connect(publishAnchor)
+		local c2 = row:GetPropertyChangedSignal("AbsoluteSize"):Connect(publishAnchor)
 		return function()
 			c1:Disconnect()
 			c2:Disconnect()
 		end
 	end, {})
 
-	-- Reports the selected destination up every time it changes, together with which way it
-	-- moved (-1 left / 0 unchanged / 1 right, via computeOffset's sign) -- Inventory/init.lua
-	-- uses the direction to slide its content area the same way the carousel just moved.
-	-- Fires once on mount too (direction 0), so Inventory/init.lua knows the default is
-	-- "inventory" without duplicating ICONS[1]'s id.
 	React.useEffect(function()
 		local prev = prevIndexRef.current
 		prevIndexRef.current = selectedIndex
-		local delta = computeOffset(selectedIndex, prev)
-		local direction = delta > 0 and 1 or (delta < 0 and -1 or 0)
+		local direction = selectedIndex > prev and 1 or (selectedIndex < prev and -1 or 0)
 		props.onSelect(ICONS[selectedIndex].id, direction)
 	end, { selectedIndex })
 
-	-- resetKey bumps every time the whole Inventory UI closes (see InventoryHud/init.client.lua)
-	-- -- snap the carousel back to "inventory" so reopening doesn't resume on whatever was last
-	-- selected, mirroring the old push/pop stack's reset behavior.
+	-- The menu closed: reopen on Inventory.
 	React.useEffect(function()
 		setSelectedIndex(1)
 	end, { props.resetKey })
 
-	-- Shared by the Left/Right keys, the arrow buttons, and the scroll wheel -- one stepping
-	-- function so all four input paths move the carousel identically.
-	local function stepSelection(delta: number)
-		setSelectedIndex(function(i)
-			if delta < 0 then
-				return ((i - 2) % ICON_COUNT) + 1
-			else
-				return (i % ICON_COUNT) + 1
-			end
-		end)
-	end
-
-	-- Left/Right arrow keys cycle the carousel same as clicking a neighbor. Connected once --
-	-- this component now lives for the whole session (persistent header, never unmounted), so
-	-- isMenuOpen() guards against firing while the Inventory panel is closed.
+	-- Left/Right step along the row (wrapping), only while the menu is open: this component
+	-- is mounted for the whole session and the ScreenGui is just toggled.
 	React.useEffect(function()
 		local conn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
-			if gameProcessed or not isMenuOpen() then
-				return
-			end
+			if gameProcessed or not ProfileMenusState.IsOpen() then return end
 			if input.KeyCode == Enum.KeyCode.Left then
-				stepSelection(-1)
+				setSelectedIndex(function(i) return ((i - 2) % ICON_COUNT) + 1 end)
 			elseif input.KeyCode == Enum.KeyCode.Right then
-				stepSelection(1)
+				setSelectedIndex(function(i) return (i % ICON_COUNT) + 1 end)
 			end
 		end)
-		return function()
-			conn:Disconnect()
-		end
+		return function() conn:Disconnect() end
 	end, {})
 
-	-- Scroll wheel cycles the carousel too, but only while the cursor is actually over it
-	-- (hoveringCarouselRef, set by the root Frame's MouseEnter/MouseLeave below) and gated by
-	-- SCROLL_COOLDOWN so one physical notch can't skip multiple slots ("not too sensitive",
-	-- per direct request). A ref, not React state, for both the hover flag and the cooldown
-	-- clock -- this connection is set up once and needs to read their LIVE values without
-	-- having to reconnect every time either changes.
-	React.useEffect(function()
-		local conn = UserInputService.InputChanged:Connect(function(input, gameProcessed)
-			if gameProcessed or not isMenuOpen() or not hoveringCarouselRef.current then
-				return
-			end
-			if input.UserInputType ~= Enum.UserInputType.MouseWheel then
-				return
-			end
-			local now = os.clock()
-			if now - lastScrollRef.current < SCROLL_COOLDOWN then
-				return
-			end
-			lastScrollRef.current = now
-			-- Scroll up = previous (left), same convention HotbarHud's own slot-scroll uses.
-			stepSelection(input.Position.Z > 0 and -1 or 1)
-		end)
-		return function()
-			conn:Disconnect()
-		end
-	end, {})
-
-	-- Hover state lives up here (not inside NavIcon) so the tooltip can be rendered as a
-	-- sibling of the icon row instead of nested inside one icon's own Frame.
-	local function onHoverStart(label: string, x: number, y: number)
-		local container = containerRef.current
-		if not container then
-			return
-		end
-		local rootPos = container.AbsolutePosition
-		setHover({ label = label, x = x - rootPos.X, y = y - rootPos.Y })
-	end
-
-	local function onHoverMove(x: number, y: number)
-		local container = containerRef.current
-		if not container then
-			return
-		end
-		local rootPos = container.AbsolutePosition
-		setHover(function(prev)
-			if not prev then
-				return prev
-			end
-			return { label = prev.label, x = x - rootPos.X, y = y - rootPos.Y }
-		end)
-	end
-
-	local function onHoverEnd()
-		setHover(nil)
-	end
-
-	local icons: { [string]: any } = {}
+	local tiles: { [string]: any } = {
+		Layout = e("UIListLayout", {
+			FillDirection = Enum.FillDirection.Horizontal,
+			HorizontalAlignment = Enum.HorizontalAlignment.Center,
+			VerticalAlignment = Enum.VerticalAlignment.Center,
+			SortOrder = Enum.SortOrder.LayoutOrder,
+			Padding = UDim.new(0, TILE_GAP),
+		}),
+	}
 	for i, icon in ipairs(ICONS) do
-		icons[icon.id] = e(NavIcon, {
+		tiles[icon.id] = e(NavTile, {
 			image = icon.image,
 			label = icon.label,
-			offset = computeOffset(i, selectedIndex),
-			onClick = function()
-				setSelectedIndex(i)
-			end,
-			onHoverStart = onHoverStart,
-			onHoverMove = onHoverMove,
-			onHoverEnd = onHoverEnd,
+			selected = i == selectedIndex,
+			size = tileSize,
+			order = i,
+			onClick = function() setSelectedIndex(i) end,
 		})
 	end
 
-	-- SIZE_MULTIPLIER is folded in here (not into the design-canvas constants above) -- see the
-	-- 2026-09-14 comment near SIZE_MULTIPLIER's definition for why. This is the ONE place that
-	-- controls final on-screen icon size now.
-	local designScale = math.max(scale * SIZE_MULTIPLIER, 0.0001)
-
 	return e("Frame", {
 		ref = containerRef,
-		Size = UDim2.fromOffset(DESIGN_W, DESIGN_H),
-		Position = UDim2.fromScale(0.5, 0.5),
-		AnchorPoint = Vector2.new(0.5, 0.5),
+		Size = UDim2.fromScale(1, 1),
 		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Active = true,
-		ClipsDescendants = false,
-		[React.Event.MouseEnter] = function()
-			hoveringCarouselRef.current = true
-		end,
-		[React.Event.MouseLeave] = function()
-			hoveringCarouselRef.current = false
-		end,
 	}, {
-		Scale = e("UIScale", { Scale = scale * SIZE_MULTIPLIER }),
-
-		LeftArrow = e(ArrowButton, {
-			image = LEFT_ARROW_IMAGE,
-			position = UDim2.new(0, ARROW_ZONE / 2, 0.5, 0),
-			onClick = function()
-				stepSelection(-1)
-			end,
-		}),
-
-		RightArrow = e(ArrowButton, {
-			image = RIGHT_ARROW_IMAGE,
-			position = UDim2.new(1, -ARROW_ZONE / 2, 0.5, 0),
-			onClick = function()
-				stepSelection(1)
-			end,
-		}),
-
-		Icons = e("Frame", {
-			Size = UDim2.fromScale(1, 1),
+		Row = e("Frame", {
+			ref = rowRef,
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(0, tileSize + LABEL_H),
+			AutomaticSize = Enum.AutomaticSize.X,
 			BackgroundTransparency = 1,
-		}, icons),
-
-		HoverTooltip = hover and e("Frame", {
-			ZIndex = 60,
-			AnchorPoint = Vector2.new(0, 0),
-			-- Bug found 2026-09-13 (playtest report: tooltip renders above the icons, off the
-			-- top of the screen): hover.x/hover.y are already real screen-pixel deltas (see
-			-- onHoverStart below, which subtracts container.AbsolutePosition), but this Frame
-			-- is a descendant of the root-level "Scale" UIScale above, which scales EVERY
-			-- descendant's offset-based Position/Size, not just the icon row it was meant for
-			-- -- so the intended real-pixel offset was getting silently shrunk by `designScale`
-			-- a second time, collapsing the tooltip toward the container's own top-left corner
-			-- (well above the icons themselves, since the design canvas has a lot of vertical
-			-- headroom above them for the hover-pop scale -- see VISIBLE_PAD) instead of
-			-- tracking the cursor. Dividing by designScale here cancels that out, same trick
-			-- CounterScale below already used for this frame's own CONTENT size. math.max(...,
-			-- 0) on the Y term is an extra floor so this can never resolve above the container's
-			-- own top edge even in some future edge case -- "guaranteed safe" per direct
-			-- request, on top of fixing the actual bug.
-			Position = UDim2.fromOffset(
-				(hover.x + TOOLTIP_OFFSET) / designScale,
-				(math.max(hover.y, 0) + TOOLTIP_OFFSET) / designScale
-			),
-			AutomaticSize = Enum.AutomaticSize.XY,
-			Size = UDim2.fromOffset(0, 0),
-			BackgroundColor3 = TOOLTIP_BG,
-			BackgroundTransparency = 0.3,
-			BorderSizePixel = 0,
-		}, {
-			-- Cancels the Root-level UIScale so this frame's own children are plain,
-			-- uncompensated screen pixels (same trick the old in-icon tooltip used).
-			CounterScale = e("UIScale", { Scale = 1 / designScale }),
-			Corner = e("UICorner", { CornerRadius = UDim.new(0, 8) }),
-			Padding = e("UIPadding", {
-				PaddingLeft = UDim.new(0, 14),
-				PaddingRight = UDim.new(0, 14),
-				PaddingTop = UDim.new(0, 8),
-				PaddingBottom = UDim.new(0, 8),
-			}),
-			Text = e("TextLabel", {
-				AutomaticSize = Enum.AutomaticSize.XY,
-				Size = UDim2.fromOffset(0, 0),
-				BackgroundTransparency = 1,
-				Text = hover.label,
-				FontFace = UIFonts.DisplayBold,
-				TextSize = 20,
-				TextColor3 = TOOLTIP_TEXT,
-			}),
-		}) or nil,
+		}, tiles),
 	})
 end
 

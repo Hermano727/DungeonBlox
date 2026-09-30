@@ -185,7 +185,10 @@ Gotchas: never restore `SwingAnimId` tool attribute (reverts on play-stop, becom
 
 The newer React-lua UI — separate from the legacy `DungeonMenuUI` system above — is where Inventory/Skills/Stats/Hearthstone/Party tabs and the bottom quick-nav carousel actually live now. Key files, all under `src/client/InventoryHud/Inventory/` unless noted:
 
-- `QuickNav.lua` — the quick-nav icon carousel (tab switcher) and its hover tooltip. `SIZE_MULTIPLIER` (currently 1.4) scales the whole carousel's icons/backing in one place.
+- `QuickNav.lua` — the Tab menu's top navigation row (2026-09-30: was a sliding carousel). Every destination sits in one fixed row with its name under it; click or Left/Right to move. New destination = one `ICONS` entry + its panel in `Inventory/init.lua`'s `PANELS`. It still publishes `ProfileMenusState.SetCarouselAnchor` (the row's bottom-centre) for the vitals.
+- `JournalPanel.lua` — the Journal: `Journal/Sidebar` beside `Journal/Book`, pages in `PAGES` (Loot Score with its Activity view, Records). Built from `Journal/Parts`, colours only from `Journal/Style`, art from `RS/Assets/Images/JournalUI` with flat fallbacks. Full detail and the art pipeline (`tools/ui_assets/process.py`, MCP `upload_image`): [UI & Networking](./docs/ui-and-networking.md).
+  - Per-tier counters live in `profile.stats.tracking`: `scoreByTier` (total), `dungeonScoreByTier`, `runsClearedByTier`, all written through `ProfileTypes.AddTierCount`.
+  - Activity history: `profile.activity` via `RS/JournalActivity` (not pushed; `GameEvents/JournalRequest` serves one window). Dry streaks come from the same request (`SSS/JournalService`).
 - `Inventory/init.lua` — the tab content area (`ContentArea`); `QUICKNAV_H`/`QUICKNAV_UP_SHIFT`/`CONTENT_UP_SHIFT` control how much vertical room the carousel takes and how far up the whole stack sits.
 - `PanelShell.lua` — shared wrapper every tab panel (`PartyPanel`, `StatsPanel`, `HearthstonePanel`, the inventory tab) renders through; each panel just fills whatever `ContentArea` gives it, so a "gap" or "too small" symptom across multiple tabs is almost always one root-cause fix in `Inventory/init.lua`'s `ContentArea` sizing, not four separate panel bugs.
 - `RS/ProfileMenusState.lua` — shared open/closed state, plus (2026-09-13) the carousel's live screen-position broadcast, see pattern below.

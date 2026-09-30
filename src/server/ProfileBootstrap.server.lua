@@ -657,6 +657,17 @@ rfDevProfile.OnServerInvoke = function(player, action, args)
 		return cleanse()
 	elseif action == "debuff" then
 		return debuff()
+	elseif action == "seedActivity" or action == "clearActivity" then
+		-- Journal Activity page testing (RS/JournalActivity): 30 days of fake sessions on T1.
+		local JournalActivity = require(ReplicatedStorage:WaitForChild("JournalActivity"))
+		local profile = DungeonProfile.Get(player)
+		if not profile then return false, "no_profile" end
+		if action == "seedActivity" then
+			JournalActivity.SeedForTesting(profile, 1)
+		else
+			JournalActivity.Clear(profile)
+		end
+		return true
 	elseif action == "refillHp" then
 		return refillHp()
 	elseif action == "refillEnergy" then

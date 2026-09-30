@@ -105,6 +105,14 @@ function DevProfileTab.Build(ctx)
 	local debuffBtn = mkB(sec, "Debuff", 12 + half + 8, y3 + 20, half, 32, Color3.fromRGB(110, 50, 120))
 	debuffBtn.Activated:Connect(function() act("debuff", nil, "Slowed, blinded, bleeding, +2 poison") end)
 
+	-- Journal Activity page: fake 30 days of T1 history, or wipe it (RS/JournalActivity).
+	local y4 = y3 + 64
+	lbl(sec, "JOURNAL ACTIVITY", 12, y4, 200, 16, 11, ctx.acc, true)
+	local seedBtn = mkB(sec, "Seed activity", 12, y4 + 20, half, 32, Color3.fromRGB(60, 80, 110))
+	seedBtn.Activated:Connect(function() act("seedActivity", nil, "Seeded 30 days of T1 activity") end)
+	local clearBtn = mkB(sec, "Clear activity", 12 + half + 8, y4 + 20, half, 32, Color3.fromRGB(110, 60, 50))
+	clearBtn.Activated:Connect(function() act("clearActivity", nil, "Activity history cleared") end)
+
 	return sec
 end
 

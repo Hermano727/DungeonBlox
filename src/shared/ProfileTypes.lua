@@ -105,6 +105,10 @@ function ProfileTypes.DefaultProfile()
 			revealed = {},
 		},
 
+		-- Journal Activity history: per-tier time buckets of score, kills, runs, drops and
+		-- expected drops (RS/JournalActivity). Stripped from the profile push.
+		activity = {},
+
 		flags = {
 			inRaid = false,
 			teleports = {},
@@ -623,7 +627,14 @@ function ProfileTypes.BumpTracking(profile, key, amount)
 	t[key] = math.max(0, math.floor(tonumber(t[key]) or 0)) + add
 end
 
-function ProfileTypes.AddTierScore(profile, tier, amount)
+-- Adds `amount` to tier `tier` of a dense per-tier counter in stats.tracking (created on
+-- first use). The per-tier counters (all read by the Journal's Loot Score page):
+--   scoreByTier         loot score earned, overworld AND dungeon (the grand total)
+--   dungeonScoreByTier  the dungeon share of it (2026-09-30; older dungeon score sits in
+--                       the total only, so "overworld" = total - dungeon slightly overcounts
+--                       for runs before that date)
+--   runsClearedByTier   dungeon runs cleared (2026-09-30)
+function ProfileTypes.AddTierCount(profile, key, tier, amount)
 	local t = trackingTable(profile)
 	if not t then
 		return
@@ -632,16 +643,20 @@ function ProfileTypes.AddTierScore(profile, tier, amount)
 	if add <= 0 then
 		return
 	end
-	if type(t.scoreByTier) ~= "table" then
-		t.scoreByTier = {}
+	if type(t[key]) ~= "table" then
+		t[key] = {}
 	end
 	-- Normalize every slot, not just the one being written: a hole anywhere in
 	-- the array would reindex when the snapshot is serialized to the client.
 	for i = 1, ProfileTypes.TIER_COUNT do
-		t.scoreByTier[i] = math.max(0, math.floor(tonumber(t.scoreByTier[i]) or 0))
+		t[key][i] = math.max(0, math.floor(tonumber(t[key][i]) or 0))
 	end
 	local idx = math.clamp(math.floor(tonumber(tier) or 1), 1, ProfileTypes.TIER_COUNT)
-	t.scoreByTier[idx] += add
+	t[key][idx] += add
+end
+
+function ProfileTypes.AddTierScore(profile, tier, amount)
+	ProfileTypes.AddTierCount(profile, "scoreByTier", tier, amount)
 end
 
 -- Gives every pre-existing non-stackable item a serial + origin, once.

@@ -1,14 +1,19 @@
 --!strict
---  JournalPanel -- the "Journal" QuickNav destination: lifetime grind totals,
---  one card per system (Combat / Mining / Fishing).
+--  JournalPanel -- the "Journal" QuickNav destination: the Sidebar (Journal/Sidebar, the
+--  top-level pages) beside the open book (Journal/Book) the current page draws itself in.
+--    Loot Score  (default) per-tier score, dry streaks, and the Activity view -- LootScorePage.lua
+--    Records     lifetime grind totals: Combat on the left page, Mining + Fishing on the right
+--  New page: a component that renders a Journal/Book, plus one entry in PAGES below.
+--
+--  Records page notes:
 --
 --  Layout is deliberately NOT the label-left/value-right list StatsPanel uses
 --  (per direct request). Each system gets its own bordered card with an icon
 --  badge, its skill level, and a row of big-number stat tiles -- so a system's
 --  numbers read as a group at a glance instead of dissolving into one long
---  undifferentiated column. The cards live in a ScrollingFrame with an
---  auto-growing canvas, so adding a system later is one more entry in CARDS
---  below and nothing else.
+--  undifferentiated column. The cards stack on the two pages of the book
+--  (Combat left, the rest right), so adding a system later is one more entry
+--  in CARDS below and nothing else.
 --
 --  Data source: profile.stats.tracking (see ProfileTypes' DefaultProfile), the
 --  uncapped lifetime counters QuestProgressService bumps on every kill / ore
@@ -21,9 +26,13 @@ local React = require(ReplicatedStorage.Packages.React)
 local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
 local UITheme = require(ReplicatedStorage:WaitForChild("UITheme"))
 local ItemConfig = require(ReplicatedStorage:WaitForChild("ItemConfig"))
-local PanelShell = require(script.Parent:WaitForChild("PanelShell"))
 local InventoryData = require(script.Parent:WaitForChild("InventoryData"))
 local DungeonMenuNet = require(script.Parent.Parent.Parent:WaitForChild("DungeonMenuNet"))
+local LootScorePage = require(script.Parent:WaitForChild("LootScorePage"))
+local JournalParts = script.Parent:WaitForChild("Journal")
+local Book = require(JournalParts:WaitForChild("Book"))
+local Sidebar = require(JournalParts:WaitForChild("Sidebar"))
+local Style = require(JournalParts:WaitForChild("Style"))
 
 local e = React.createElement
 
@@ -265,31 +274,23 @@ local function CategoryCard(props: {
 	})
 end
 
-local function JournalPanel()
+local function RecordsPage()
 	local snapshot = InventoryData.useSnapshot()
-
-	-- Kills don't push a snapshot (see this file's header), so pull once on open --
-	-- otherwise the totals would be however stale the last unrelated push left them.
-	React.useEffect(function()
-		DungeonMenuNet.requestSync()
-	end, {})
 
 	local profile = snapshot and snapshot.profile
 	local stats = (profile and profile.stats) or {}
 	local tracking = (type(stats.tracking) == "table" and stats.tracking) or {}
 
-	local cards: { [string]: any } = {
-		Layout = e("UIListLayout", {
-			Padding = UDim.new(0, CARD_GAP),
-			SortOrder = Enum.SortOrder.LayoutOrder,
-		}),
-		Padding = e("UIPadding", {
-			PaddingTop = UDim.new(0, 4),
-			PaddingBottom = UDim.new(0, 4),
-			PaddingLeft = UDim.new(0, 2),
-			PaddingRight = UDim.new(0, 10), -- clears the scrollbar
-		}),
-	}
+	-- Combat fills the left page; Mining and Fishing share the right.
+	local function column()
+		return {
+			Layout = e("UIListLayout", {
+				Padding = UDim.new(0, CARD_GAP),
+				SortOrder = Enum.SortOrder.LayoutOrder,
+			}),
+		}
+	end
+	local leftCards, rightCards = column(), column()
 
 	for i, card in ipairs(CARDS) do
 		local skill = stats[card.levelFrom]
@@ -310,7 +311,8 @@ local function JournalPanel()
 			})
 		end
 
-		cards[card.key] = e(CategoryCard, {
+		local target = card.key == "combat" and leftCards or rightCards
+		target[card.key] = e(CategoryCard, {
 			title = card.title,
 			icon = card.icon,
 			accent = card.accent,
@@ -320,22 +322,54 @@ local function JournalPanel()
 		})
 	end
 
-	return e(PanelShell, { title = "Journal" }, {
-		Content = e("ScrollingFrame", {
-			Size = UDim2.new(1, -32, 1, -32),
-			Position = UDim2.fromOffset(16, 16),
+	return e(Book, {
+		left = e("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1 }, leftCards),
+		right = e("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1 }, rightCards),
+	})
+end
+
+------------------------------------------------------------------------------------------
+-- Page menu + page area
+------------------------------------------------------------------------------------------
+
+local PAGES = {
+	{ id = "lootScore", label = "Loot Score", iconArt = "icon_loot_score", component = LootScorePage },
+	{ id = "records",   label = "Records",    iconArt = "icon_records",    component = RecordsPage },
+}
+local GAP = 22
+
+local function JournalPanel()
+	local pageId, setPageId = React.useState(PAGES[1].id)
+
+	-- Kills don't push a snapshot (see the Records notes above), so pull once on open --
+	-- otherwise the totals would be however stale the last unrelated push left them.
+	React.useEffect(function()
+		DungeonMenuNet.requestSync()
+	end, {})
+
+	local page = PAGES[1]
+	for _, entry in ipairs(PAGES) do
+		if entry.id == pageId then page = entry end
+	end
+
+	return e("Frame", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+	}, {
+		Side = e("Frame", {
+			Size = UDim2.new(0, Style.SIDEBAR_W, 1, -Style.TAB_H),
+			Position = UDim2.fromOffset(0, Style.TAB_H),
 			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			-- Auto canvas means a new entry in CARDS just works -- no hand-maintained
-			-- CanvasSize to keep in sync with the card count.
-			CanvasSize = UDim2.new(),
-			AutomaticCanvasSize = Enum.AutomaticSize.Y,
-			ScrollingDirection = Enum.ScrollingDirection.Y,
-			ScrollBarThickness = 6,
-			ScrollBarImageColor3 = THEME.Border,
-			ScrollBarImageTransparency = 0.4,
-			VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar,
-		}, cards),
+		}, {
+			Panel = e(Sidebar, { pages = PAGES, selected = pageId, onSelect = setPageId }),
+		}),
+		Page = e("Frame", {
+			Position = UDim2.fromOffset(Style.SIDEBAR_W + GAP, 0),
+			Size = UDim2.new(1, -(Style.SIDEBAR_W + GAP), 1, 0),
+			BackgroundTransparency = 1,
+		}, {
+			Body = e(page.component, { key = page.id }),
+		}),
 	})
 end
 

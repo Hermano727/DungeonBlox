@@ -26,6 +26,32 @@ The newer React-lua UI — Inventory/Skills/Stats/Hearthstone/Party tabs and the
 
 **UIScale double-scaling gotcha:** a `UIScale` re-scales the offset-based `Position`/`Size` of every descendant, not just its own direct children. A child that computes its own `Position` from already-resolved real screen pixels (e.g. hover-tooltip placement off `AbsolutePosition`) gets shrunk a second time if it lives under an ancestor `UIScale`, and collapses toward the container's corner. Fix: divide the real-pixel offset by the same scale factor before assigning to `Position`.
 
+## Journal (Tab menu -> Journal)
+
+- **Layout:** `Journal/Sidebar` (top-level pages) beside `Journal/Book` (leather cover, two pages, spine, bookmark tabs on the top edge). A page is a component that renders a `Book`; register it in `JournalPanel.lua`'s `PAGES`.
+- **Parts:** `Journal/Parts` has `ArtFrame`, `ChromeButton`, `Heading`, `Divider`, `HelpIcon`, `Gem`, `BarTrough` and `SplitBar`, plus `Journal/ScoreChart`. Each draws its art from `RS/Assets/Images/JournalUI` when uploaded, else a flat stand-in of the same size.
+- **Colours:** only `Journal/Style` picks them. Once `page_paper` art exists, the pages switch to dark ink text.
+- **Loot Score** (`LootScorePage.lua`):
+  - The landing spread is all-time: score, overworld / dungeon split, runs, dry streaks.
+  - "Activity >" goes one level deeper: windows 1H / 24H / 7D / 30D, drops by rarity, score chart, comparison with your average window, and luck (drops found vs expected).
+- **Data:**
+  - Per-tier totals are in `profile.stats.tracking` (`scoreByTier`, `dungeonScoreByTier`, `runsClearedByTier`).
+  - Activity history lives in `profile.activity` (`RS/JournalActivity`: 5-minute buckets for 2 h, hourly for 7 d, daily for 90 d). It's stripped from the profile push and served per window by `GameEvents/JournalRequest` (`SSS/JournalService`).
+  - "Expected" drops are exact: `LootPityService.ResolveScore` sums each roll's real chance.
+  - F8 Profile tab has "Seed activity" / "Clear activity" for testing.
+
+## UI art pipeline
+
+1. **Generate:** the user makes each piece in ChatGPT (one piece per image, transparent background, no text, the blueprint attached as the style reference) and saves it as `assets/ui/incoming/<key>.png`. `<key>` is the registry key.
+2. **Process:** `python tools/ui_assets/process.py [key...]` (`--tile` for seamless textures).
+   - Rejects images without real transparency (including painted checkerboards).
+   - Trims, bleeds edge colour into transparent pixels (no dark halos), caps at 1024 px.
+   - Writes `assets/ui/journal/<key>.png` and prints size, aspect and a starting 9-slice rect.
+3. **Upload:** serve `assets/ui/journal/` with a local http server (`python -m http.server <port>`) and pass the URLs to the Studio MCP `upload_image`. It returns `rbxassetid://` image ids directly (an Open Cloud Decal id would not render in an ImageLabel).
+4. **Register:** fill `RS/Assets/Images/JournalUI` (`Image`, `SliceCenter`, `Aspect`, `TileSize`). Tune `SliceCenter` by eye so the corners never stretch.
+
+`assets/` is git-ignored: the art stays local, and the ids live in the tracked registry.
+
 ## Networking (ReplicatedStorage)
 
 | Name | Type | Dir | Purpose |

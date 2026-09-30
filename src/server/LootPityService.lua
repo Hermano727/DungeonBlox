@@ -74,16 +74,21 @@ end
 
 function LootPityService.ResolveScore(player, tier, score)
     local p = getProgression(player)
-    if not p then return {} end
+    if not p then return {}, {} end
     tier  = math.clamp(tonumber(tier) or 1, 1, 5)
     score = math.floor(tonumber(score) or 0)
-    if score <= 0 then return {} end
+    if score <= 0 then return {}, {} end
 
-    local won = {}
+    -- expected[rarity]: the sum of every roll's real chance (streak included). Actual wins vs
+    -- this is the Journal's luck measure (RS/JournalActivity), so it has to be the true odds
+    -- at each roll, not the base chance.
+    local won, expected = {}, {}
     for _ = 1, score do
         for _, rarity in ipairs(PityConfig.RARITIES) do
             local streak = p.DryStreaks[rarity] + 1
-            if math.random() < PityConfig.GetChance(tier, rarity, streak) then
+            local chance = PityConfig.GetChance(tier, rarity, streak)
+            expected[rarity] = (expected[rarity] or 0) + chance
+            if math.random() < chance then
                 table.insert(won, rarity)
                 p.DryStreaks[rarity] = 0
             else
@@ -91,7 +96,7 @@ function LootPityService.ResolveScore(player, tier, score)
             end
         end
     end
-    return won
+    return won, expected
 end
 
 function LootPityService.GenerateItems(wonRarities, tier, level)
@@ -107,19 +112,20 @@ function LootPityService.GenerateItems(wonRarities, tier, level)
 end
 
 -- Returns items, plus the score this kill actually generated (0 when the
--- contribution gate rejects it). The score is a second return value rather
--- than something recorded here because this service persists to the LEGACY
+-- contribution gate rejects it), plus the won rarities and the expected drops
+-- (see ResolveScore) for the Journal's activity history. These are return values
+-- rather than something recorded here because this service persists to the LEGACY
 -- PlayerDataManager profile -- the lifetime totals live on the modern
 -- ProfileService profile, so LootService records them at the one call site
 -- that sees both the overworld and dungeon paths.
 function LootPityService.OnKill(player, mob, contribution)
     if not player or not mob then return {}, 0 end
     local share = tonumber(contribution) or 1
-    if share < 0.5 and math.random() > share then return {}, 0 end
+    if share < 0.5 and math.random() > share then return {}, 0, {}, {} end
     local tier  = math.clamp(mob.Tier or 1, 1, 5)
     local score = PityConfig.RollScore(LootPityService.GetLootBuff(player))
-    local won   = LootPityService.ResolveScore(player, tier, score)
-    return LootPityService.GenerateItems(won, tier, mob.Stats and mob.Stats.Level), score
+    local won, expected = LootPityService.ResolveScore(player, tier, score)
+    return LootPityService.GenerateItems(won, tier, mob.Stats and mob.Stats.Level), score, won, expected
 end
 
 function LootPityService.DebugDump(player, tier)

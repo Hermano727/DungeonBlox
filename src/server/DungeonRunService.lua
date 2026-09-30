@@ -20,6 +20,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local RunConfig     = require(ReplicatedStorage:WaitForChild("DungeonRunConfig"))
 local PityConfig    = require(ReplicatedStorage:WaitForChild("LootPityConfig"))
 local Types         = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
+local JournalActivity = require(ReplicatedStorage:WaitForChild("JournalActivity"))
 local Pity          = require(ServerScriptService:WaitForChild("LootPityService"))
 local DungeonScore  = require(ServerScriptService:WaitForChild("DungeonScoreService"))
 local DungeonProfile= require(ServerScriptService:WaitForChild("ProfileService"))
@@ -175,8 +176,23 @@ local END_BANNERS = {
 
 function DungeonRunService.EndRunFor(player, reason)
     if not player then return nil end
+    local run = DungeonScore.GetRun(player) -- read before EndRun clears it
     local summary = DungeonScore.EndRun(player, reason or "cleared", nil)
     if not summary then return nil end
+    -- Cleared runs per tier (Journal's Loot Score page), and this run's drops, their odds
+    -- and the clear itself in the Activity history.
+    do
+        local profile = DungeonProfile.Get(player)
+        local cleared = (reason or "cleared") == "cleared"
+        if profile and run then
+            if cleared then Types.AddTierCount(profile, "runsClearedByTier", run.tier, 1) end
+            JournalActivity.Add(profile, run.tier, {
+                r = cleared and 1 or 0,
+                won = summary.rarities,
+                expected = summary.expected,
+            })
+        end
+    end
     InventoryAudit.Note(player, ("run cashed out (%s), %d drop(s)"):format(tostring(reason), #(summary.items or {})))
 
     -- Grant each drop and build a display list that says where it WENT.

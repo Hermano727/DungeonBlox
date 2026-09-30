@@ -18,6 +18,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local Config         = require(ReplicatedStorage:WaitForChild("ItemConfig"))
 local Types          = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
+local JournalActivity = require(ReplicatedStorage:WaitForChild("JournalActivity"))
 local ItemIdentity   = require(ReplicatedStorage:WaitForChild("ItemIdentity"))
 local ItemGenerator  = require(ServerScriptService:WaitForChild("ItemGenerator"))
 local DungeonProfile = require(ServerScriptService:WaitForChild("ProfileService"))
@@ -351,12 +352,26 @@ local function tryDropGearByScore(mob, tier, level, killingBlowPlayer, deathPos,
         -- Credited against the RUN's tier, not the mob's -- that's the tier the
         -- banked score eventually rolls against in DungeonScoreService.EndRun.
         local run = DungeonScore.GetRun(killingBlowPlayer)
-        recordScore((run and run.tier) or tier, gained)
+        local runTier = (run and run.tier) or tier
+        recordScore(runTier, gained)
+        -- The dungeon share, for the Journal's overworld / dungeon split, and the Activity
+        -- history (the drops themselves are recorded when the run cashes out).
+        local profile = DungeonProfile.Get(killingBlowPlayer)
+        if profile then
+            Types.AddTierCount(profile, "dungeonScoreByTier", runTier, gained)
+            JournalActivity.Add(profile, runTier, { d = gained, k = 1 })
+        end
         return scatterIndex
     end
 
-    local items, gained = Pity.OnKill(killingBlowPlayer, mob, contribution)
+    local items, gained, won, expected = Pity.OnKill(killingBlowPlayer, mob, contribution)
     recordScore(tier, gained)
+    do -- Activity history (Journal): this kill's score, the kill, its drops and their odds.
+        local profile = DungeonProfile.Get(killingBlowPlayer)
+        if profile then
+            JournalActivity.Add(profile, tier, { o = gained, k = 1, won = won, expected = expected })
+        end
+    end
     for _, item in ipairs(items) do
         scatterIndex = spawnGeneratedItem(item, killingBlowPlayer, deathPos, ownerUserId, scatterIndex, mob and mob.MobID)
     end
