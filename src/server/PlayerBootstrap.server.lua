@@ -42,7 +42,12 @@ local function onCharacter(player, character)
 
 	local hum = character:WaitForChild("Humanoid")
 	hum.MaxHealth = profile.Combat.MaxHP
-	hum.Health    = profile.Combat.HP
+	-- A new life starts at FULL health. This used to restore profile.Combat.HP, which the
+	-- HealthChanged mirror below had set to 0 on the death: every respawn spawned at 0 HP and
+	-- died again at once (the respawn-and-die loop). ProfileService's push then raises
+	-- MaxHealth to the real derived max and keeps a full bar full.
+	profile.Combat.HP = hum.MaxHealth
+	hum.Health    = hum.MaxHealth
 
 	-- Mirror Humanoid HP onto the profile so any legacy damage source
 	-- that bypasses DamageService still leaves the profile in sync.

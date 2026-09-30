@@ -44,7 +44,7 @@ local evPlace    = makeEvent("DevPlaceSpawner")
 local evDelete   = makeEvent("DevDeleteSpawner")
 local rfList     = makeFunc("DevListSpawners")
 local rfPlaceZone = makeFunc("DevPlaceZone")
-local rfSetZoneMusic = makeFunc("DevSetZoneMusic")
+local rfUpdateZone = makeFunc("DevUpdateZone")
 local rfSpawnItem = makeFunc("DevSpawnItem")
 
 local MobDevSpawnStore = require(ServerScriptService:WaitForChild("MobDevSpawnStore"))
@@ -52,7 +52,10 @@ local NpcDevSpawnStore = require(ServerScriptService:WaitForChild("NpcDevSpawnSt
 local ZoneService      = require(ServerScriptService:WaitForChild("ZoneService"))
 local ItemGenerator         = require(ServerScriptService:WaitForChild("ItemGenerator"))
 local ProfileService = require(ServerScriptService:WaitForChild("ProfileService"))
+local ItemIdentity = require(game:GetService("ReplicatedStorage"):WaitForChild("ItemIdentity"))
 local ItemConfig             = require(ReplicatedStorage:WaitForChild("ItemConfig"))
+local ZoneConfig             = require(ReplicatedStorage:WaitForChild("ZoneConfig"))
+local MobData                = require(ReplicatedStorage:WaitForChild("MobData"))
 
 ---------------------------------------------------------------------------
 -- Spawner folders (created by SpawnerService; wait for them)
@@ -367,6 +370,14 @@ evPlace.OnServerEvent:Connect(function(player, data)
         -- MobManager.ForceSpawnNamedElite.
         local mobId = data.MobId
         if type(mobId) ~= "string" or mobId == "" then return end
+        -- Named elites only. The dev tool's ELITE tab already lists nothing else,
+        -- but this is the real boundary: an ordinary mob forced down this path
+        -- would get a boss bar and the one-at-a-time slot it has no business in.
+        local stats = MobData.FindMobById(mobId)
+        if not stats or not stats.IsNamedElite then
+            warn("[DevService] NamedElite spawn refused -- not a named elite: " .. tostring(mobId))
+            return
+        end
         if not waitForMobSystem(12) or not _G.MobSystem.ForceSpawnNamedElite then
             warn("[DevService] ForceSpawnNamedElite not ready — MobManager not loaded")
             return
@@ -376,6 +387,27 @@ evPlace.OnServerEvent:Connect(function(player, data)
             print("[DevService] " .. player.Name .. " force-spawned named elite: " .. mobId)
         else
             warn("[DevService] Force-spawn named elite failed for MobID: " .. mobId)
+        end
+
+    elseif data.SpawnerType == "Boss" then
+        -- Dungeon bosses (MobData IsBoss), spawned in the overworld for
+        -- playtesting: real stats and class, no dungeon run. See
+        -- MobManager.ForceSpawnBoss.
+        local mobId = data.MobId
+        if type(mobId) ~= "string" or mobId == "" then return end
+        local stats = MobData.FindMobById(mobId)
+        if not stats or not stats.IsBoss then
+            warn("[DevService] Boss spawn refused -- not a boss: " .. tostring(mobId))
+            return
+        end
+        if not waitForMobSystem(12) or not _G.MobSystem.ForceSpawnBoss then
+            warn("[DevService] ForceSpawnBoss not ready -- MobManager not loaded")
+            return
+        end
+        if _G.MobSystem.ForceSpawnBoss(player, mobId) then
+            print("[DevService] " .. player.Name .. " force-spawned boss: " .. mobId)
+        else
+            warn("[DevService] Force-spawn boss failed for MobID: " .. mobId)
         end
 
     elseif data.SpawnerType == "NPC" then
@@ -477,12 +509,14 @@ rfList.OnServerInvoke = function(player)
         table.insert(out, {
             SpawnerType = "Zone",
             Label       = z.points and #z.points >= 3
-                and string.format("%s [%s %d pts%s]", z.name, z.alignment, #z.points, z.isEliteZone and ", elite" or "")
-                or string.format("%s [%s r=%d%s]", z.name, z.alignment, z.radius or 0, z.isEliteZone and ", elite" or ""),
+                and string.format("%s [%s %d pts%s]", z.name, ZoneConfig.DisplayAlignment(z.alignment), #z.points, z.isEliteZone and ", elite" or "")
+                or string.format("%s [%s r=%d%s]", z.name, ZoneConfig.DisplayAlignment(z.alignment), z.radius or 0, z.isEliteZone and ", elite" or ""),
             Position    = z.center,
             Part        = nil,
             SpawnId     = nil,
             ZoneId      = z.id,
+            ZoneName    = z.name,
+            Alignment   = z.alignment,
             MusicId     = z.musicId or "",
         })
     end
@@ -565,22 +599,39 @@ rfPlaceZone.OnServerInvoke = function(player, data)
 	return placeZoneFromClientData(data, data.Position)
 end
 
--- Sets/clears the looped soundtrack on an EXISTING zone without redrawing it.
-rfSetZoneMusic.OnServerInvoke = function(player, data)
+-- Edits an EXISTING zone in place (no redraw): any of Name / Alignment / MusicId.
+-- One remote rather than one per field, so a new editable zone property is a new
+-- field here instead of another remote plus another client WaitForChild.
+rfUpdateZone.OnServerInvoke = function(player, data)
 	if not isDev(player) then
 		return { ok = false, error = "not_dev" }
 	end
 	if type(data) ~= "table" or type(data.ZoneId) ~= "string" or data.ZoneId == "" then
 		return { ok = false, error = "bad_data" }
 	end
-	local musicId = type(data.MusicId) == "string" and data.MusicId or ""
-	local ok, zOrErr = ZoneService.SetZoneMusic(data.ZoneId, musicId)
-	if not ok then
-		return { ok = false, error = tostring(zOrErr) }
+	local applied, zone = {}, nil
+	local edits = {
+		{ key = "Name",      fn = ZoneService.SetZoneName },
+		{ key = "Alignment", fn = ZoneService.SetZoneAlignment },
+		{ key = "MusicId",   fn = ZoneService.SetZoneMusic },
+	}
+	for _, edit in ipairs(edits) do
+		local value = data[edit.key]
+		if value ~= nil then
+			local ok, zOrErr = edit.fn(data.ZoneId, value)
+			if not ok then
+				return { ok = false, error = tostring(zOrErr), field = edit.key }
+			end
+			zone = zOrErr
+			table.insert(applied, edit.key)
+		end
 	end
-	print(string.format("[DevService] %s set zone music for %s -> %s",
-		player.Name, zOrErr.name, musicId == "" and "(none)" or musicId))
-	return { ok = true, zone = zOrErr }
+	if not zone then
+		return { ok = false, error = "no_fields" }
+	end
+	print(string.format("[DevService] %s updated zone %s (%s)",
+		player.Name, zone.name, table.concat(applied, ", ")))
+	return { ok = true, zone = zone }
 end
 
 -------------------------------------------------------------------------
@@ -595,6 +646,11 @@ end
 -- ItemConfig.TIER_MEDIANS (10/30/50/70/90) -- that's a different concept
 -- (the scaling midpoint within a tier), not the level cutoff between tiers.
 local ITEM_SPAWN_TIER1_MAX_LEVEL = 21
+
+-- Ceiling on the dev tool's forced-substat list. Well above the real
+-- MAX_SUBSTATS (4 at Legendary) so it never clips normal use -- it exists only
+-- so a malformed payload can't hand ItemGenerator an unbounded list.
+local FORCE_SUBSTAT_MAX = 12
 
 local RARITY_LOOKUP = {}
 for _, r in ipairs(ItemConfig.RARITY_ORDER) do
@@ -628,7 +684,9 @@ rfSpawnItem.OnServerInvoke = function(player, data)
             return { ok = false, error = "bad_mythic_key" }
         end
         local mCount = math.clamp(math.floor(tonumber(data.Count) or 1), 1, 20)
-        local gOk, gErr = ProfileService.GrantItem(player, mItem:toGrantTemplate(), mCount)
+        local gOk, gErr = ProfileService.GrantItem(player, mItem:toGrantTemplate(), mCount, {
+            by = player, kind = ItemIdentity.SOURCE.DEV_TOOL, src = "dev_mythic", def = mItem.mythicKey,
+        })
         if not gOk then
             return { ok = false, error = tostring(gErr) }
         end
@@ -668,6 +726,25 @@ rfSpawnItem.OnServerInvoke = function(player, data)
             options.forceSubstat = { id = data.ForceSubstatId, value = fv }
         end
     end
+    -- Several at once (the ELITE-of-substats case: crit + lifesteal + execute,
+    -- each at a chosen value). Same validation as the single form -- ids are
+    -- checked against the real effect tables inside ItemGenerator -- with a
+    -- hard cap so a malformed client payload can't ask for a thousand rolls.
+    if type(data.ForceSubstats) == "table" then
+        local forced = {}
+        for _, row in ipairs(data.ForceSubstats) do
+            if type(row) == "table" and type(row.Id) == "string" and row.Id ~= "" then
+                local fv = tonumber(row.Value)
+                if fv ~= nil then
+                    table.insert(forced, { id = row.Id, value = fv })
+                end
+            end
+            if #forced >= FORCE_SUBSTAT_MAX then break end
+        end
+        if #forced > 0 then
+            options.forceSubstats = forced
+        end
+    end
 
     local kind = data.Kind
     if kind == "Weapon" then
@@ -689,7 +766,9 @@ rfSpawnItem.OnServerInvoke = function(player, data)
     local item = itemOrErr
 
     local count = math.clamp(math.floor(tonumber(data.Count) or 1), 1, 20)
-    local grantOk, grantErr = ProfileService.GrantItem(player, item:toGrantTemplate(), count)
+    local grantOk, grantErr = ProfileService.GrantItem(player, item:toGrantTemplate(), count, {
+        by = player, kind = ItemIdentity.SOURCE.DEV_TOOL, src = "dev_spawn",
+    })
     if not grantOk then
         return { ok = false, error = tostring(grantErr) }
     end

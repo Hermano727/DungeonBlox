@@ -6,7 +6,13 @@
 return {
 	-- ── Animation ────────────────────────────────────────────────────────────────────
 	-- Asset ID of the swing animation. Swap this value to update globally.
+	CROUCH_SWING_ANIM_ID = "rbxassetid://137864616007632",
 	SWING_ANIM_ID   = "rbxassetid://127678330702421",
+	-- Standing-only first-person swing (see FirstPersonSwing_Import_Instructions.md
+	-- under assets/models/main character/male base model/). Falls back to
+	-- SWING_ANIM_ID when empty or while crouched -- no first-person crouch
+	-- variant exists yet.
+	FIRST_PERSON_SWING_ANIM_ID = "", -- Pending publication of Sword_Slash_FirstPerson.fbx.
 
 
 	-- Visual cadence only; damage and energy remain driven by attack input.

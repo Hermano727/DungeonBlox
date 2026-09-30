@@ -13,8 +13,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local SkillXPShared = require(ReplicatedStorage:WaitForChild("SkillXPShared"))
 
 local fishingXPEvent = ReplicatedStorage:WaitForChild("FishingXPEvent")
-fishingXPEvent.OnClientEvent:Connect(function(xpAmount)
-	SkillXPShared.AddXP("Fishing", xpAmount)
+fishingXPEvent.OnClientEvent:Connect(function(xpAmount, totals)
+	SkillXPShared.ApplyServerGain("Fishing", xpAmount, totals)
 end)
 
 print("Fishing XP client loaded")

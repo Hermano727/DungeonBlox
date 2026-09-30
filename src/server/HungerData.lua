@@ -38,6 +38,16 @@ function HungerData.get(player)
 	return _d[player]
 end
 
+-- Dev tool (F8 Profile tab): full hunger, no pending exhaustion.
+function HungerData.refill(player)
+	local d = _d[player]
+	if not d then return false end
+	d.hunger = d.maxHunger
+	d.exhaustion = 0
+	pushValues(player, d)
+	return true
+end
+
 function HungerData.canSprint(player)
 	local d = _d[player]
 	if not d then

@@ -18,6 +18,8 @@ local Config       = require(ReplicatedStorage:WaitForChild("EnergyConfig"))
 local CombatSfxConfig  = require(ReplicatedStorage:WaitForChild("CombatSfxConfig"))
 local CombatAnimConfig = require(ReplicatedStorage:WaitForChild("CombatAnimConfig"))
 local SfxService       = require(ReplicatedStorage:WaitForChild("SfxService"))
+local SwordSlashSfx    = require(script.Parent:WaitForChild("SwordSlashSfx"))
+local AimRay           = require(ReplicatedStorage:WaitForChild("AimRay"))
 
 local partyMemberUserIds = {}
 task.defer(function()
@@ -42,6 +44,7 @@ task.defer(function()
 end)
 
 local attackTrack = nil
+local standingAttackTrack, crouchAttackTrack, fpAttackTrack = nil, nil, nil
 local attackCharacter = nil
 local swingTool = nil
 local characterGeneration = 0
@@ -98,12 +101,22 @@ local function swingPlaybackSpeed()
 end
 
 local function startSwing()
+    local root = attackCharacter and attackCharacter:FindFirstChild("HumanoidRootPart")
+    local desiredTrack = standingAttackTrack
+    if root and root:GetAttribute("IsCrouching") == true then
+        desiredTrack = crouchAttackTrack
+    elseif Player:GetAttribute("FirstPersonView") == true and fpAttackTrack and fpAttackTrack.Length > 0 then
+        desiredTrack = fpAttackTrack
+    end
+    if not desiredTrack or desiredTrack.Length <= 0 then return end
+    attackTrack = desiredTrack
     if not attackTrack or attackTrack.Length <= 0 or not canPresentSwing(attackCharacter, swingTool) then return end
     if swingStoppedConnection then swingStoppedConnection:Disconnect() end
     swingGeneration += 1
     local generation, track = swingGeneration, attackTrack
     queuedSwingAt = nil
     track:Play(CombatAnimConfig.SWING_FADE_IN, 1, swingPlaybackSpeed())
+    SwordSlashSfx.Play() -- client-side, instant, one per swing shown (queued follow-ups too)
     swingStoppedConnection = track.Stopped:Connect(function()
         if generation ~= swingGeneration or attackTrack ~= track or track.IsPlaying then return end
         local queuedAt = queuedSwingAt
@@ -137,7 +150,10 @@ local function clearAttackCharacter()
     for _, connection in ipairs(characterConnections) do connection:Disconnect() end
     table.clear(characterConnections)
     resetSwing()
-    if attackTrack then attackTrack:Destroy(); attackTrack = nil end
+    if standingAttackTrack then standingAttackTrack:Destroy() end
+    if crouchAttackTrack then crouchAttackTrack:Destroy() end
+    if fpAttackTrack then fpAttackTrack:Destroy() end
+    attackTrack, standingAttackTrack, crouchAttackTrack, fpAttackTrack = nil, nil, nil, nil
     attackCharacter, swingTool = nil, nil
 end
 
@@ -170,8 +186,43 @@ local function bindAttackCharacter(character)
             return
         end
         attackTrack = track
+        standingAttackTrack = track
         track.Priority = CombatAnimConfig.ANIM_PRIORITY
         track.Looped = false
+        if CombatAnimConfig.CROUCH_SWING_ANIM_ID ~= "" then
+            local crouchAnim = Instance.new("Animation")
+            crouchAnim.AnimationId = CombatAnimConfig.CROUCH_SWING_ANIM_ID
+            local success, crouchTrack = pcall(function() return animator:LoadAnimation(crouchAnim) end)
+            if success then
+                crouchAttackTrack = crouchTrack
+                crouchTrack.Priority = CombatAnimConfig.ANIM_PRIORITY
+                crouchTrack.Looped = false
+                task.spawn(function()
+                    pcall(function() ContentProvider:PreloadAsync({crouchAnim}) end)
+                    crouchAnim:Destroy()
+                end)
+            else
+                crouchAnim:Destroy()
+                warn("[CombatClient] Crouch swing failed:", crouchTrack)
+            end
+        end
+        if CombatAnimConfig.FIRST_PERSON_SWING_ANIM_ID ~= "" then
+            local fpAnim = Instance.new("Animation")
+            fpAnim.AnimationId = CombatAnimConfig.FIRST_PERSON_SWING_ANIM_ID
+            local success, fpTrack = pcall(function() return animator:LoadAnimation(fpAnim) end)
+            if success then
+                fpAttackTrack = fpTrack
+                fpTrack.Priority = CombatAnimConfig.ANIM_PRIORITY
+                fpTrack.Looped = false
+                task.spawn(function()
+                    pcall(function() ContentProvider:PreloadAsync({fpAnim}) end)
+                    fpAnim:Destroy()
+                end)
+            else
+                fpAnim:Destroy()
+                warn("[CombatClient] First-person swing failed:", fpTrack)
+            end
+        end
         local loaded, err = pcall(function()
             ContentProvider:PreloadAsync({ anim }, function(_, status)
                 if generation == characterGeneration and status ~= Enum.AssetFetchStatus.Success then
@@ -234,8 +285,11 @@ local function PerformRaycastAttack(character, attackRange)
     -- landed. Firing from the camera's actual position makes the ray match
     -- the view exactly.
     local camera = workspace.CurrentCamera
-    local origin = camera.CFrame.Position
-    local result = workspace:Raycast(origin, camera.CFrame.LookVector * attackRange, ray)
+    local origin, direction = camera.CFrame.Position, camera.CFrame.LookVector
+    -- Front view: the camera looks back AT the player, so aim from the head instead.
+    local frontOrigin, frontDirection = AimRay.FrontView()
+    if frontOrigin then origin, direction = frontOrigin, frontDirection end
+    local result = workspace:Raycast(origin, direction * attackRange, ray)
     if result then
         local model = result.Instance:FindFirstAncestorOfClass("Model")
         local weaponId = WeaponData.GetWeaponIdFromTool(GetEquippedTool(character))

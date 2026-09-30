@@ -24,18 +24,30 @@ local CharacterAnimProfiles = {}
 
 CharacterAnimProfiles.Profiles = {
 	Unarmed = {
+		CrouchIdle = "rbxassetid://88535647574045",
+		CrouchWalk = "rbxassetid://75552957909461",
 		Idle = "rbxassetid://72094441737047",
 		Walk = "rbxassetid://95948405960169",
 		RunStart = "rbxassetid://140166382441030",
 		RunLoop = "rbxassetid://115075307442771",
 	},
 	Sword = {
+		CrouchIdle = "rbxassetid://125056721204059",
+		CrouchWalk = "rbxassetid://95552267471977",
 		Idle = "rbxassetid://134742105465889",
 		Walk = "rbxassetid://120007605000208",
 		RunStart = "rbxassetid://118461840134893",
 		RunLoop = "rbxassetid://83948294410663",
 	},
 }
+
+function CharacterAnimProfiles.CrouchReady()
+    for _, name in ipairs({"Unarmed", "Sword"}) do
+        local profile = CharacterAnimProfiles.Profiles[name]
+        if not profile.CrouchIdle or profile.CrouchIdle == "" or not profile.CrouchWalk or profile.CrouchWalk == "" then return false end
+    end
+    return true
+end
 
 -- Only known swords use sword poses. Unauthored tools retain unarmed
 -- locomotion until they get their own profile.
@@ -82,7 +94,42 @@ end
 -- constant once it looks right -- same workflow ArmorEquipVisuals.lua's
 -- WornC0 values already use.
 local BLADE_AXIS_HAND_R_LOCAL = Vector3.new(0.795, 0.001, 0.607)
-local GRIP_POSITION_HAND_R_LOCAL = Vector3.new(0.078, 0.231, -0.059)
+
+-- The measured seed position (see the PCA note above). Do not hand-edit this to
+-- reposition the weapon -- use the two tuning scalars below instead.
+local GRIP_SEED_HAND_R_LOCAL = Vector3.new(0.078, 0.231, -0.059)
+
+-- Which way the CHARACTER's left points, expressed in Hand_R's bone-local axes.
+-- Sampled live off Hand_R.WorldCFrame against the character's facing (2026-09-18).
+--
+-- DO NOT tune the weapon by nudging Hand_R's raw X/Y/Z. Those axes are not
+-- aligned with anything you can see, and worse, they are not independent of each
+-- other for this purpose: "left" here overlaps the blade axis at -0.68, so a
+-- pure -X nudge is only ~60% lateral and spends the other ~40% sliding the sword
+-- DOWN its own blade. That is what a "move it left" pass did on 2026-09-18 -- it
+-- read as moving only halfway, and it silently pushed the hand a third of a stud
+-- up toward the tip, off the handle.
+local CHARACTER_LEFT_HAND_R_LOCAL = Vector3.new(-0.979, -0.130, 0.155)
+
+-- The two tuning knobs, in studs. These ARE independent -- the lateral axis is
+-- built perpendicular to the blade below, so each one moves the weapon in
+-- exactly one direction and neither disturbs the other.
+--   GRIP_LATERAL_OFFSET     + = toward the character's LEFT (into the palm),
+--                           - = out to their right.
+--   GRIP_ALONG_BLADE_OFFSET + = toward the blade TIP, which slides the hand DOWN
+--                           the weapon toward the pommel; - grips higher up.
+local GRIP_LATERAL_OFFSET = 0.24
+local GRIP_ALONG_BLADE_OFFSET = 0
+
+local GRIP_POSITION_HAND_R_LOCAL do
+	local bladeUnit = BLADE_AXIS_HAND_R_LOCAL.Unit
+	-- Strip the along-blade part out of "left" so the lateral knob is purely lateral.
+	local left = CHARACTER_LEFT_HAND_R_LOCAL
+	local lateralUnit = (left - bladeUnit * left:Dot(bladeUnit)).Unit
+	GRIP_POSITION_HAND_R_LOCAL = GRIP_SEED_HAND_R_LOCAL
+		+ lateralUnit * GRIP_LATERAL_OFFSET
+		+ bladeUnit * GRIP_ALONG_BLADE_OFFSET
+end
 
 -- TrainingSword.Handle's own PivotOffset: the grip point sits 0.951825 studs
 -- below the mesh's geometric center along local +Y (blade extends +Y) --

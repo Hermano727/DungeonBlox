@@ -1,9 +1,15 @@
 --[[
 	CombatTimerClient
-	Shows a small combat indicator in the screen's top-right corner (2026-09-13 --
-	was top-center, which overlapped the Combat XP bar).
-	  Sword icon + countdown while in combat.
-	  Fades out when safe. Shield icon pulses when regen activates.
+	The combat-tag readout: [combat icon] Combat: 12.34s, ticking down while you're flagged.
+
+	Lives at the very bottom of the bottom-left HUD stack (RS/HudBottomLeftStack, ORDER.Combat),
+	the lowest and most fixed spot on screen, because being tagged matters for PvP and for
+	regen. Other bottom-left readouts (the dungeon timer, ...) stack above it. Was a small
+	top-right chip until 2026-09-26; before that top-center, where it overlapped the Combat
+	XP bar.
+
+	Every fresh hit (the server re-sends "combat" with a new duration) flashes the border so
+	re-tagging reads. When the tag drops it shows "Regenerating" in blue for 2s, then leaves.
 ]]
 
 local Players           = game:GetService("Players")
@@ -11,113 +17,117 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService      = game:GetService("TweenService")
 local RunService        = game:GetService("RunService")
 
-local player    = Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
+local Stack    = require(ReplicatedStorage:WaitForChild("HudBottomLeftStack"))
+local UIFonts  = require(ReplicatedStorage:WaitForChild("UIFonts"))
+local HudIcons = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Icons"):WaitForChild("Hud"):WaitForChild("HudIcons"))
 
--- Build GUI
-local gui = Instance.new("ScreenGui")
-gui.Name           = "CombatTimerGui"
-gui.ResetOnSpawn   = false
-gui.IgnoreGuiInset = true
-gui.DisplayOrder   = 111
-gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-gui.Enabled        = true
-gui.Parent         = playerGui
+local _ = Players.LocalPlayer
 
-local frame = Instance.new("Frame", gui)
-frame.Name             = "CombatFrame"
--- Moved to the top-right corner (2026-09-13, per direct request): was top-center,
--- overlapping the Combat XP bar/orb-burst zone. Top-right instead of top-left since
--- Roblox's own unhideable core UI buttons live top-left. This is ambient status info
--- ("are you flagged, will you regen soon"), not something actively tracked mid-fight
--- like HP/energy, so it doesn't need to compete with either of those busier areas --
--- same 0.08 vertical offset as before, just anchored/offset from the right edge now.
-frame.AnchorPoint      = Vector2.new(1, 0)
-frame.Position         = UDim2.new(1, -16, 0.08, 0)
-frame.Size             = UDim2.fromOffset(160, 22)
-frame.BackgroundTransparency = 1
-frame.BorderSizePixel  = 0
+local COMBAT_TEXT   = Color3.fromRGB(255, 190, 180)
+local COMBAT_STROKE = Color3.fromRGB(200, 55, 55)
+local SAFE_TEXT     = Color3.fromRGB(160, 210, 255)
+local SAFE_STROKE   = Color3.fromRGB(80, 160, 220)
+local FADE_TIME     = 0.3
+local SAFE_LINGER   = 2
 
-local bg = Instance.new("Frame", frame)
-bg.Size                  = UDim2.new(1, 0, 1, 0)
-bg.BackgroundColor3      = Color3.fromRGB(14, 10, 10)
-bg.BackgroundTransparency = 0.35
-bg.BorderSizePixel       = 0
-Instance.new("UICorner", bg).CornerRadius = UDim.new(0, 6)
-local bgStroke = Instance.new("UIStroke", bg)
-bgStroke.Thickness   = 1
-bgStroke.Color       = Color3.fromRGB(180, 60, 60)
-bgStroke.Transparency = 0.5
+local slot = Stack.Slot("CombatTimer", Stack.ORDER.Combat)
+local pill = Stack.Pill(slot, {
+	height = 38,
+	iconSize = 28,
+	textSize = 20,
+	textWidth = 150, -- fixed, so the ticking number doesn't make the pill jitter
+	font = UIFonts.HUDLabel,
+	image = HudIcons.COMBAT,
+	strokeColor = COMBAT_STROKE,
+	textColor = COMBAT_TEXT,
+})
+pill.stroke.Thickness = 2
+pill.frame.BackgroundTransparency = .25
 
-local icon = Instance.new("TextLabel", frame)
-icon.Size                  = UDim2.fromOffset(18, 22)
-icon.Position              = UDim2.new(0, 4, 0, 0)
-icon.BackgroundTransparency = 1
-icon.Font                  = Enum.Font.GothamBold
-icon.TextSize              = 13
-icon.TextColor3            = Color3.fromRGB(220, 80, 80)
-icon.Text                  = "\xe2\x9a\94"  -- ⚔
+local BASE_BG = pill.frame.BackgroundTransparency
+local BASE_STROKE = 0.1
 
-local timerLabel = Instance.new("TextLabel", frame)
-timerLabel.Size                  = UDim2.new(1, -26, 1, 0)
-timerLabel.Position              = UDim2.new(0, 24, 0, 0)
-timerLabel.BackgroundTransparency = 1
-timerLabel.Font                  = Enum.Font.GothamMedium
-timerLabel.TextSize              = 12
-timerLabel.TextColor3            = Color3.fromRGB(220, 180, 180)
-timerLabel.TextXAlignment        = Enum.TextXAlignment.Left
-timerLabel.Text                  = "In Combat"
+local timeLeft = 0
+local inCombat = false
+local shownSerial = 0
 
--- State
-local timeLeft   = 0
-local inCombat   = false
-local FADE_TIME  = 0.4
-
-local function setVisible(v)
-	local targetAlpha = v and 0 or 1
-	TweenService:Create(bg, TweenInfo.new(FADE_TIME), { BackgroundTransparency = v and 0.35 or 1 }):Play()
-	TweenService:Create(icon, TweenInfo.new(FADE_TIME), { TextTransparency = targetAlpha }):Play()
-	TweenService:Create(timerLabel, TweenInfo.new(FADE_TIME), { TextTransparency = targetAlpha }):Play()
-	TweenService:Create(bgStroke, TweenInfo.new(FADE_TIME), { Transparency = v and 0.5 or 1 }):Play()
+local function tween(inst, props)
+	TweenService:Create(inst, TweenInfo.new(FADE_TIME), props):Play()
 end
 
-setVisible(false)
+local function setVisible(v)
+	shownSerial += 1
+	local serial = shownSerial
+	if v then
+		slot.Visible = true
+		tween(pill.frame, { BackgroundTransparency = BASE_BG })
+		tween(pill.stroke, { Transparency = BASE_STROKE })
+		tween(pill.label, { TextTransparency = 0, TextStrokeTransparency = .6 })
+		tween(pill.icon, { ImageTransparency = 0 })
+	else
+		tween(pill.frame, { BackgroundTransparency = 1 })
+		tween(pill.stroke, { Transparency = 1 })
+		tween(pill.label, { TextTransparency = 1, TextStrokeTransparency = 1 })
+		tween(pill.icon, { ImageTransparency = 1 })
+		-- Collapse out of the stack once faded, so the readouts above slide down.
+		task.delay(FADE_TIME, function()
+			if shownSerial == serial then slot.Visible = false end
+		end)
+	end
+end
 
--- Listen for server events
+-- Border flash on every (re)tag: brighter and thicker, easing back.
+local function flash()
+	pill.stroke.Thickness = 4
+	pill.stroke.Color = Color3.fromRGB(255, 110, 100)
+	TweenService:Create(pill.stroke, TweenInfo.new(.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		Thickness = 2, Color = COMBAT_STROKE,
+	}):Play()
+end
+
+local function showCombatStyle()
+	pill.label.TextColor3 = COMBAT_TEXT
+	pill.icon.ImageColor3 = Color3.new(1, 1, 1)
+	pill.stroke.Color = COMBAT_STROKE
+end
+
+-- Start hidden.
+pill.frame.BackgroundTransparency = 1
+pill.stroke.Transparency = 1
+pill.label.TextTransparency = 1
+pill.label.TextStrokeTransparency = 1
+pill.icon.ImageTransparency = 1
+
 local ev = ReplicatedStorage:WaitForChild("CombatStateEvent", 30)
 if ev then
 	ev.OnClientEvent:Connect(function(state, secs)
 		if state == "combat" then
-			timeLeft = secs
+			timeLeft = tonumber(secs) or 0
 			if not inCombat then
 				inCombat = true
+				showCombatStyle()
 				setVisible(true)
-				bgStroke.Color = Color3.fromRGB(180, 60, 60)
-				icon.Text = "\xe2\x9a\94"  -- ⚔
-				icon.TextColor3 = Color3.fromRGB(220, 80, 80)
 			end
+			flash()
 		elseif state == "safe" then
 			timeLeft = 0
 			inCombat = false
-			-- Briefly show shield icon to signal regen kicked in
-			bgStroke.Color = Color3.fromRGB(80, 160, 220)
-			icon.Text = "\xf0\x9f\x9b\xa1"  -- 🛡
-			icon.TextColor3 = Color3.fromRGB(100, 190, 255)
-			timerLabel.Text = "Regenerating"
-			task.delay(2, function()
-				if not inCombat then
-					setVisible(false)
-				end
+			pill.stroke.Color = SAFE_STROKE
+			pill.icon.ImageColor3 = SAFE_TEXT
+			pill.label.TextColor3 = SAFE_TEXT
+			pill.label.Text = "Regenerating"
+			task.delay(SAFE_LINGER, function()
+				if not inCombat then setVisible(false) end
 			end)
 		end
 	end)
 end
 
--- Client-side countdown tick
+-- Client-side countdown tick (display only; the server owns the real tag).
 RunService.Heartbeat:Connect(function(dt)
 	if not inCombat then return end
 	timeLeft = math.max(0, timeLeft - dt)
-	timerLabel.Text = string.format("Combat  %.1fs", timeLeft)
+	pill.label.Text = string.format("Combat: %.2fs", timeLeft)
 end)
 
 print("[CombatTimerClient] ready")

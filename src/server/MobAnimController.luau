@@ -62,6 +62,23 @@ local function loadTrack(animator, assetId, priority)
 	return track
 end
 
+-- The Animator a mob's clips play on. R15/R6 rigs keep it under their Humanoid; skinned-mesh
+-- models (Miasma, "moving away from R15") have no Humanoid and use an AnimationController
+-- instead. Creates the Animator if the model has the driver but not yet the Animator.
+-- Returns nil for a model with neither (nothing to animate).
+function MobAnimController.GetAnimator(model)
+	if not model then return nil end
+	local driver = model:FindFirstChildOfClass("Humanoid")
+		or model:FindFirstChildOfClass("AnimationController")
+	if not driver then return nil end
+	local animator = driver:FindFirstChildOfClass("Animator")
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = driver
+	end
+	return animator
+end
+
 -- Attach animation tracks to a mob after its model has been spawned.
 function MobAnimController.attach(mob)
 	local cfg = MobAnimConfig[mob.MobID]
@@ -70,14 +87,8 @@ function MobAnimController.attach(mob)
 	local model = mob.Model
 	if not model then return end
 
-	local humanoid = model:FindFirstChildOfClass("Humanoid")
-	if not humanoid then return end
-
-	local animator = humanoid:FindFirstChildOfClass("Animator")
-	if not animator then
-		animator = Instance.new("Animator")
-		animator.Parent = humanoid
-	end
+	local animator = MobAnimController.GetAnimator(model)
+	if not animator then return end
 
 	local tracks = {}
 
@@ -116,6 +127,18 @@ function MobAnimController.attach(mob)
 		if tracks.Attack and cfg.AttackHitFrame ~= nil then
 			mob._attackHitDelay = getFrameTime(cfg.Attack, cfg.AttackHitFrame)
 		end
+		-- Fallback: an authored-seconds offset into the clip.
+		-- REQUIRED for FBX-imported animations. Those upload as curve/channel
+		-- animations, and KeyframeSequenceProvider only speaks the older
+		-- KeyframeSequence format -- it returns an EMPTY sequence for them (0
+		-- keyframes) rather than erroring, so AttackHitFrame silently cannot
+		-- resolve no matter who owns the asset. Hit 2026-09-17 with Kane's
+		-- imported slash: "Frame 19 out of range ... ( 0 keyframes )".
+		-- AttackHitDelay is in the clip's AUTHORED timebase, same as
+		-- AttackHitFrame, so AttackSpeed rescales it below either way.
+		if tracks.Attack and mob._attackHitDelay == nil and cfg.AttackHitDelay ~= nil then
+			mob._attackHitDelay = cfg.AttackHitDelay
+		end
 		-- Same atomic-attack lock as the ScriptedBody branch above, but for
 		-- a real Animator track: its own Length is the true swing duration,
 		-- available as soon as it's loaded (no need to play it first).
@@ -125,6 +148,37 @@ function MobAnimController.attach(mob)
 			local length = tracks.Attack.Length
 			if length and length > 0.05 then
 				mob._attackAnimDuration = length
+			end
+		end
+
+		-- AttackSpeed scales playback of the ordinary swing (2 = twice as fast).
+		-- Both numbers derived from the clip above are REAL-TIME -- when the hit
+		-- lands, and how long the mob is locked in the attack state -- so they
+		-- have to shrink by the same factor, or damage lands after the swing has
+		-- already finished playing. Ignored by ScriptedBody mobs, whose pulse is
+		-- generated rather than played from a clip.
+		local attackSpeed = tonumber(cfg.AttackSpeed)
+		if tracks.Attack and attackSpeed and attackSpeed > 0 and attackSpeed ~= 1 then
+			mob._attackSpeed = attackSpeed
+			if mob._attackHitDelay then
+				mob._attackHitDelay = mob._attackHitDelay / attackSpeed
+			end
+			if mob._attackAnimDuration then
+				mob._attackAnimDuration = mob._attackAnimDuration / attackSpeed
+			end
+		end
+	end
+
+	-- Moveset: named one-shot clips for hand-authored specials (combos, slams).
+	-- Keyed by the same name a MobData Moveset entry's `Id` uses -- see
+	-- MobMovesetBehaviour, which drives the playhead and lands the impacts.
+	if type(cfg.Moveset) == "table" then
+		tracks.Moveset = {}
+		for name, id in pairs(cfg.Moveset) do
+			local t = loadTrack(animator, id, Enum.AnimationPriority.Action)
+			if t then
+				t.Looped = false
+				tracks.Moveset[name] = t
 			end
 		end
 	end
@@ -208,6 +262,28 @@ function MobAnimController.playAttack(mob)
 	if not tracks.Attack.IsPlaying then
 		tracks.Attack:Play(0.1)
 	end
+	tracks.Attack:AdjustSpeed(mob._attackSpeed or 1)
+end
+
+-- Loaded special-attack track by name, or nil if this mob has no such clip.
+function MobAnimController.getMovesetTrack(mob, name)
+	local tracks = mob._animTracks
+	if not tracks or not tracks.Moveset then return nil end
+	return tracks.Moveset[name]
+end
+
+-- Called from MobMovesetBehaviour when a special starts. `speed` is that
+-- special's own playback rate (2 = twice as fast); the caller is responsible
+-- for scaling anything it measures in real time by the same factor.
+function MobAnimController.playMoveset(mob, name, speed)
+	local track = MobAnimController.getMovesetTrack(mob, name)
+	if not track then return nil end
+	MobAnimController.setWalking(mob, false)
+	if not track.IsPlaying then
+		track:Play(0.1)
+	end
+	track:AdjustSpeed(speed or 1)
+	return track
 end
 
 return MobAnimController

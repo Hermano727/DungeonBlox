@@ -31,10 +31,13 @@ local ServerScriptService  = game:GetService("ServerScriptService")
 
 local RemoteUtils        = require(ReplicatedStorage:WaitForChild("RemoteUtils"))
 local DungeonTypes        = require(ReplicatedStorage:WaitForChild("DungeonInstanceTypes"))
+local DungeonLevels       = require(ReplicatedStorage:WaitForChild("DungeonLevels"))
 local DungeonPortalConfig = require(ServerScriptService:WaitForChild("DungeonPortalConfig"))
 local PartyService        = require(ServerScriptService:WaitForChild("PartyService"))
 local DungeonProfile      = require(ServerScriptService:WaitForChild("ProfileService"))
 local HearthstoneService  = require(ServerScriptService:WaitForChild("HearthstoneService"))
+local InventoryAudit      = require(ServerScriptService:WaitForChild("InventoryAudit"))
+local StatusCleanse       = require(ServerScriptService:WaitForChild("StatusCleanse"))
 
 local ensureFolder         = RemoteUtils.EnsureFolder
 local ensureRemoteEvent    = RemoteUtils.EnsureRemoteEvent
@@ -52,19 +55,27 @@ local DungeonPromptCancelled    = ensureRemoteEvent(ge, "DungeonPromptCancelled"
 local DungeonPromptRespond      = ensureRemoteEvent(ge, "DungeonPromptRespond")      -- client -> server: (instanceId, accepted)
 local DungeonInstanceStateUpdate= ensureRemoteEvent(ge, "DungeonInstanceStateUpdate")-- server -> clients: entered / left / ended
 local DungeonLeaveRequest       = ensureRemoteEvent(ge, "DungeonLeaveRequest")       -- client -> server: leave MY instance only
+local DungeonSpectate           = ensureRemoteEvent(ge, "DungeonSpectate")           -- server -> client: { active, instanceId, memberUserIds }
 
 ----------------------------------------------------------------------
 -- State
 ----------------------------------------------------------------------
 
 -- activeInstances[instanceId] = {
---   instanceId, tier, dungeonName, keyItemId, leaderUserId,
+--   instanceId, tier, numericTier, dungeonName, keyItemId, realmTemplateName,
+--   encounterId, leaderUserId,
 --   members = { [userId] = name }, statuses = { [userId] = DungeonTypes.MemberStatus },
 --   state = DungeonTypes.State, startTime (os.time(), set on launch),
 --   realmModel (Instance?), realmSlot (number?),
 -- }
 local activeInstances = {}
 local playerToInstance = {} -- [userId] = instanceId (covers both PROMPTING and IN_PROGRESS)
+local finishInstance
+
+-- Miasma: how long the party can stay (loot, regroup) after the kill before being sent home,
+-- and the pause after a party wipe before everyone respawns at their hearthstone.
+local MIASMA_EXIT_SECONDS = 15 -- ~4.6s of it is the Dungeon Complete banner
+local MIASMA_WIPE_BEAT_SECONDS = 2
 
 ----------------------------------------------------------------------
 -- Realm template + per-instance far-away offset allocator
@@ -91,7 +102,6 @@ local playerToInstance = {} -- [userId] = instanceId (covers both PROMPTING and 
 -- A large horizontal offset at a normal Y sidesteps the whole problem: nowhere near any
 -- fall-kill height, no Workspace property needs touching, ever. Do not go back to a deep
 -- negative Y here.
-local REALM_TEMPLATE_NAME = "DungeonRealmTemplate"
 local REALM_BASE_X = 100000
 local REALM_Y = 50
 local REALM_X_SPACING = 500
@@ -106,12 +116,25 @@ local REALM_X_SPACING = 500
 -- part named "SpawnPoint" (used to position the party on launch); no other structure is
 -- required by this script. Returns nil if it hasn't been built yet -- callers must handle
 -- that instead of assuming a template always exists.
-local function ensureRealmTemplate()
-	local existing = Workspace:FindFirstChild(REALM_TEMPLATE_NAME)
+local function ensureRealmTemplate(templateName)
+	if type(templateName) ~= "string" or templateName == "" then
+		return nil
+	end
+	-- Found by NAME ANYWHERE under Workspace, not only as a direct child: the template gets
+	-- filed into organising folders in Studio (it now lives at Workspace.T1Dungeon.
+	-- DungeonRealmTemplate), and a root-only lookup made every launch report "no realm
+	-- template" the moment it was moved. Live instances are named by instanceId and parked
+	-- under realmsFolder, so they can never be mistaken for the template. A direct child still
+	-- wins if there is one.
+	local existing = Workspace:FindFirstChild(templateName) or Workspace:FindFirstChild(templateName, true)
 	if not existing then
-		warn("[DungeonInstanceService] Workspace." .. REALM_TEMPLATE_NAME
-			.. " is missing -- build the dungeon realm in Studio (a Model with a "
+		warn("[DungeonInstanceService] no '" .. templateName .. "' Model anywhere under Workspace"
+			.. " -- build the dungeon realm in Studio (a Model with a "
 			.. "PrimaryPart and a \"SpawnPoint\" part) before dungeons can launch.")
+		return nil
+	end
+	if not existing:IsA("Model") then
+		warn("[DungeonInstanceService] " .. existing:GetFullName() .. " must be a Model")
 		return nil
 	end
 	return existing
@@ -141,13 +164,20 @@ local realmsFolder = ensureFolder(Workspace, "DungeonInstances")
 -- DungeonTier attribute, no code changes needed). This is explicitly a placeholder per the
 -- task scope: no real dungeon content, just enough infra to test the flow end-to-end.
 local function ensurePlaceholderPortal()
+	local t1Config = DungeonPortalConfig.Get("T1")
 	local portalsFolder = Workspace:FindFirstChild("DungeonPortals")
 	if not portalsFolder then
 		portalsFolder = Instance.new("Folder")
 		portalsFolder.Name = "DungeonPortals"
 		portalsFolder.Parent = Workspace
 	end
-	if portalsFolder:FindFirstChild("T1Portal") then
+	local existing = portalsFolder:FindFirstChild("T1Portal")
+	if existing and existing:IsA("BasePart") then
+		existing:SetAttribute("DungeonTier", "T1")
+		existing:SetAttribute("DungeonName", t1Config.DungeonName)
+		if not CollectionService:HasTag(existing, "DungeonPortal") then
+			CollectionService:AddTag(existing, "DungeonPortal")
+		end
 		return
 	end
 
@@ -166,6 +196,7 @@ local function ensurePlaceholderPortal()
 	part.Parent = portalsFolder
 
 	part:SetAttribute("DungeonTier", "T1")
+	part:SetAttribute("DungeonName", t1Config.DungeonName)
 	CollectionService:AddTag(part, "DungeonPortal")
 end
 
@@ -230,7 +261,114 @@ end
 local function onInstanceComplete(_instance)
 end
 
-local function destroyInstanceRealm(instance)
+----------------------------------------------------------------------
+-- Spectating (dying during the boss encounter)
+--
+-- A member who dies while the instance's encounter is live does NOT leave the run: there are
+-- no revives in the boss fight, so they watch the rest of the party instead (client:
+-- SpectatorClient). Their respawned body is parked out of reach -- far above the realm,
+-- anchored, invisible, no collision -- and the encounter excludes anyone with the
+-- SPECTATE_ATTR attribute from every living-player check (no hits, no poison, and a party
+-- wipe still triggers once everyone else is down). Leaving, or the run ending, respawns them
+-- normally at their hearthstone.
+----------------------------------------------------------------------
+
+local SPECTATE_ATTR = "DungeonSpectating" -- = instanceId while spectating
+local SPECTATE_PARK_HEIGHT = 600          -- studs above the realm pivot
+
+-- Streaming follows the character by default. A spectator's new body spawns in the overworld
+-- before it's parked, and their client then streamed the realm (and everyone in it) out: after
+-- ~5 s (the respawn) they had "no one to spectate". Pin their streaming focus on the realm.
+local function realmFocusPart(instance)
+	local realm = instance and instance.realmModel
+	if not realm then return nil end
+	local part = realm:FindFirstChild("SpawnPoint")
+	if part and part:IsA("BasePart") then return part end
+	return realm.PrimaryPart or realm:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function isSpectating(player)
+	return player ~= nil and player:GetAttribute(SPECTATE_ATTR) ~= nil
+end
+
+local function parkSpectatorBody(player, instance, char)
+	local hrp = char:WaitForChild("HumanoidRootPart", 5)
+	local humanoid = char:FindFirstChildOfClass("Humanoid")
+	if not hrp or not isSpectating(player) then return end
+	for _, d in ipairs(char:GetDescendants()) do
+		if d:IsA("BasePart") then
+			d.Transparency = 1
+			d.CanCollide, d.CanTouch, d.CanQuery = false, false, false
+		elseif d:IsA("Decal") then
+			d.Transparency = 1
+		end
+	end
+	if humanoid then humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None end
+	local base = instance.realmModel and instance.realmModel:GetPivot().Position or hrp.Position
+	char:PivotTo(CFrame.new(base + Vector3.new(0, SPECTATE_PARK_HEIGHT, 0)))
+	hrp.Anchored = true
+end
+
+-- Ends spectating (Leave, or the realm is torn down): respawn normally at the hearthstone.
+local function endSpectating(player)
+	if not isSpectating(player) then return false end
+	player:SetAttribute(SPECTATE_ATTR, nil)
+	player.ReplicationFocus = nil
+	DungeonSpectate:FireClient(player, { active = false })
+	local conn
+	conn = player.CharacterAdded:Connect(function(newChar)
+		conn:Disconnect()
+		local root = newChar:WaitForChild("HumanoidRootPart", 5)
+		if root then newChar:PivotTo(HearthstoneService.GetHearthstoneLocation(player)) end
+	end)
+	task.spawn(function()
+		local ok, err = pcall(function() player:LoadCharacter() end)
+		if not ok then warn("[DungeonInstanceService] respawn after spectating failed for " .. player.Name .. ": " .. tostring(err)) end
+	end)
+	return true
+end
+
+-- EVERY way a player stops being in a realm (Leave, disconnect, the absence watchdog, the
+-- instance ending cleared or failed) passes through here exactly once: the InDungeon flag
+-- goes and every debuff / effect is wiped (SSS/StatusCleanse). A new dungeon type or exit
+-- path gets this for free as long as it removes members through removePlayerFromInstance
+-- or finishInstance; nothing dungeon-specific has to remember its own cleanup.
+local function releaseMember(player, reason)
+	if not player then return end
+	player:SetAttribute("InDungeon", nil)
+	StatusCleanse.All(player, reason)
+end
+
+-- Puts a still-connected member back at their hearthstone BEFORE their realm is destroyed.
+-- The realm hangs in empty sky, so deleting it with anyone still inside dropped them into the
+-- void until the fall killed them (the "float in the sky" after a run ended). Alive: moved now.
+-- Dead: respawned now and landed at the hearthstone, instead of lying in a deleted realm until
+-- the engine's own respawn timer.
+local function evacuateMember(player)
+	if not player or not player.Parent then return end
+	InventoryAudit.Note(player, "sent home: dungeon realm torn down")
+	if endSpectating(player) then return end -- parked body: respawn fresh at the hearthstone
+	local char = player.Character
+	local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	if humanoid and hrp and humanoid.Health > 0 then
+		char:PivotTo(HearthstoneService.GetHearthstoneLocation(player))
+		return
+	end
+	local conn
+	conn = player.CharacterAdded:Connect(function(newChar)
+		conn:Disconnect()
+		local root = newChar:WaitForChild("HumanoidRootPart", 5)
+		if root then newChar:PivotTo(HearthstoneService.GetHearthstoneLocation(player)) end
+	end)
+	task.spawn(function()
+		local ok, err = pcall(function() player:LoadCharacter() end)
+		if not ok then warn("[DungeonInstanceService] respawn after run failed for " .. player.Name .. ": " .. tostring(err)) end
+	end)
+end
+
+local function destroyInstanceRealm(instance, outcome)
+	outcome = outcome or "failed"
 	-- Cash out every member's banked loot before anything else. This is where
 	-- the run's drops are finally rolled and granted.
 	do
@@ -239,10 +377,15 @@ local function destroyInstanceRealm(instance)
 			for _, uid in ipairs(instance.memberUserIds or {}) do
 				local plr = Players:GetPlayerByUserId(uid)
 				if plr then
-					pcall(runSvc.EndRunFor, plr, "cleared")
+					pcall(runSvc.EndRunFor, plr, outcome)
 				end
 			end
 		end
+	end
+	if instance.encounterController then
+		local ok, svc = pcall(require, ServerScriptService:WaitForChild("MiasmaEncounterService", 5))
+		if ok and svc and svc.Destroy then pcall(svc.Destroy, instance.instanceId) end
+		instance.encounterController = nil
 	end
 
 	-- Tear down this instance's spawners BEFORE the realm goes, so their mobs
@@ -254,6 +397,16 @@ local function destroyInstanceRealm(instance)
 		end
 		instance.spawnerHandle = nil
 	end
+	-- Everyone still here goes home first: the realm floats in empty sky. Cleansed first
+	-- (the encounter above is gone, so nothing re-applies anything).
+	for _, uid in ipairs(instance.memberUserIds or {}) do
+		local plr = Players:GetPlayerByUserId(uid)
+		if plr and instance.members[uid] then
+			pcall(releaseMember, plr, "DungeonEnded")
+			local ok, err = pcall(evacuateMember, plr)
+			if not ok then warn("[DungeonInstanceService] evacuating " .. plr.Name .. " failed: " .. tostring(err)) end
+		end
+	end
 	if instance.realmModel then
 		instance.realmModel:Destroy()
 		instance.realmModel = nil
@@ -262,6 +415,22 @@ local function destroyInstanceRealm(instance)
 		releaseRealmSlot(instance.realmSlot)
 		instance.realmSlot = nil
 	end
+end
+
+finishInstance = function(instance, outcome, reason)
+	if not instance or instance._finishing then return end
+	instance._finishing = true
+	instance.state = DungeonTypes.State.ENDED
+	fireToAllMembers(instance, DungeonInstanceStateUpdate, {
+		instanceId = instance.instanceId,
+		state = DungeonTypes.State.ENDED,
+		outcome = outcome,
+		reason = reason or "",
+	})
+	for userId in pairs(instance.members) do playerToInstance[userId] = nil end
+	destroyInstanceRealm(instance, outcome)
+	activeInstances[instance.instanceId] = nil
+	onInstanceComplete(instance)
 end
 
 local function cancelInstance(instance, reason)
@@ -285,9 +454,9 @@ local function launchDungeon(instance)
 	-- already been irreversibly removed with no refund.
 	-- Check the realm template exists BEFORE touching anyone's keys -- no point consuming
 	-- a party's keys only to fail on a dungeon that hasn't been built in Studio yet.
-	local template = ensureRealmTemplate()
+	local template = ensureRealmTemplate(instance.realmTemplateName)
 	if not template then
-		cancelInstance(instance, "Dungeon is not built yet -- check back later.")
+		cancelInstance(instance, "This dungeon does not have a realm template yet.")
 		return
 	end
 
@@ -318,6 +487,12 @@ local function launchDungeon(instance)
 	instance.realmModel = clone
 	instance.realmSlot = slot
 
+	-- The run's mob level, decided ONCE here and handed to every spawner below.
+	-- instance.modifiers is the hook for future difficulty modifiers -- empty
+	-- today, so this is the tier's base (T1 = 15). See RS/DungeonLevels.
+	instance.modifiers = instance.modifiers or {}
+	instance.runLevel = DungeonLevels.Resolve(instance.numericTier or 1, instance.modifiers)
+
 	-- Populate THIS clone with its own mob spawners. Registration is
 	-- per-instance rather than at boot because every run gets its own copy of
 	-- the realm parked at a different X offset -- spawners registered against
@@ -337,14 +512,14 @@ local function launchDungeon(instance)
 			if #members == 0 then
 				for _, plr in ipairs(Players:GetPlayers()) do table.insert(members, plr) end
 			end
-			pcall(runSvc.StartRun, members, instance.tier or 1)
+			pcall(runSvc.StartRun, members, instance.numericTier or 1)
 		end
 	end
 
 	do
 		local ok, svc = pcall(require, ServerScriptService:WaitForChild("DungeonMobSpawnService", 5))
 		if ok and svc and svc.RegisterForRealm then
-			local ok2, handle = pcall(svc.RegisterForRealm, clone, instance.tier)
+			local ok2, handle = pcall(svc.RegisterForRealm, clone, instance.tier, instance.encounterId, instance.runLevel)
 			if ok2 then
 				instance.spawnerHandle = handle
 			else
@@ -367,8 +542,50 @@ local function launchDungeon(instance)
 			-- Small per-member horizontal spread so the party doesn't land stacked exactly
 			-- on top of each other.
 			hrp.CFrame = CFrame.new(spawnPos + Vector3.new(i * 4, 3, 0))
+			plr:SetAttribute("InDungeon", true) -- cleared by releaseMember
+			InventoryAudit.Note(plr, ("entered dungeon %s (tier %s)"):format(tostring(instance.dungeonName), tostring(instance.tier)))
 		end
 		i += 1
+	end
+
+	-- Start after placement: the boss spawner now sees the party inside its
+	-- activation radius, while the controller can safely wait for that boss.
+	if instance.encounterId == "Miasma" then
+		local ok, service = pcall(require, ServerScriptService:WaitForChild("MiasmaEncounterService", 5))
+		if ok and service and service.Start then
+			local ok2, controller = pcall(service.Start, {
+				instanceId = instance.instanceId,
+				realm = clone,
+				memberUserIds = instance.memberUserIds,
+				spawnerHandle = instance.spawnerHandle,
+				runLevel = instance.runLevel,
+				onFinished = function(outcome, reason)
+					-- Cleared: cash everyone out NOW (the summary shows the moment Miasma dies)
+					-- and start the exit countdown with its Leave Now button; when it runs out
+					-- the instance finishes and anyone left is sent home. Failed (party wipe):
+					-- a short beat on the last death, then everyone respawns at home.
+					local delaySeconds = outcome == "cleared" and MIASMA_EXIT_SECONDS or MIASMA_WIPE_BEAT_SECONDS
+					if outcome == "cleared" then
+						local okRun, runSvc = pcall(require, ServerScriptService:WaitForChild("DungeonRunService", 5))
+						local present = {}
+						for uid in pairs(instance.members) do
+							local plr = Players:GetPlayerByUserId(uid)
+							if plr then
+								table.insert(present, plr)
+								if okRun and runSvc and runSvc.EndRunFor then pcall(runSvc.EndRunFor, plr, "cleared") end
+							end
+						end
+						if okRun and runSvc and runSvc.ShowExitCountdown then pcall(runSvc.ShowExitCountdown, present, delaySeconds) end
+					end
+					task.delay(delaySeconds, function()
+						if activeInstances[instance.instanceId] == instance then finishInstance(instance, outcome, reason) end
+					end)
+				end,
+			})
+			if ok2 then instance.encounterController = controller else warn("[DungeonInstanceService] Miasma encounter start failed: ", controller) end
+		elseif not ok then
+			warn("[DungeonInstanceService] MiasmaEncounterService require failed: ", service)
+		end
 	end
 
 	fireToAllMembers(instance, DungeonInstanceStateUpdate, {
@@ -376,6 +593,7 @@ local function launchDungeon(instance)
 		state = DungeonTypes.State.IN_PROGRESS,
 		dungeonName = instance.dungeonName,
 		tier = instance.tier,
+		level = instance.runLevel,
 		startTime = instance.startTime,
 	})
 end
@@ -415,16 +633,21 @@ local function initiateDungeon(leader, tier, cfg)
 	local instance = {
 		instanceId = instanceId,
 		tier = tier,
+		numericTier = cfg.NumericTier,
 		dungeonName = cfg.DungeonName,
 		keyItemId = cfg.KeyItemId,
+		realmTemplateName = cfg.RealmTemplateName,
+		encounterId = cfg.EncounterId,
 		leaderUserId = leader.UserId,
 		members = {},
 		statuses = {},
 		state = DungeonTypes.State.PROMPTING,
+		memberUserIds = {},
 	}
 
 	local missingNames = {}
 	for _, row in ipairs(memberRows) do
+		table.insert(instance.memberUserIds, row.userId)
 		instance.members[row.userId] = row.name
 		local plr = Players:GetPlayerByUserId(row.userId)
 		local hasKey = plr and DungeonProfile.CountItemId(plr, cfg.KeyItemId) >= 1
@@ -522,16 +745,27 @@ local function removePlayerFromInstance(player, teleportOut)
 	if instance.state ~= DungeonTypes.State.IN_PROGRESS then
 		return
 	end
+	if instance.encounterId == "Miasma" then
+		local ok, service = pcall(require, ServerScriptService:WaitForChild("MiasmaEncounterService", 2))
+		if ok and service and service.RemovePlayer then pcall(service.RemovePlayer, player) end
+	end
+	pcall(releaseMember, player, "DungeonLeft")
 
 	local leftName = instance.members[player.UserId] or player.Name
 	instance.members[player.UserId] = nil
 	instance.statuses[player.UserId] = nil
 
 	if teleportOut then
+		InventoryAudit.Note(player, "left the dungeon (Leave)")
+		-- Walking out ends THEIR run now ("left": DungeonScoreService's leave retention). Without
+		-- this the run stayed open and was cashed out whenever the instance finished, at the
+		-- party's outcome (a later clear paid the leaver in full). A no-op after a clear.
+		local okRun, runSvc = pcall(require, ServerScriptService:WaitForChild("DungeonRunService", 5))
+		if okRun and runSvc and runSvc.EndRunFor then pcall(runSvc.EndRunFor, player, "left") end
 		local char = player.Character
 		local hrp = char and char:FindFirstChild("HumanoidRootPart")
 		if hrp then
-			hrp.CFrame = HearthstoneService.GetHearthstoneLocation(player)
+			char:PivotTo(HearthstoneService.GetHearthstoneLocation(player))
 		end
 		DungeonInstanceStateUpdate:FireClient(player, { instanceId = instanceId, state = DungeonTypes.State.ENDED })
 	end
@@ -542,9 +776,7 @@ local function removePlayerFromInstance(player, teleportOut)
 	end
 
 	if remaining <= 0 then
-		destroyInstanceRealm(instance)
-		activeInstances[instanceId] = nil
-		onInstanceComplete(instance)
+		finishInstance(instance, "failed", "NoPlayersRemaining")
 	else
 		fireToAllMembers(instance, DungeonInstanceStateUpdate, {
 			instanceId = instanceId,
@@ -557,11 +789,85 @@ local function removePlayerFromInstance(player, teleportOut)
 	end
 end
 
+-- True when this character stands in the realm strip (every live realm is parked at
+-- X >= REALM_BASE_X, far from the overworld).
+local function isInRealmArea(player)
+	local char = player.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	return hrp ~= nil and hrp.Position.X > REALM_BASE_X - 2000
+end
+
 DungeonLeaveRequest.OnServerEvent:Connect(function(player)
+	if not playerToInstance[player.UserId] then
+		-- No run on record, yet still standing in a realm (a run that ended without sending
+		-- them home): Leave must still work, or they're stuck. Only from inside the realm strip,
+		-- so this is never a free hearthstone from the overworld.
+		if isSpectating(player) then endSpectating(player); return end
+		if isInRealmArea(player) then
+			InventoryAudit.Note(player, "left a realm with no active run (stuck escape)")
+			pcall(releaseMember, player, "DungeonLeft")
+			player.Character:PivotTo(HearthstoneService.GetHearthstoneLocation(player))
+		end
+		return
+	end
+	if isSpectating(player) then
+		-- Their run already ended when they died; just take them out and respawn them home.
+		local instanceId = playerToInstance[player.UserId]
+		removePlayerFromInstance(player, false)
+		if instanceId then
+			DungeonInstanceStateUpdate:FireClient(player, { instanceId = instanceId, state = DungeonTypes.State.ENDED })
+		end
+		endSpectating(player)
+		return
+	end
 	removePlayerFromInstance(player, true)
 end)
 
+-- Absence watchdog: a member who got out of the realm by any means other than Leave (a
+-- hearthstone, a dev teleport, falling out of the world) for ABSENT_STRIKES seconds has left the
+-- run: taken out of the instance and the encounter, their run ended as "left", HUD told ENDED.
+-- Without this they stayed a member, and the encounter kept poisoning and targeting them in the
+-- overworld. Spectators (parked above the realm) and the dead are skipped.
+local ABSENT_DISTANCE = 3000 -- studs from the realm pivot (realms are parked ~100k studs apart)
+local ABSENT_STRIKES = 3     -- consecutive one-second checks
+local absentStrikes = {}     -- [userId] = n
+task.spawn(function()
+	while true do
+		task.wait(1)
+		for _, instance in pairs(activeInstances) do
+			local realm = instance.realmModel
+			if instance.state == DungeonTypes.State.IN_PROGRESS and realm and realm.Parent then
+				local centre = realm:GetPivot().Position
+				for userId in pairs(instance.members) do
+					local plr = Players:GetPlayerByUserId(userId)
+					local char = plr and plr.Character
+					local hum = char and char:FindFirstChildOfClass("Humanoid")
+					local root = char and char:FindFirstChild("HumanoidRootPart")
+					if plr and root and hum and hum.Health > 0 and not isSpectating(plr)
+						and (root.Position - centre).Magnitude > ABSENT_DISTANCE then
+						absentStrikes[userId] = (absentStrikes[userId] or 0) + 1
+						if absentStrikes[userId] >= ABSENT_STRIKES then
+							absentStrikes[userId] = nil
+							InventoryAudit.Note(plr, "left the dungeon (outside the realm)")
+							local instanceId = playerToInstance[userId]
+							removePlayerFromInstance(plr, false)
+							local okRun, runSvc = pcall(require, ServerScriptService:WaitForChild("DungeonRunService", 5))
+							if okRun and runSvc and runSvc.EndRunFor then pcall(runSvc.EndRunFor, plr, "left") end
+							if instanceId then
+								DungeonInstanceStateUpdate:FireClient(plr, { instanceId = instanceId, state = DungeonTypes.State.ENDED })
+							end
+						end
+					else
+						absentStrikes[userId] = nil
+					end
+				end
+			end
+		end
+	end
+end)
+
 Players.PlayerRemoving:Connect(function(player)
+	player:SetAttribute(SPECTATE_ATTR, nil)
 	local instanceId = playerToInstance[player.UserId]
 	if not instanceId then
 		return
@@ -586,6 +892,18 @@ end)
 local function onCharacterRemoving(player)
 	local instanceId = playerToInstance[player.UserId]
 	if not instanceId then
+		return
+	end
+	if player:GetAttribute(SPECTATE_ATTR) == instanceId then
+		-- Died in the boss fight: stays in the run as a spectator. The next body is parked.
+		local instance = activeInstances[instanceId]
+		local conn
+		conn = player.CharacterAdded:Connect(function(char)
+			conn:Disconnect()
+			if instance and player:GetAttribute(SPECTATE_ATTR) == instanceId then
+				parkSpectatorBody(player, instance, char)
+			end
+		end)
 		return
 	end
 	local instance = activeInstances[instanceId]
@@ -690,7 +1008,12 @@ CollectionService:GetInstanceAddedSignal("DungeonPortal"):Connect(hookPortal)
 -- Boot
 ----------------------------------------------------------------------
 
-ensureRealmTemplate()
+for tier, cfg in pairs(DungeonPortalConfig.Tiers) do
+	if cfg.RealmTemplateName and not ensureRealmTemplate(cfg.RealmTemplateName) then
+		warn(("[DungeonInstanceService] %s (%s) cannot launch until its realm template exists")
+			:format(tier, cfg.DungeonName))
+	end
+end
 ensurePlaceholderPortal()
 
 Players.PlayerRemoving:Connect(function(player)
@@ -698,5 +1021,30 @@ Players.PlayerRemoving:Connect(function(player)
 end)
 
 print("[DungeonInstanceService] ready")
+
+-- Called by DeathLootService (the one Humanoid.Died hook) on every player death. During a live
+-- boss encounter: poison wiped, and the player becomes a spectator instead of leaving the run.
+function DungeonInstanceService.OnPlayerDied(player)
+	local instanceId = playerToInstance[player.UserId]
+	local instance = instanceId and activeInstances[instanceId]
+	if not instance or instance.state ~= DungeonTypes.State.IN_PROGRESS or not instance.members[player.UserId] then
+		return
+	end
+	local controller = instance.encounterController
+	if not controller or controller.Finished then return end
+	local ok, service = pcall(require, ServerScriptService:WaitForChild("MiasmaEncounterService", 2))
+	if ok and service and service.OnPlayerDied then pcall(service.OnPlayerDied, player) end
+	player:SetAttribute(SPECTATE_ATTR, instanceId)
+	player.ReplicationFocus = realmFocusPart(instance)
+	DungeonSpectate:FireClient(player, {
+		active = true,
+		instanceId = instanceId,
+		memberUserIds = instance.memberUserIds,
+	})
+end
+
+function DungeonInstanceService.IsSpectating(player)
+	return isSpectating(player)
+end
 
 return DungeonInstanceService

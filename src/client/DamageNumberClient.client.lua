@@ -3,7 +3,7 @@
 	Server sends post-armor damage via DamageNumberEvent; we show a floating,
 	arcing damage number above the target (mob or player character).
 
-	Event payload: (amount: number, targetModel: Model, maxHealth: number?, isCrit: boolean?)
+	Event payload: (amount, targetModel, maxHealth?, isCrit?, enchantFeedback?, source?)
 
 	Behavior:
 	1. Pop-in: transparency 1 -> 0 with a scale "pop" (Back easing overshoot).
@@ -12,8 +12,8 @@
 	3/5. Floats up in a short arc, then falls away past the start point and
 	     fades out -- like it's thrown up and over, then drops.
 	4. Fades out (opacity -> 0) as the sequence ends.
-	6. Size scales with % of the target's max HP dealt in one hit:
-	     <10% small (0.8x), 10-20% medium (1.8x), 20-30% large (2.5x), 30%+ massive (3.5x).
+	6. Size scales with % of the target's max HP dealt in one hit -- see
+	     SIZE_TIERS for the current bands and the measurements behind them.
 	7. Crits show "CRITICAL" (orange) popping in with the crit number (yellow,
 	     slight orange, sized the same way as (6)) at the same time, number
 	     positioned just below the label -- then a quick white slash wipes the
@@ -31,6 +31,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
 local SfxService = require(ReplicatedStorage:WaitForChild("SfxService"))
+local DamageNumberStyles = require(ReplicatedStorage:WaitForChild("DamageNumberStyles"))
+local EnchantHitEffects = require(script.Parent:WaitForChild("EnchantHitEffects"))
 
 local DamageNumberEvent = ReplicatedStorage:WaitForChild("DamageNumberEvent", 60)
 if not DamageNumberEvent then
@@ -61,21 +63,37 @@ local MAX_SPREAD = 5.0
 local SPREAD_SIZE_FRACTION = 0.6 -- fraction of the model's half-width/depth used as spread radius
 local DRIFT_MULT = 1.6 -- how much further a number drifts than its spawn spread, over its life
 
-local WHITE = Color3.fromRGB(255, 255, 255)
+-- Base billboard footprint at sizeMult 1.0, in SCREEN PIXELS. A BillboardGui
+-- sized purely in offset is a constant on-screen size with no distance falloff,
+-- so this is the floor for every number in the game regardless of tier -- it was
+-- 220x90, which made even the smallest tier a 72px-tall TextScaled number.
+local BASE_GUI_WIDTH = 130
+local BASE_GUI_HEIGHT = 54
+
 local SHADOW_COLOR = Color3.fromRGB(0, 0, 0)
 local CRIT_LABEL_COLOR = Color3.fromRGB(255, 140, 20) -- "CRITICAL" orange
 local CRIT_NUMBER_COLOR = Color3.fromRGB(255, 205, 60) -- yellow, slight orange
 local SLASH_COLOR = Color3.fromRGB(255, 255, 255)
 
+-- Scaled by sizeMult at build time so the shadow stays proportional instead of
+-- reading heavier the smaller the number gets.
 local SHADOW_OFFSET = Vector2.new(3, 3)
 
 -- Size tiers by % of target max HP dealt in this hit. Purely threshold-driven
 -- so future rebalancing never needs new code, just new numbers here.
+--
+-- Calibrated 2026-09-18 against what a hit actually is. A tier-matched COMMON
+-- weapon does 10-25% of a regular mob's max HP at every tier (T1 sword 7-9 vs
+-- Plains Slime 40 HP; T4 ~122 vs 500-600; T5 ~250 vs 1200-2000). The old bands
+-- assumed a normal hit was under 10%, so an ordinary swing rendered in the
+-- "large" 2.5x band and the tiering communicated nothing. A normal hit is now
+-- the visual baseline and only genuine burst damage gets big.
 local SIZE_TIERS = {
-	{ max = 0.10, mult = 0.8 }, -- small
-	{ max = 0.20, mult = 1.8 }, -- medium
-	{ max = 0.30, mult = 2.5 }, -- large
-	{ max = math.huge, mult = 3.5 }, -- massive
+	{ max = 0.08, mult = 0.60 }, -- chip: bleed ticks, cleave splash
+	{ max = 0.22, mult = 0.85 }, -- a normal hit -- the common case
+	{ max = 0.40, mult = 1.15 }, -- strong hit / crit
+	{ max = 0.65, mult = 1.55 }, -- big hit
+	{ max = math.huge, mult = 2.10 }, -- burst: two thirds of the bar in one blow
 }
 
 ------------------------------------------------------------
@@ -138,7 +156,7 @@ end
 local function buildNumberGui(root, text, textColor, sizeMult, startOffset)
 	local gui = Instance.new("BillboardGui")
 	gui.Name = "DmgNum"
-	gui.Size = UDim2.new(0, 220 * sizeMult, 0, 90 * sizeMult)
+	gui.Size = UDim2.new(0, BASE_GUI_WIDTH * sizeMult, 0, BASE_GUI_HEIGHT * sizeMult)
 	gui.StudsOffset = startOffset
 	gui.AlwaysOnTop = true
 	gui.LightInfluence = 0
@@ -149,7 +167,7 @@ local function buildNumberGui(root, text, textColor, sizeMult, startOffset)
 	local shadow = Instance.new("TextLabel")
 	shadow.Name = "Shadow"
 	shadow.Size = UDim2.fromScale(1, 1)
-	shadow.Position = UDim2.fromOffset(SHADOW_OFFSET.X, SHADOW_OFFSET.Y)
+	shadow.Position = UDim2.fromOffset(SHADOW_OFFSET.X * sizeMult, SHADOW_OFFSET.Y * sizeMult)
 	shadow.BackgroundTransparency = 1
 	shadow.FontFace = UIFonts.Damage
 	shadow.TextScaled = true
@@ -338,11 +356,13 @@ end
 -- Event handler
 ------------------------------------------------------------
 
-DamageNumberEvent.OnClientEvent:Connect(function(damage, targetModel, maxHealth, isCrit)
+DamageNumberEvent.OnClientEvent:Connect(function(damage, targetModel, maxHealth, isCrit, enchantFeedback, source)
 	local amt = math.floor(tonumber(damage) or 0)
 	if amt <= 0 then
 		return
 	end
+	-- Saved world-space feedback still plays if a killing blow removed the model.
+	EnchantHitEffects.PlayHit(enchantFeedback, targetModel)
 	if typeof(targetModel) ~= "Instance" or not targetModel:IsA("Model") then
 		return
 	end
@@ -369,7 +389,9 @@ DamageNumberEvent.OnClientEvent:Connect(function(damage, targetModel, maxHealth,
 		SfxService.PlayEffect("CriticalHit")
 		playCritSequence(root, amt, sizeMult, startOffset, duration, speedMult, driftRange)
 	else
-		local gui, lbl, shadow = buildNumberGui(root, tostring(amt), WHITE, sizeMult, startOffset)
+		-- Crit colours win when both apply; bleed ticks always arrive with
+		-- isCrit = false, so in practice the two never contend.
+		local gui, lbl, shadow = buildNumberGui(root, tostring(amt), DamageNumberStyles.Get(source).Color, sizeMult, startOffset)
 		animateArcAndFade(gui, lbl, shadow, startOffset, duration, sizeMult, driftRange)
 	end
 end)

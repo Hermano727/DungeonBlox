@@ -113,8 +113,8 @@ end
 
 local function grantFish(player, fishId)
 	local xpGain = XP_PER_FISH
-	DungeonProfile.AddSkillXP(player, "fishing", xpGain)
-	FishingXPEvent:FireClient(player, xpGain)
+	local _, _, totals = DungeonProfile.AddSkillXP(player, "fishing", xpGain)
+	FishingXPEvent:FireClient(player, xpGain, totals)
 
 	local resolvedFishId = fishId or rollFishId()
 	local ok, err = DungeonProfile.GrantItemId(player, resolvedFishId, 1)

@@ -55,15 +55,51 @@ end
 local KNOCKBACK_DISTANCE = 0.5 -- studs, one-time positional nudge away from attacker
 local ATTACK_RANGE_LEEWAY = 1.3 -- multiplier before giving up attack range and resuming walk
 local MELEE_VERTICAL_REACH = 2 -- studs beyond the bodies' vertical bounds; never an infinite column
-local MOB_COLLISION_RADIUS = 3 -- studs; mobs push apart instead of overlapping
+local MOB_COLLISION_RADIUS = 3 -- studs; floor for SeparationRadius (boss bounds), NOT crowding (CROWD_* below)
 local SEPARATION_STEP_MULT = 1.5 -- studs/sec headroom over MoveSpeed for a separation correction (see ClampSeparationPush)
 local LEASH_GRACE_DURATION = 1.0 -- seconds a mob may stay aggro'd past ReturnDistance if still close to the target
 local LEASH_GRACE_PROXIMITY = 12 -- studs; "physically close enough" to ignore the leash during the grace window
+-- Never-deaggro re-target radius: covers a whole dungeon realm, but not other realms or
+-- the overworld (realms are parked ~100k studs apart).
+local NEVER_DEAGGRO_REACQUIRE_RANGE = 1500
 local PLAYER_HIT_KNOCKBACK_HORIZONTAL = 4 -- studs/s impulse added to the player on being hit
 local PLAYER_HIT_KNOCKBACK_VERTICAL = 8 -- studs/s upward impulse -- a small hop, just enough to interrupt movement
-local ATTACK_SLOT_COUNT = 8 -- evenly-spaced "seats" per ring around an attack target (see acquireAttackSlot)
-local ATTACK_SLOT_RING_STEP = MOB_COLLISION_RADIUS * 2.2 -- studs between concentric rings once a ring's seats are full
+-- Both are the BASELINE every ordinary mob hit uses. A mob scales its own
+-- outgoing knockback with MobData's PlayerKnockbackMultiplier (Kane hits much
+-- harder than a slime), and one authored special can override that again with
+-- its own PlayerKnockbackMultiplier -- see ApplyPlayerHitstun. That multiplier
+-- is HORIZONTAL ONLY: the vertical hop above is the same for every mob.
+-- NOT to be confused with MobData's KnockbackMultiplier, which is the opposite
+-- direction: how much knockback the MOB takes when the player hits IT.
+-- Crowding (2026-09-29 overhaul: "Minecraft-like" clumping, no seat rings). Mobs walk straight
+-- at their target and only push EACH OTHER apart, softly: they may overlap part of their size,
+-- and each tick resolves only a share of the rest, so a crowd reads as a loose huddle that
+-- jostles instead of a rigid ring with gaps. Mobs never push the player (not yet, by request).
+local CROWD_MIN_RADIUS = 1.2      -- studs: the smallest footprint any mob gets
+local CROWD_BODY_FRACTION = 0.85  -- of the model's NARROWER half-extent (antlers/tails/weapons don't count)
+local CROWD_OVERLAP = 0.2         -- share of two mobs' combined radii they may overlap before any push
+                                  -- (two slimes: 6 studs apart with the old rigid radius, ~1.9 now)
+local CROWD_STIFFNESS = 0.35      -- share of the remaining overlap resolved per tick (soft, not rigid)
+local CROWD_PRIORITY_MASS = 4     -- elites and bosses weigh this much more: they keep right of way
+-- Threat (2026-09-29): who a mob fights is decided by a per-player threat score, not just "whoever
+-- hit last". Damage adds threat; threat fades (halves every THREAT_HALF_LIFE seconds), so recent
+-- damage dominates and a burst from long ago barely counts. Another player takes the mob over
+-- once their threat beats the current target's by THREAT_SWITCH_MARGIN; no minimum hold time.
+-- If the target dies, leaves, spectates or gets out of reach, the mob falls back to the next
+-- highest threat, and only then to plain proximity aggro. Elites and bosses react faster.
+local THREAT_HALF_LIFE = 6          -- seconds
+local THREAT_HALF_LIFE_PRIORITY = 4 -- elites / bosses
+local THREAT_SWITCH_MARGIN = 1.2    -- challenger must exceed current x this
+local THREAT_SWITCH_MARGIN_PRIORITY = 1.1
+local THREAT_FORGET = 0.5           -- entries decayed below this are dropped
+local CROWD_CELL = 8              -- spatial grid cell (studs); mobs with a radius over half a cell
+                                  -- live in a small "large" list everyone checks
+local FALL_RESCUE_DEPTH = 80 -- studs below its spawn before a mob is presumed to have fallen out of the world
 local DEFAULT_ATTACK_ANIM_DURATION = 0.4 -- seconds; fallback for a mob whose attack has no measurable length yet (see PerformAttack)
+-- How long an attack telegraph lingers past its impact before the server drops
+-- the tag. The client fades its own mark on the same schedule (Tail in
+-- MobTelegraphConfig); this is the authoritative cleanup behind it.
+local TELEGRAPH_CLEAR_TAIL = 0.35
 
 ensureMobCollisionGroup()
 
@@ -71,9 +107,11 @@ local MobData = require(ReplicatedStorage:WaitForChild("MobData"))
 local CombatSfxConfig = require(ReplicatedStorage:WaitForChild("CombatSfxConfig"))
 local DamageService = require(script.Parent:WaitForChild("DamageService"))
 local MobAnimController = require(script.Parent:WaitForChild("MobAnimController"))
+local MobTelegraph = require(script.Parent:WaitForChild("MobTelegraph"))
 local MobHPBarUI = require(script.Parent:WaitForChild("MobHPBarUI"))
 local MobGroundUtils = require(script.Parent:WaitForChild("MobGroundUtils"))
 local MobDeathEffect = require(script.Parent:WaitForChild("MobDeathEffect"))
+local CombatEnchantStatus = require(script.Parent:WaitForChild("CombatEnchantStatus"))
 
 -- Counter for generating unique IDs
 local mobIdCounter = 0
@@ -108,16 +146,22 @@ function MobClass.new(mobId, spawnPosition, spawnerRef, level, class)
     self.SpawnPosition = spawnPosition
     self.SpawnerRef = spawnerRef
     self._deathPosition = nil
+    -- Never-deaggro mobs (MobData NeverDeaggro, or anything from a spawner flagged
+    -- NeverDeaggro: dungeon trash, dungeon bosses, encounter adds) ignore the
+    -- ReturnDistance leash, and once engaged re-target the nearest living player
+    -- within NEVER_DEAGGRO_REACQUIRE_RANGE instead of going idle.
+    self.NeverDeaggro = statsCopy.NeverDeaggro == true or (spawnerRef ~= nil and spawnerRef.NeverDeaggro == true)
 
     -- Dynamic level override
     self.Level = tonumber(level) or self.Stats.Level
     self.Stats.Level = self.Level
 
-    -- Level scaling
-    local levelMultiplier = 1 + (self.Level * 0.1)
+    -- Authored fixed-stat elites can opt out; ordinary mobs keep level scaling.
+    local levelMultiplier = self.Stats.ScaleWithLevel == false and 1 or (1 + self.Level * 0.1)
     
-    -- Health tracking
-    self.MaxHealth = math.floor(self.Stats.BaseHP * levelMultiplier)
+    -- Health tracking. HPScaleWithLevel = false fixes HP alone (damage keeps scaling).
+    local hpMultiplier = self.Stats.HPScaleWithLevel == false and 1 or levelMultiplier
+    self.MaxHealth = math.floor(self.Stats.BaseHP * hpMultiplier)
     self.CurrentHealth = self.MaxHealth
 
     -- Scale outgoing damage
@@ -159,9 +203,10 @@ function MobClass:SpawnModel()
         return nil
     end
 
-    local modelTemplate = mobModelsFolder:FindFirstChild(self.MobID)
+    local modelName = (self.Stats and self.Stats.ModelName) or self.MobID
+    local modelTemplate = mobModelsFolder:FindFirstChild(modelName)
     if not modelTemplate then
-        warn("MobClass: Model not found for MobID: " .. self.MobID)
+        warn("MobClass: Model not found for MobID: " .. self.MobID .. " (model " .. tostring(modelName) .. ")")
         return nil
     end
     
@@ -170,7 +215,15 @@ function MobClass:SpawnModel()
     model:SetAttribute("MobUID", self.UID)
     model:SetAttribute("MobID", self.MobID)
     model:SetAttribute("MobLevel", self.Level)
-    
+
+    -- Optional per-mob size multiplier (MobData ModelScale, e.g. 0.67 = 33% smaller). Applied
+    -- BEFORE the feet-to-root measurement and grounding below, so every size-derived value
+    -- (grounding, hit radius, VFX radius) sees the scaled model.
+    local modelScale = tonumber(self.Stats and self.Stats.ModelScale)
+    if modelScale and modelScale > 0 and modelScale ~= 1 and model:IsA("Model") then
+        model:ScaleTo(modelScale)
+    end
+
     -- Position the model: raycast down to find the real walkable surface
     -- below the spawn point and rest the model's own geometry on top of it,
     -- rather than trusting the spawn marker's raw Y (which is often a flat
@@ -324,6 +377,36 @@ function MobClass:FindGroundY(x, z, fallbackY)
     return MobGroundUtils.FindGroundY(self.Model, x, z, fallbackY)
 end
 
+-- Last-resort recovery for a mob that has ended up under the map.
+--
+-- Nothing in the AI can climb back: FindGroundY keeps the current height when
+-- its probe hits nothing, so a mob below the world stays below the world and
+-- falls until Roblox's FallenPartsDestroyHeight destroys the model -- which
+-- looks exactly like an unexplained despawn. The 2026-09-18 report (flying
+-- above Kane) was one way in, fixed at the source in MobGroundUtils, but a mob
+-- can reach the void by other means (thin geometry, a bad spawn point,
+-- knockback off a ledge), so this catches all of them rather than that one.
+function MobClass:RescueIfFallen(currentPosition)
+    local spawnPosition = self.SpawnPosition
+    if typeof(spawnPosition) ~= "Vector3" then
+        return false
+    end
+    if currentPosition.Y > spawnPosition.Y - FALL_RESCUE_DEPTH then
+        return false
+    end
+
+    local grounded = self:ResolveGroundedSpawnPosition(self.Model, spawnPosition)
+    self.Model:PivotTo(CFrame.new(grounded))
+    local primaryPart = self.Model.PrimaryPart
+    if primaryPart then
+        -- Drop the fall speed too, or it resumes plummeting from the new spot.
+        primaryPart.AssemblyLinearVelocity = Vector3.zero
+    end
+    warn(string.format("[MobClass] %s fell to Y=%.1f (spawn Y=%.1f) -- returned to its spawn point",
+        tostring(self.MobID), currentPosition.Y, spawnPosition.Y))
+    return true
+end
+
 -- Rotate in place to face a world point, without moving. Used while
 -- attacking (face the target, do not walk into it).
 function MobClass:FaceToward(worldPoint)
@@ -344,14 +427,89 @@ function MobClass:FaceToward(worldPoint)
     self.Model:PivotTo(CFrame.lookAt(pos, Vector3.new(worldPoint.X, pos.Y, worldPoint.Z)))
 end
 
--- Simple anti-collision: nudge a desired (x, z) away from any other alive
--- mob closer than MOB_COLLISION_RADIUS, so mobs converging on the same
--- target push apart instead of fighting for the same spot every frame.
--- Reads self._activeMobsRef, set once per tick by UpdateAI.
--- Separation radius for crowd resolution. Derived from the model's footprint
--- rather than a flat constant: a 57-stud boss and a 4-stud slime previously
--- used the SAME radius of 3, which is why Miasma had no presence in a crowd
--- and slimes spawned on top of each other never pushed apart.
+-- The body footprint used for crowding between mobs (NOT SeparationRadius, which bosses also
+-- use for their movement bounds): a share of the model's narrower half-extent, so antlers,
+-- tails and held weapons don't hold neighbours away. Cached; boss shrink rescales it.
+function MobClass:CrowdRadius()
+    if self._crowdRadius then return self._crowdRadius end
+    local r = CROWD_MIN_RADIUS
+    local model = self.Model
+    if model and model:IsA("Model") then
+        local ok, size = pcall(function() return model:GetExtentsSize() end)
+        if ok and size then
+            r = math.max(CROWD_MIN_RADIUS, math.min(size.X, size.Z) * 0.5 * CROWD_BODY_FRACTION)
+        end
+    end
+    self._crowdRadius = r
+    return r
+end
+
+-- Push weight: footprint area, with elites and bosses boosted so trash yields to them.
+function MobClass:CrowdMass()
+    if self._crowdMass then return self._crowdMass end
+    local r = self:CrowdRadius()
+    local stats = self.Stats or {}
+    local priority = (stats.IsBoss or stats.IsNamedElite or stats.IsElite) and CROWD_PRIORITY_MASS or 1
+    self._crowdMass = r * r * priority
+    return self._crowdMass
+end
+
+-- Spatial grid of the living mobs, rebuilt once per MobManager tick (BuildCrowdGrid), so a mob
+-- only checks neighbours in the 3x3 cells around it instead of every mob on the server.
+local crowdGrid = {}      -- [cellKey] = { mob, ... }
+local crowdLarge = {}     -- mobs too big for one cell; checked by everyone
+local crowdGridReady = false
+local crowdScratch = {}
+
+local function crowdCellKey(cx, cz)
+    return cx * 100003 + cz
+end
+
+function MobClass.BuildCrowdGrid(activeMobs)
+    table.clear(crowdGrid)
+    table.clear(crowdLarge)
+    for _, mob in pairs(activeMobs) do
+        local part = mob.Model and mob.Model.PrimaryPart
+        if part and mob.IsAlive and mob:IsAlive() then
+            if mob:CrowdRadius() > CROWD_CELL * 0.5 then
+                table.insert(crowdLarge, mob)
+            else
+                local key = crowdCellKey(math.floor(part.Position.X / CROWD_CELL), math.floor(part.Position.Z / CROWD_CELL))
+                local list = crowdGrid[key]
+                if not list then
+                    list = {}
+                    crowdGrid[key] = list
+                end
+                table.insert(list, mob)
+            end
+        end
+    end
+    crowdGridReady = true
+end
+
+-- Mobs that could overlap (x, z): the 3x3 cells around it plus the large list. Before the
+-- first grid build (or for a caller outside the manager tick) falls back to the full list.
+local function crowdNeighbours(self, x, z)
+    table.clear(crowdScratch)
+    if not crowdGridReady then
+        for _, other in pairs(self._activeMobsRef or {}) do table.insert(crowdScratch, other) end
+        return crowdScratch
+    end
+    local cx, cz = math.floor(x / CROWD_CELL), math.floor(z / CROWD_CELL)
+    for ix = cx - 1, cx + 1 do
+        for iz = cz - 1, cz + 1 do
+            local list = crowdGrid[crowdCellKey(ix, iz)]
+            if list then
+                for _, other in ipairs(list) do table.insert(crowdScratch, other) end
+            end
+        end
+    end
+    for _, other in ipairs(crowdLarge) do table.insert(crowdScratch, other) end
+    return crowdScratch
+end
+
+-- The model's average half-extent (floored at MOB_COLLISION_RADIUS). No longer used for crowding
+-- (see CrowdRadius); bosses still read it for their movement bounds and stun shrink.
 function MobClass:SeparationRadius()
     if self._sepRadius then return self._sepRadius end
     local r = MOB_COLLISION_RADIUS
@@ -366,67 +524,43 @@ function MobClass:SeparationRadius()
     return r
 end
 
--- "Mass" for push arbitration. Bigger mobs shove smaller ones and barely move
--- themselves -- the boss should not get jostled by trash. Scales with footprint
--- area, so the difference is pronounced rather than marginal.
-function MobClass:SeparationMass()
-    local r = self:SeparationRadius()
-    return r * r
-end
-
--- Nudge a desired (x, z) out of any other alive mob's personal space.
---
--- Push is now WEIGHTED, not symmetric: each mob yields in proportion to the
--- other's mass, so a slime walking into Miasma gets moved almost the whole
--- overlap while Miasma barely registers it. Two equal slimes still split it
--- 50/50 and settle instead of oscillating.
+-- Nudge a desired (x, z) out of neighbouring mobs, SOFTLY (see the CROWD_* constants): mobs may
+-- overlap part of their footprint, and only CROWD_STIFFNESS of the remaining overlap is resolved
+-- per tick. Weighted by CrowdMass, so trash walking into an elite or boss moves almost the whole
+-- way while the big one barely registers it; two equal mobs split it and settle.
 function MobClass:ResolveMobSeparation(x, z)
-    local activeMobs = self._activeMobsRef
-    if not activeMobs then
-        return x, z
-    end
-
-    local myRadius = self:SeparationRadius()
-    local myMass   = self:SeparationMass()
+    local myRadius = self:CrowdRadius()
+    local myMass = self:CrowdMass()
 
     local pushX, pushZ = 0, 0
-    for _, otherMob in pairs(activeMobs) do
+    for _, otherMob in ipairs(crowdNeighbours(self, x, z)) do
         if otherMob ~= self and otherMob.IsAlive and otherMob:IsAlive() and otherMob.Model then
             local otherPart = otherMob.Model.PrimaryPart
             if otherPart then
-                local otherRadius = otherMob.SeparationRadius
-                    and otherMob:SeparationRadius() or MOB_COLLISION_RADIUS
-                local minDist = myRadius + otherRadius
+                local otherRadius = otherMob.CrowdRadius and otherMob:CrowdRadius() or CROWD_MIN_RADIUS
+                local minDist = (myRadius + otherRadius) * (1 - CROWD_OVERLAP)
 
                 local dx = x - otherPart.Position.X
                 local dz = z - otherPart.Position.Z
                 local dist = math.sqrt(dx * dx + dz * dz)
 
                 if dist > 0.001 and dist < minDist then
-                    local overlap = minDist - dist
-                    local otherMass = otherMob.SeparationMass
-                        and otherMob:SeparationMass() or (MOB_COLLISION_RADIUS * MOB_COLLISION_RADIUS)
-
-                    -- Share of the overlap THIS mob yields. Heavier neighbour
-                    -- -> larger share for us. Equal mass -> 0.5 each.
+                    local otherMass = otherMob.CrowdMass and otherMob:CrowdMass() or (CROWD_MIN_RADIUS * CROWD_MIN_RADIUS)
+                    -- Share of the overlap THIS mob yields: heavier neighbour -> larger share.
                     local yield = otherMass / (myMass + otherMass)
-
-                    pushX += (dx / dist) * overlap * yield
-                    pushZ += (dz / dist) * overlap * yield
+                    local amount = (minDist - dist) * yield * CROWD_STIFFNESS
+                    pushX += (dx / dist) * amount
+                    pushZ += (dz / dist) * amount
                 elseif dist <= 0.001 then
-                    -- Exactly co-located (spawned on the same point): nudge on a
-                    -- deterministic-but-varied bearing so the stack fans out
-                    -- instead of every mob picking the same escape direction.
-                    -- UID is a STRING id, not a number. Hash it to a stable
-                    -- numeric bearing so co-located mobs fan out on different
-                    -- headings instead of all escaping the same way.
+                    -- Exactly co-located (spawned on the same point): fan out on a stable
+                    -- per-mob bearing (UID is a string: hash it) instead of all the same way.
                     local seed = 0
                     for i = 1, #tostring(self.UID or "") do
                         seed = (seed * 31 + string.byte(tostring(self.UID), i)) % 100003
                     end
                     local a = (seed * 2.399963) % (math.pi * 2)
-                    pushX += math.cos(a) * minDist * 0.5
-                    pushZ += math.sin(a) * minDist * 0.5
+                    pushX += math.cos(a) * minDist * 0.5 * CROWD_STIFFNESS
+                    pushZ += math.sin(a) * minDist * 0.5 * CROWD_STIFFNESS
                 end
             end
         end
@@ -513,7 +647,7 @@ function MobClass:StepToward(goalPosition, deltaTime)
 
     local newX, newZ = pos.X, pos.Z
     if dist > 0.05 then
-        local moveSpeed = self.Stats.MoveSpeed or 8
+        local moveSpeed = self:GetEffectiveMoveSpeed()
         local step = math.min(moveSpeed * deltaTime, dist)
         local dir = flat.Unit
         newX = pos.X + dir.X * step
@@ -573,7 +707,16 @@ function MobClass:SyncHumanoidLocomotionStats(humanoid)
     -- Informational only -- movement is driven by StepToward, not by
     -- Humanoid's own walk controller. Kept in sync in case anything else
     -- (UI, animations) reads it.
-    humanoid.WalkSpeed = self.Stats.MoveSpeed or humanoid.WalkSpeed
+    humanoid.WalkSpeed = self:GetEffectiveMoveSpeed()
+end
+
+-- MoveSpeed after status effects. EVERY movement site goes through this rather
+-- than reading Stats.MoveSpeed directly, or a slow would apply to some kinds of
+-- movement and not others -- a slowed hopper would keep hopping the same
+-- distance just as often. Returns the base speed unchanged when nothing applies.
+function MobClass:GetEffectiveMoveSpeed()
+    local base = (self.Stats and self.Stats.MoveSpeed) or 8
+    return base * CombatEnchantStatus.GetSpeedMultiplier(self.Model)
 end
 
 -- Small one-time positional nudge away from the attacker. No physics, no
@@ -638,7 +781,7 @@ function MobClass:CreateHPBar()
     -- entirely for them (per direct request). MobHPBarUI.Update already
     -- no-ops safely when mob.HPBar is nil, so nothing else needs to check
     -- this flag.
-    if self.Stats and self.Stats.IsNamedElite then
+    if self.Stats and (self.Stats.IsNamedElite or self.Stats.IsBoss) then
         return nil
     end
     return MobHPBarUI.Create(self)
@@ -653,7 +796,7 @@ end
 -- amount comes in pre-armor (e.g. MobCombat already applied level scaling).
 -- DamageService applies the armor curve here so every damage source funnels
 -- through the same math.
-function MobClass:TakeDamage(player, amount)
+function MobClass:TakeDamage(player, amount, weaponSubStats)
     if self.CurrentHealth <= 0 then
         return false -- Already dead
     end
@@ -662,14 +805,20 @@ function MobClass:TakeDamage(player, amount)
     end
 
     local armorRating = (self.Stats and self.Stats.Armor) or 0
-    local final = DamageService.ComputeFinal(amount, armorRating)
+    local final, armorHit = DamageService.ComputeHitFinal(amount, armorRating, self, weaponSubStats)
+    if final <= 0 then return false end
 
-    -- Apply damage
-    self.CurrentHealth = self.CurrentHealth - final
-    if self.CurrentHealth < 0 then
-        self.CurrentHealth = 0
+    -- Apply damage. HealthFloor (optional, set by encounter scripts) is a level the HP can't be
+    -- pushed below -- e.g. a boss that must play a phase transition before it can die.
+    local floor = math.max(0, tonumber(self.HealthFloor) or 0)
+    if floor > 0 and self.CurrentHealth <= floor then
+        return false
     end
+    self.CurrentHealth = math.max(floor, self.CurrentHealth - final)
     
+    -- In combat (a named elite's idle-despawn timer reads this; see MobManager).
+    self._lastCombatAt = os.clock()
+
     -- Track damage contribution (post-armor so loot reflects actual damage)
     local playerId = player.UserId
     self.DamageTracker[playerId] = (self.DamageTracker[playerId] or 0) + final
@@ -682,19 +831,33 @@ function MobClass:TakeDamage(player, amount)
         self:SyncHumanoidHealth(humanoid)
     end
 
-    -- Cancel an in-progress attack swing -- getting hit interrupts the
+    -- Unless this mob has an uninterruptible moveset, getting hit interrupts the
     -- animation, but NOT the attack-cooldown timer, so the mob can still
     -- land its own hit back if the player is already in range (no hit-stun
     -- lockout on the attempt itself, only a visual flinch).
-    if self._animTracks and self._animTracks.Attack and self._animTracks.Attack.IsPlaying then
-        self._animTracks.Attack:Stop(0.05)
+    if self.Stats.InterruptAttackOnHit ~= false then
+        if self._animTracks and self._animTracks.Attack and self._animTracks.Attack.IsPlaying then
+            self._animTracks.Attack:Stop(0.05)
+        end
+        -- An authored special (see MobMovesetBehaviour) is an attack too, and its
+        -- track lives outside _animTracks.Attack, so it needs stopping here as
+        -- well -- otherwise an "interruptible" mob would still finish its combo
+        -- through a flinch. The moveset update sees the stopped track on the next
+        -- tick and closes the special out properly (cooldown, state).
+        if self._moveset and self._moveset.track and self._moveset.track.IsPlaying then
+            self._moveset.track:Stop(0.05)
+        end
     end
 
-    -- Re-aggro on whoever just hit us
-    if self.AIState == "Idle" then
+    -- Threat, not "whoever hit last": the hit adds its damage, then the target is re-picked
+    -- (see RefreshThreatTarget). A mob with no target always takes its attacker.
+    self:AddThreat(player, final)
+    if not self:RefreshThreatTarget() and not self.TargetPlayer then
+        self.TargetPlayer = player
+    end
+    if self.AIState == "Idle" and self.TargetPlayer then
         self.AIState = "Walking"
     end
-    self.TargetPlayer = player
     
     -- Check for death
     if self.CurrentHealth <= 0 then
@@ -702,10 +865,10 @@ function MobClass:TakeDamage(player, amount)
         -- tears down the model.
         DamageService.AwardKill(player, self)
         self:Die()
-        return true -- Mob died
+        return true, armorHit -- Mob died
     end
 
-    return false -- Mob still alive
+    return false, armorHit -- Mob still alive
 end
 
 -- Default hit sound: every mob plays the same shared "glass" clip
@@ -718,99 +881,92 @@ function MobClass:GetHitSoundId()
     return CombatSfxConfig.MELEE_HIT_GLASS_SOUND_ID
 end
 
--- Attack-slot registry: gives every mob walking toward the same player a
--- stable angular "seat" around them, instead of every mob's walk goal being
--- the player's exact position. ClampSeparationPush (above) only cleans up
--- overlap AFTER mobs have already piled onto the same spot -- it's a
--- reactive fix for the symptom. Slotting is the proactive half: it keeps
--- mobs from choosing to converge on one point in the first place, which is
--- what makes a pack surround a player in a clean ring instead of scrumming
--- into a single stack that separation then has to keep shoving apart
--- (2026-09-09, per direct request: "gather and collide cleanly like a group
--- of zombies hitting a player in Minecraft").
---
--- Keyed by Player instance (weak keys, so a player leaving the game doesn't
--- pin this table open) -> a sparse array of mob refs holding each slot index
--- (nil = free). A mob's own _attackSlot / _attackSlotPlayer fields record
--- what it currently holds, purely so it can find and clear its own entry
--- again without scanning every slot.
---
--- Declared here (above Die/GetHitSoundId) rather than down by
--- FindClosestAggroTarget/HandleWalking/HandleAttacking, which is where this
--- registry conceptually belongs -- Die() below is the first caller in file
--- order, and a Luau local is only visible to code that comes after its
--- declaration in the same chunk. Placing it below Die() silently resolved
--- `releaseAttackSlot`/`acquireAttackSlot` to globals (both nil) instead of
--- these locals, so every mob death threw "attempt to call a nil value" and
--- aborted Die() before the HP bar, model, and death snapshot cleanup ever
--- ran. Keep this block above every function that calls into it.
-local slotRegistry = setmetatable({}, { __mode = "k" })
+-- Threat ------------------------------------------------------------------------------------
 
--- Drops whatever seat `mob` is holding (if any). Always safe to call even
--- if the mob holds nothing. Must be called before a mob stops targeting a
--- player (target lost/died, or the mob itself died) -- otherwise the slot
--- table keeps a live reference to a mob nothing will ever release, quietly
--- leaking a "taken" seat forever.
-local function releaseAttackSlot(mob)
-	local player = mob._attackSlotPlayer
-	local slot = mob._attackSlot
-	if player and slot ~= nil then
-		local slots = slotRegistry[player]
-		if slots and slots[slot] == mob then
-			slots[slot] = nil
-		end
-	end
-	mob._attackSlot = nil
-	mob._attackSlotPlayer = nil
+function MobClass:IsPriorityMob()
+    local stats = self.Stats or {}
+    return stats.IsBoss == true or stats.IsNamedElite == true or stats.IsElite == true
 end
 
--- Returns the slot index `mob` should walk to relative to `player`, claiming
--- the next free one the first time (or instantly returning its existing
--- seat on repeat calls -- HandleWalking calls this every tick, so this must
--- be cheap and stable for a mob that already holds a slot on this player).
-local function acquireAttackSlot(mob, player)
-	if mob._attackSlotPlayer == player and mob._attackSlot ~= nil then
-		return mob._attackSlot
-	end
-	releaseAttackSlot(mob)
-
-	local slots = slotRegistry[player]
-	if not slots then
-		slots = {}
-		slotRegistry[player] = slots
-	end
-
-	local index = 0
-	while slots[index] do
-		index += 1
-	end
-
-	slots[index] = mob
-	mob._attackSlot = index
-	mob._attackSlotPlayer = player
-	return index
+local function threatHalfLife(self)
+    return self:IsPriorityMob() and THREAT_HALF_LIFE_PRIORITY or THREAT_HALF_LIFE
 end
 
--- Turns a slot index into a flat (Y=0) world-space offset from the target:
--- ATTACK_SLOT_COUNT evenly-spaced angles per ring, then overflow mobs
--- (index >= ATTACK_SLOT_COUNT) spill onto a wider concentric ring so a pack
--- bigger than one ring's seats still spreads out radially instead of
--- stacking multiple mobs on the same angle.
-local function attackSlotOffset(index, radius)
-	local ring = math.floor(index / ATTACK_SLOT_COUNT)
-	local angleIndex = index % ATTACK_SLOT_COUNT
-	local angle = (angleIndex / ATTACK_SLOT_COUNT) * math.pi * 2
-	local ringRadius = radius + ring * ATTACK_SLOT_RING_STEP
-	return Vector3.new(math.cos(angle) * ringRadius, 0, math.sin(angle) * ringRadius)
+local function threatValue(self, entry, now)
+    return entry.value * 0.5 ^ ((now - entry.at) / threatHalfLife(self))
+end
+
+-- A player this mob may still fight: in the game, alive, not spectating a boss fight, and within
+-- reach of this mob (the realm for never-deaggro bosses; home zone + aggro range otherwise).
+function MobClass:IsValidThreatTarget(player)
+    if not player or not player.Parent or player:GetAttribute("DungeonSpectating") ~= nil then return false end
+    local character = player.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if not humanoid or not root or humanoid.Health <= 0 then return false end
+    local position = self:GetPosition()
+    if not position then return false end
+    local reach = self.NeverDeaggro and NEVER_DEAGGRO_REACQUIRE_RANGE
+        or ((self.Stats.AggroRange or 60) + (self.Stats.ReturnDistance or 90))
+    return (root.Position - position).Magnitude <= reach
+end
+
+function MobClass:AddThreat(player, amount)
+    if not player or not (amount and amount > 0) then return end
+    self.Threat = self.Threat or {}
+    local now = os.clock()
+    local entry = self.Threat[player]
+    local value = entry and threatValue(self, entry, now) or 0
+    self.Threat[player] = { value = value + amount, at = now }
+end
+
+function MobClass:GetThreat(player)
+    local entry = self.Threat and self.Threat[player]
+    return entry and threatValue(self, entry, os.clock()) or 0
+end
+
+-- Highest-threat valid player (optionally only among `allowed`, a set of players). Drops entries
+-- that have faded out or whose player is dead or gone.
+function MobClass:TopThreat(allowed)
+    if not self.Threat then return nil, 0 end
+    local now = os.clock()
+    local best, bestValue = nil, 0
+    for player, entry in pairs(self.Threat) do
+        local value = threatValue(self, entry, now)
+        local character = player.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        if value < THREAT_FORGET or not player.Parent or not humanoid or humanoid.Health <= 0 then
+            self.Threat[player] = nil -- faded, dead or gone: a respawn starts clean
+        elseif (not allowed or allowed[player]) and value > bestValue and self:IsValidThreatTarget(player) then
+            best, bestValue = player, value
+        end
+    end
+    return best, bestValue
+end
+
+function MobClass:ClearThreat()
+    self.Threat = nil
+end
+
+-- Re-picks the target from threat: take the top player when there is no valid target, or when
+-- they out-threat the current one by the switch margin. Returns true if the target changed.
+function MobClass:RefreshThreatTarget()
+    local best, bestValue = self:TopThreat()
+    if not best then return false end
+    local current = self.TargetPlayer
+    if current == best then return false end
+    local margin = self:IsPriorityMob() and THREAT_SWITCH_MARGIN_PRIORITY or THREAT_SWITCH_MARGIN
+    if current and self:IsValidThreatTarget(current) and bestValue <= self:GetThreat(current) * margin then
+        return false
+    end
+    self.TargetPlayer = best
+    self._engaged = true
+    if self.AIState == "Idle" then self.AIState = "Walking" end
+    return true
 end
 
 -- Die method
 function MobClass:Die()
-    -- Release any attack-slot seat this mob was holding so a dead mob's
-    -- table doesn't sit in slotRegistry forever as a permanently "taken"
-    -- seat nothing will ever free (see acquireAttackSlot).
-    releaseAttackSlot(self)
-
     -- Clean up HP bar
     if self.HPBar then
         self.HPBar:Destroy()
@@ -838,10 +994,24 @@ function MobClass:Die()
         local mdl = self.Model
         self.Model = nil -- unchanged: IsAlive()/UpdateAI etc. still see "no model" immediately
 
+        -- A subclass with an authored death sequence (DungeonBossMobClass, Miasma) can take
+        -- ownership of the model: it keeps it alive for the sequence and destroys it itself,
+        -- so the generic death effect and the 0.2s Debris below are skipped. Gameplay death
+        -- (rewards, spawner notify, IsAlive) still happens right now either way.
+        local presenting = false
+        if self.PlayDefeatPresentation then
+            local okPres, res = pcall(self.PlayDefeatPresentation, self, mdl)
+            if not okPres then
+                warn("MobClass: PlayDefeatPresentation failed: " .. tostring(res))
+            end
+            presenting = okPres and res == true
+        end
+
         -- Spawn the red-silhouette death effect from the model's exact
         -- final pose BEFORE anything below tears it down (Debris just
         -- defers the real destruction, but MobDeathEffect.Play clones mdl
         -- synchronously right now, so it must run first regardless).
+        if not presenting then
         local okFx, fxErr = pcall(function()
             MobDeathEffect.Play(mdl)
         end)
@@ -866,6 +1036,7 @@ function MobClass:Die()
         -- any replication delay and short enough that the frozen corpse
         -- pose isn't noticeable before it vanishes.
         Debris:AddItem(mdl, 0.2)
+        end -- not presenting
     end
     
     -- Notify spawner
@@ -903,6 +1074,18 @@ function MobClass:UpdateAI(deltaTime, players, activeMobs)
 
     local currentPosition = primaryPart.Position
 
+    -- Skip this tick's AI after a rescue: the mob just teleported, so any
+    -- movement computed from the old position would be nonsense.
+    if self:RescueIfFallen(currentPosition) then
+        return
+    end
+
+    -- Threat decides the target each tick: a stronger attacker takes over, and a target that
+    -- died, left or went out of reach falls back to the next highest threat.
+    if self.Threat then
+        self:RefreshThreatTarget()
+    end
+
     if self.AIState == "Idle" then
         self:HandleIdle(players, currentPosition)
     elseif self.AIState == "Walking" then
@@ -920,6 +1103,11 @@ end
 function MobClass:FindClosestAggroTarget(players, currentPosition)
     local closestPlayer = nil
     local closestDistance = self.Stats.AggroRange
+    local ignoreHomeZone = false
+    if self.NeverDeaggro and self._engaged then
+        closestDistance = NEVER_DEAGGRO_REACQUIRE_RANGE
+        ignoreHomeZone = true
+    end
 
     for _, player in ipairs(players) do
         local character = player.Character
@@ -927,10 +1115,10 @@ function MobClass:FindClosestAggroTarget(players, currentPosition)
             local hrp = character:FindFirstChild("HumanoidRootPart")
             local humanoid = character:FindFirstChildOfClass("Humanoid")
 
-            if hrp and humanoid and humanoid.Health > 0 then
+            if hrp and humanoid and humanoid.Health > 0 and player:GetAttribute("DungeonSpectating") == nil then
                 local distance = (currentPosition - hrp.Position).Magnitude
                 local distanceFromSpawn = (hrp.Position - self.SpawnPosition).Magnitude
-                if distance < closestDistance and distanceFromSpawn <= self.Stats.ReturnDistance then
+                if distance < closestDistance and (ignoreHomeZone or distanceFromSpawn <= self.Stats.ReturnDistance) then
                     closestDistance = distance
                     closestPlayer = player
                 end
@@ -949,6 +1137,7 @@ function MobClass:TryAcquireTarget(players, currentPosition)
 
     self.TargetPlayer = closestPlayer
     self.AIState = "Walking"
+    self._engaged = true
     return true
 end
 
@@ -1011,7 +1200,6 @@ end
 -- countdown start, after which the mob gives up and goes Idle.
 function MobClass:HandleWalking(deltaTime, players, currentPosition)
     if not self.TargetPlayer or not self.TargetPlayer.Character then
-        releaseAttackSlot(self)
         self.TargetPlayer = nil
         self.AIState = "Idle"
         self._leashGraceStartedAt = nil
@@ -1022,7 +1210,6 @@ function MobClass:HandleWalking(deltaTime, players, currentPosition)
     local targetHRP = self.TargetPlayer.Character:FindFirstChild("HumanoidRootPart")
     local targetHumanoid = self.TargetPlayer.Character:FindFirstChildOfClass("Humanoid")
     if not targetHRP or not targetHumanoid or targetHumanoid.Health <= 0 then
-        releaseAttackSlot(self)
         self.TargetPlayer = nil
         self.AIState = "Idle"
         self._leashGraceStartedAt = nil
@@ -1036,7 +1223,7 @@ function MobClass:HandleWalking(deltaTime, players, currentPosition)
     local distanceToTarget = math.sqrt(dtx * dtx + dtz * dtz)
     local distanceFromSpawn = (currentPosition - self.SpawnPosition).Magnitude
 
-    if distanceFromSpawn > self.Stats.ReturnDistance then
+    if not self.NeverDeaggro and distanceFromSpawn > self.Stats.ReturnDistance then
         if distanceToTarget <= LEASH_GRACE_PROXIMITY then
             -- Still right on the player despite being past the zone -- hold off.
             self._leashGraceStartedAt = nil
@@ -1044,7 +1231,7 @@ function MobClass:HandleWalking(deltaTime, players, currentPosition)
             local now = tick()
             self._leashGraceStartedAt = self._leashGraceStartedAt or now
             if now - self._leashGraceStartedAt >= LEASH_GRACE_DURATION then
-                releaseAttackSlot(self)
+                self:ClearThreat() -- gave up the chase: forget it, like an MMO leash reset
                 self.TargetPlayer = nil
                 self.AIState = "Idle"
                 self._leashGraceStartedAt = nil
@@ -1074,15 +1261,10 @@ function MobClass:HandleWalking(deltaTime, players, currentPosition)
 
     MobAnimController.setWalking(self, true)
 
-    -- Walk toward this mob's own seat around the target instead of the
-    -- target's exact position -- see acquireAttackSlot above. The seat
-    -- sits just inside AttackRange so reaching it reliably flips the mob
-    -- into Attacking on the very next tick (the check above compares real
-    -- distance to the target, not to the slot).
-    local slotIndex = acquireAttackSlot(self, self.TargetPlayer)
-    local approachRadius = math.max(self.Stats.AttackRange * 0.8, self:GetHitRadius())
-    local goalPosition = targetHRP.Position + attackSlotOffset(slotIndex, approachRadius)
-    self:Move(goalPosition, deltaTime)
+    -- Straight at the target (no seat rings since 2026-09-29): the melee-reach check above
+    -- flips to Attacking once close enough, and the soft crowd push keeps a pack from
+    -- stacking into one point, so a crowd clumps around the player like Minecraft mobs.
+    self:Move(targetHRP.Position, deltaTime)
 end
 
 -- In range: stop, face the player, attack on cooldown. Getting hit cancels
@@ -1090,7 +1272,6 @@ end
 -- so a mob already in range still lands its own hit even mid-flinch.
 function MobClass:HandleAttacking(players, currentPosition)
     if not self.TargetPlayer or not self.TargetPlayer.Character then
-        releaseAttackSlot(self)
         self.TargetPlayer = nil
         self.AIState = "Idle"
         return
@@ -1099,7 +1280,6 @@ function MobClass:HandleAttacking(players, currentPosition)
     local targetHRP = self.TargetPlayer.Character:FindFirstChild("HumanoidRootPart")
     local targetHumanoid = self.TargetPlayer.Character:FindFirstChildOfClass("Humanoid")
     if not targetHRP or not targetHumanoid or targetHumanoid.Health <= 0 then
-        releaseAttackSlot(self)
         self.TargetPlayer = nil
         self.AIState = "Idle"
         return
@@ -1182,6 +1362,18 @@ function MobClass:PerformAttack(targetHumanoid)
         end
     end
 
+    -- Telegraph the windup, using the SAME delay the damage below uses so the
+    -- two can never drift (retuning AttackSpeed re-times both). Opt-in per mob
+    -- via MobData's `Telegraph`, so mobs without it are untouched. Only the
+    -- delayed-hit path can telegraph at all -- an instant-hit mob has no windup
+    -- to warn during. No frontal cone here on purpose: IsTargetWithinMeleeReach
+    -- has none for the ordinary swing, so the honest shape is a full ring.
+    if self._attackHitDelay and self.Stats and self.Stats.Telegraph then
+        MobTelegraph.Begin(self, self.Stats.Telegraph, { self._attackHitDelay },
+            MobTelegraph.ReachFor(self), nil)
+        MobTelegraph.ClearAfter(self, self._attackHitDelay + TELEGRAPH_CLEAR_TAIL)
+    end
+
     -- Mobs with an AttackHitFrame configured (see MobAnimConfig) land their
     -- damage in sync with the swing animation instead of instantly on
     -- attack start -- e.g. Plains Slime's damage lands at frame 13 of its
@@ -1211,7 +1403,10 @@ end
 -- wins against that correction -- confirmed by testing to produce real,
 -- if small, displacement. Self-destructs via Debris so it never lingers.
 local Debris = game:GetService("Debris")
-function MobClass:ApplyPlayerHitstun(playerCharacter)
+-- `knockbackMultiplier` is an optional per-hit override (one authored special
+-- hitting harder than the mob's ordinary swing); omitted, the mob's own
+-- MobData PlayerKnockbackMultiplier applies, and failing that the baseline.
+function MobClass:ApplyPlayerHitstun(playerCharacter, knockbackMultiplier)
     local hrp = playerCharacter:FindFirstChild("HumanoidRootPart")
     if not hrp or not self.Model then
         return
@@ -1221,12 +1416,30 @@ function MobClass:ApplyPlayerHitstun(playerCharacter)
         return
     end
 
+    local mult = tonumber(knockbackMultiplier)
+        or tonumber(self.Stats and self.Stats.PlayerKnockbackMultiplier)
+        or 1
+    if mult <= 0 then return end
+
     local horizontal = Vector3.new(hrp.Position.X - primaryPart.Position.X, 0, hrp.Position.Z - primaryPart.Position.Z)
     local dir = horizontal.Magnitude > 0.1 and horizontal.Unit or Vector3.new(0, 0, 1)
 
+    -- HORIZONTAL ONLY. The vertical component stays at the baseline hop for
+    -- every mob however hard it hits: scaling it too launched the player high
+    -- enough to read as floaty, and a big pop can also lift them past the
+    -- melee vertical reach so the later impacts of a combo whiff entirely.
+    -- A heavy hit should send you further back, not further up.
     local bv = Instance.new("BodyVelocity")
-    bv.Velocity = Vector3.new(dir.X * PLAYER_HIT_KNOCKBACK_HORIZONTAL, PLAYER_HIT_KNOCKBACK_VERTICAL, dir.Z * PLAYER_HIT_KNOCKBACK_HORIZONTAL)
-    bv.MaxForce = Vector3.new(4000, 4000, 4000)
+    bv.Velocity = Vector3.new(
+        dir.X * PLAYER_HIT_KNOCKBACK_HORIZONTAL * mult,
+        PLAYER_HIT_KNOCKBACK_VERTICAL,
+        dir.Z * PLAYER_HIT_KNOCKBACK_HORIZONTAL * mult
+    )
+    -- Only the horizontal budget scales with it, for the same reason. (The
+    -- vertical 4000 is mostly spent holding the character's weight against
+    -- gravity anyway, which is why the baseline hop is as small as it is.)
+    local force = 4000 * math.max(1, mult)
+    bv.MaxForce = Vector3.new(force, 4000, force)
     bv.P = 1250
     bv.Parent = hrp
     Debris:AddItem(bv, 0.15)

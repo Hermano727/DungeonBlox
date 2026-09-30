@@ -21,6 +21,7 @@ local React              = require(ReplicatedStorage.Packages.React)
 local SkillXPShared      = require(ReplicatedStorage:WaitForChild("SkillXPShared"))
 local DecorationIcons    = require(ReplicatedStorage.Assets.Icons.Decorations.DecorationIcons)
 local UIDevTuning        = require(ReplicatedStorage:WaitForChild("UIDevTuning"))
+local HudBottomLeftStack = require(ReplicatedStorage:WaitForChild("HudBottomLeftStack"))
 
 local e      = React.createElement
 local player = Players.LocalPlayer
@@ -75,6 +76,13 @@ local COMBAT_POSITION = UDim2.new(0.5, 0, 0, 20)  -- top-center of the screen, p
 local COMBAT_ANCHOR   = Vector2.new(0.5, 0)
 local DEFAULT_POSITION = UDim2.new(0, 10, 1, -10)
 local DEFAULT_ANCHOR   = Vector2.new(0, 1)
+-- The non-combat bars share the bottom-left corner with RS/HudBottomLeftStack (combat timer,
+-- dungeon timer); they sit this far above whatever the stack is currently showing.
+local STACK_CLEARANCE  = 8
+local function defaultPosition(stackHeight: number): UDim2
+    if stackHeight <= 0 then return DEFAULT_POSITION end
+    return DEFAULT_POSITION + UDim2.fromOffset(0, -(stackHeight + HudBottomLeftStack.MARGIN + STACK_CLEARANCE) + 10)
+end
 
 -- Palette lives in one table so the zone-theming work can swap it wholesale
 -- rather than hunting Color3 literals. Semantic names, never geometry.
@@ -777,6 +785,12 @@ end
 local function XpHud()
     -- bumped whenever XP changes or a bar is due to hide; drives re-render
     local version, setVersion = React.useState(0)
+    local stackHeight, setStackHeight = React.useState(HudBottomLeftStack.GetHeight())
+
+    React.useEffect(function()
+        local conn = HudBottomLeftStack.HeightChanged:Connect(setStackHeight)
+        return function() conn:Disconnect() end
+    end, {})
 
     React.useEffect(function()
         return SkillXPShared.Subscribe(function()
@@ -835,7 +849,7 @@ local function XpHud()
             xp = state.XP,
             xpNeeded = SkillXPShared.GetXPForLevel(state.Level),
             zIndex = 5 + i * 2,
-            position = isCombat and COMBAT_POSITION or DEFAULT_POSITION,
+            position = isCombat and COMBAT_POSITION or defaultPosition(stackHeight),
             anchorPoint = isCombat and COMBAT_ANCHOR or DEFAULT_ANCHOR,
             isCombat = isCombat,
         })

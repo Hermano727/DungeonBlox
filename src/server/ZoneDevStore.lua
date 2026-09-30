@@ -69,6 +69,18 @@ function ZoneDevStore.addZone(attrs, position)
 	return base.addRow(row)
 end
 
+function ZoneDevStore.setZoneName(zoneId, name)
+	return base.updateRow(zoneId, function(row)
+		row.name = name
+	end)
+end
+
+function ZoneDevStore.setZoneAlignment(zoneId, alignment)
+	return base.updateRow(zoneId, function(row)
+		row.alignment = alignment
+	end)
+end
+
 function ZoneDevStore.setZoneMusic(zoneId, musicId)
 	return base.updateRow(zoneId, function(row)
 		row.musicId = musicId

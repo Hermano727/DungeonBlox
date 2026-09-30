@@ -37,6 +37,8 @@ function DungeonBossSpawner.new(floorPosition, mobId, opts)
     self.FloorPosition   = floorPosition
     self.CeilingPosition = opts.ceilingPosition
     self.IsBossSpawner   = true
+    self.NeverDeaggro    = true -- dungeon bosses chase for good (see MobClass.NeverDeaggro)
+    self.EncounterControlled = opts.encounterControlled == true
     return self
 end
 
@@ -58,7 +60,16 @@ function DungeonBossSpawner:SpawnMob()
     local mob = MobSpawner.SpawnMob(self)
     if not mob then return nil end
 
-    if self.CeilingPosition and mob.BeginCeilingIntro then
+    if self.CeilingPosition and mob.LatchAtCeiling then
+        mob:LatchAtCeiling(self.CeilingPosition, self.FloorPosition)
+        if not self.EncounterControlled then
+            task.delay(7, function()
+                if mob and mob.IsAlive and mob:IsAlive() then
+                    mob:ReleaseFromCeiling(self.FloorPosition)
+                end
+            end)
+        end
+    elseif self.CeilingPosition and mob.BeginCeilingIntro then
         mob:BeginCeilingIntro(self.CeilingPosition, self.FloorPosition)
     end
 

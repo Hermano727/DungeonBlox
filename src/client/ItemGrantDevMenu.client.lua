@@ -1,7 +1,7 @@
 local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindConfig"))
 --[[
     ItemGrantDevMenu  (admin-only LocalScript)
-    Opens with F9. Grants items or currency to the local player via DevGrantItem RF.
+    Opens with F10. Grants items or currency to the local player via DevGrantItem RF.
     Studio users always get access; live server requires HearthstoneConfig.ADMIN_IDS match.
 ]]
 

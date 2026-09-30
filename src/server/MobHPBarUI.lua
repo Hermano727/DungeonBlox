@@ -129,8 +129,15 @@ function MobHPBarUI.Create(mob)
     -- idle height.
     local background = Instance.new("Frame")
     background.Name = "Background"
+    -- Centre-anchored on purpose. It was (0, 0), and any size effect on this
+    -- frame then grows it away from its TOP-LEFT corner -- which is exactly how
+    -- the old hit "punch" (a UIScale) made the whole bar, trough and damage
+    -- ghost included, bulge out to the right on every hit. The punch is now off
+    -- for this bar (see HealthBarFX.new below), but a centre anchor keeps any
+    -- future scale effect symmetric and gives the wobble a sensible pivot.
+    background.AnchorPoint = Vector2.new(0.5, 0)
     background.Size = UDim2.new(1, 0, 0.30, 0)
-    background.Position = UDim2.new(0, 0, NAMEPLATE_HIT_HEIGHT_SCALE + 0.04, 0)
+    background.Position = UDim2.new(0.5, 0, NAMEPLATE_HIT_HEIGHT_SCALE + 0.04, 0)
     background.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
     background.BorderSizePixel = 2
     background.BorderColor3 = Color3.fromRGB(20, 20, 20)
@@ -170,6 +177,12 @@ function MobHPBarUI.Create(mob)
         fill = healthBar,
         background = background,
         gradient = healthBarGradient,
+        -- A hit on a mob: a short hard white flash, then a fast wobble. No size
+        -- punch -- that punch was the bar-grows-sideways bug.
+        punch = false,
+        hitStyle = "wobble",
+        flashTime = 0.2,
+        flashStartTransparency = 0.05,
     })
 
     return billboardGui

@@ -279,10 +279,20 @@ end
 
 local function updateTitleHint()
 	if pendingScrollUuid then
-		title.Text = "Character — right-click a weapon or armor to apply scroll or orb"
+		title.Text = "Character — right-click a weapon or armor to apply protection or orb"
 	else
 		title.Text = "Character"
 	end
+end
+
+-- Enchant Scrolls specifically were removed from this right-click flow (2026-09-23) --
+-- the Enchanting Station world object (EnchantStationClient/EnchantStationScreen) is now
+-- the ONLY way to apply one, so an Enchant Scroll can no longer become `pendingScrollUuid`
+-- here at all (see the IsScrollApplyItem -> IsProtectionScroll/IsCraftingOrb gate change in
+-- onBagSecondary below). Protection Scrolls and Crafting Orbs are a different mechanic, not
+-- "enchanting", and keep working through this bag right-click flow same as always.
+local function isBagApplicableScroll(itemId)
+	return ItemDefinitions.IsProtectionScroll(itemId) or ItemDefinitions.IsCraftingOrb(itemId)
 end
 
 local function validatePendingScroll()
@@ -291,7 +301,7 @@ local function validatePendingScroll()
 	end
 	local p = getProfileFromSnapshot()
 	local it = snapshotItem(p, pendingScrollUuid)
-	if not it or not ItemDefinitions.IsScrollApplyItem(it.itemId) then
+	if not it or not isBagApplicableScroll(it.itemId) then
 		pendingScrollUuid = nil
 	end
 end
@@ -315,15 +325,16 @@ local function scrollInventoryAct(scrollUuid, targetUuid)
 			targetUuid = targetUuid,
 		}
 	end
-	return {
-		kind = "ApplyEnchantScroll",
-		scrollUuid = scrollUuid,
-		targetUuid = targetUuid,
-	}
+	-- No ApplyEnchantScroll fallback anymore -- pendingScrollUuid can never be an Enchant
+	-- Scroll (isBagApplicableScroll excludes it), so reaching here means something else is
+	-- wrong; fail closed instead of silently enchanting.
+	return nil
 end
 
 local menuCtx = {
-	-- Right-click bag item: enchant scroll (select) or apply pending scroll to gear, else hotbar assign
+	-- Right-click bag item: protection scroll/crafting orb (select), or apply a pending one
+	-- to gear right-clicked next; no-op otherwise. Enchant Scrolls don't participate here
+	-- anymore -- see the Enchant Scrolls removal comment above isBagApplicableScroll.
 	onBagSecondary = function(uuid)
 		local profile = getProfileFromSnapshot()
 		local item = snapshotItem(profile, uuid)
@@ -331,7 +342,7 @@ local menuCtx = {
 			return
 		end
 
-		if ItemDefinitions.IsScrollApplyItem(item.itemId) then
+		if isBagApplicableScroll(item.itemId) then
 			if pendingScrollUuid == uuid then
 				pendingScrollUuid = nil
 			else
@@ -344,12 +355,14 @@ local menuCtx = {
 		if pendingScrollUuid then
 			if item.type == "Weapon" or item.type == "Armor" then
 				local act = scrollInventoryAct(pendingScrollUuid, uuid)
-				local ok, err = DungeonMenuNet.requestInventoryAct(act)
-				if ok then
-					pendingScrollUuid = nil
-					task.defer(refresh)
-				elseif err then
-					warn("[Character] ApplyEnchantScroll failed:", err)
+				if act then
+					local ok, err = DungeonMenuNet.requestInventoryAct(act)
+					if ok then
+						pendingScrollUuid = nil
+						task.defer(refresh)
+					elseif err then
+						warn("[Character] " .. act.kind .. " failed:", err)
+					end
 				end
 			end
 			updateTitleHint()
@@ -370,12 +383,14 @@ local menuCtx = {
 			local hotItem = snapshotItem(profile, slotUuid)
 			if hotItem and (hotItem.type == "Weapon" or hotItem.type == "Armor") then
 				local act = scrollInventoryAct(pendingScrollUuid, slotUuid)
-				local ok, err = DungeonMenuNet.requestInventoryAct(act)
-				if ok then
-					pendingScrollUuid = nil
-					task.defer(refresh)
-				elseif err then
-					warn("[Character] ApplyEnchantScroll failed:", err)
+				if act then
+					local ok, err = DungeonMenuNet.requestInventoryAct(act)
+					if ok then
+						pendingScrollUuid = nil
+						task.defer(refresh)
+					elseif err then
+						warn("[Character] " .. act.kind .. " failed:", err)
+					end
 				end
 				updateTitleHint()
 				return
@@ -397,12 +412,15 @@ local menuCtx = {
 			if not it or (it.type ~= "Weapon" and it.type ~= "Armor") then
 				return
 			end
-			local ok, err = DungeonMenuNet.requestInventoryAct(scrollInventoryAct(pendingScrollUuid, uuid))
-			if ok then
-				pendingScrollUuid = nil
-				task.defer(refresh)
-			elseif err then
-				warn("[Character] ApplyEnchantScroll failed:", err)
+			local act = scrollInventoryAct(pendingScrollUuid, uuid)
+			if act then
+				local ok, err = DungeonMenuNet.requestInventoryAct(act)
+				if ok then
+					pendingScrollUuid = nil
+					task.defer(refresh)
+				elseif err then
+					warn("[Character] " .. act.kind .. " failed:", err)
+				end
 			end
 			updateTitleHint()
 			return

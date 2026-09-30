@@ -1,4 +1,5 @@
 local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindConfig"))
+local InteractionLock = require(game:GetService("ReplicatedStorage"):WaitForChild("InteractionLock"))
 --[[
 	PartyClient
 	Press P to open the party menu, accept/decline invites, and show [PARTY] name tags.
@@ -389,8 +390,14 @@ end
 
 local function setOpen(v)
 	if v == open then return end
+	if v and InteractionLock.IsLocked() then return end -- a blocking overlay (map, station) is up
 	open = v
 	screenGui.Enabled = v
+	if v then
+		InteractionLock.OpenMenu("Party", function() setOpen(false) end)
+	else
+		InteractionLock.MenuClosed("Party")
+	end
 	if v then
 		MenuMouse.acquire()
 		updateModalButtons()
@@ -402,6 +409,11 @@ local function setOpen(v)
 end
 
 dim.Activated:Connect(function() setOpen(false) end)
+
+-- A blocking overlay opened on top: close.
+InteractionLock.Subscribe(function(locked)
+	if locked then setOpen(false) end
+end)
 
 createBtn.Activated:Connect(function()
 	local ok, err = request("create")
@@ -554,6 +566,9 @@ local function removeAlignmentTag(userId)
 end
 
 local function refreshAlignmentTag(plr)
+	-- Superseded by client/Nametags (alignment is the name's colour there). Only clears old tags.
+	removeAlignmentTag(plr.UserId)
+	do return end
 	if plr == player then return end
 	local alignment = plr:GetAttribute("PlayerAlignment")
 	local color = alignment and ALIGNMENT_COLOR[alignment]
@@ -631,6 +646,9 @@ local function removeNameTag(userId)
 end
 
 local function ensureNameTag(plr)
+	-- Superseded by client/Nametags (party members get a PARTY mark there). Only clears old tags.
+	removeNameTag(plr.UserId)
+	do return end
 	if not partyUserIdSet[plr.UserId] then
 		removeNameTag(plr.UserId)
 		return
@@ -696,11 +714,15 @@ local function applyState(payload)
 	end
 
 	partyUserIdSet = {}
+	local ids = {}
 	if type(payload.partyUserIds) == "table" then
 		for _, uid in ipairs(payload.partyUserIds) do
 			partyUserIdSet[uid] = true
+			table.insert(ids, tostring(uid))
 		end
 	end
+	-- Local-only attribute (never replicated): client/Nametags marks party members from it.
+	player:SetAttribute("PartyMemberIds", table.concat(ids, ","))
 
 	myParty = payload.myParty
 	refreshHud()

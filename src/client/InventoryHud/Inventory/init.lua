@@ -32,6 +32,7 @@ local InvSlots         = require(script:WaitForChild("InvSlots"))
 local QuickNav         = require(script:WaitForChild("QuickNav"))
 local SkillsPanel      = require(script:WaitForChild("SkillsPanel"))
 local StatsPanel       = require(script:WaitForChild("StatsPanel"))
+local JournalPanel     = require(script:WaitForChild("JournalPanel"))
 local HearthstonePanel = require(script:WaitForChild("HearthstonePanel"))
 local PartyPanel       = require(script:WaitForChild("PartyPanel"))
 local InventoryData    = require(script:WaitForChild("InventoryData"))
@@ -40,6 +41,8 @@ local Tooltip          = require(script:WaitForChild("Tooltip"))
 
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
 local Types = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
+local ProfileMenusState = require(ReplicatedStorage:WaitForChild("ProfileMenusState"))
+local HudVitals = require(ReplicatedStorage:WaitForChild("HudVitals"))
 local DungeonMenuNet = require(script.Parent.Parent:WaitForChild("DungeonMenuNet"))
 local CenterFlashUI = require(script.Parent.Parent:WaitForChild("CenterFlashUI"))
 
@@ -81,6 +84,7 @@ end
 local PANELS: { [string]: any } = {
 	skills = SkillsPanel,
 	stats = StatsPanel,
+	journal = JournalPanel,
 	hearthstone = HearthstonePanel,
 	party = PartyPanel,
 }
@@ -754,6 +758,16 @@ local function Inventory(props: { resetKey: number? })
 		setDirection(dir or 0)
 		setSelectedKey(key)
 	end
+
+	-- Vitals (HP/energy/hunger) stay up on the Inventory tab only; every other tab hides them
+	-- (RS/HudVitals). Re-evaluated on open/close too, since reopening may land on this same key.
+	React.useEffect(function()
+		local function apply()
+			HudVitals.SetHidden("ProfileMenuTab", ProfileMenusState.IsOpen() and selectedKey ~= "inventory")
+		end
+		apply()
+		return ProfileMenusState.Subscribe(apply)
+	end, { selectedKey })
 
 	-- Full UDim2s (not plain offset numbers) so the scale component can carry the "% of
 	-- screen" shift -- see QUICKNAV_UP_SHIFT/CONTENT_UP_SHIFT above. The two shifts are

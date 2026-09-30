@@ -16,8 +16,9 @@ local SfxService = require(ReplicatedStorage:WaitForChild("SfxService"))
 
 -- Listen for combat XP events from server
 local combatXPEvent = ReplicatedStorage:WaitForChild("CombatXPEvent")
-combatXPEvent.OnClientEvent:Connect(function(xpAmount)
-    local leveledUp = SkillXPShared.AddXP("Combat", xpAmount)
+-- `totals` = the server's saved values after this gain (see SkillXPShared.ApplyServerGain).
+combatXPEvent.OnClientEvent:Connect(function(xpAmount, totals)
+    local leveledUp = SkillXPShared.ApplyServerGain("Combat", xpAmount, totals)
     -- Plays only on an actual Combat level-up now (2026-09-13, per direct request:
     -- "make the xp sound effect only play on combat level up rather than every
     -- kill" -- was every kill, since this event only fires on a killing blow, see

@@ -1,7 +1,8 @@
 --[[
 	DungeonPortalConfig
-	Static data: dungeon tier -> display name + the DungeonKey itemId (ItemDefinitions,
-	already catalogued as T1DungeonKey/T2DungeonKey/.../T5DungeonKey) required to enter.
+	Static data: dungeon tier -> display name, DungeonKey itemId, realm template, and
+	encounter implementation. Dungeon keys are catalogued in ItemDefinitions as
+	T1DungeonKey/T2DungeonKey/.../T5DungeonKey.
 	No side-effects on require(). DungeonInstanceService reads this to know what a portal
 	part tagged "DungeonPortal" with a DungeonTier attribute actually leads to.
 
@@ -15,16 +16,21 @@ local DungeonPortalConfig = {}
 
 DungeonPortalConfig.Tiers = {
 	T1 = {
-		DungeonName = "Goblin Caverns",
-		KeyItemId   = "T1DungeonKey",
+		DungeonName      = "Miasma's Blighted Aqueducts",
+		KeyItemId        = "T1DungeonKey",
+		RealmTemplateName = "DungeonRealmTemplate",
+		EncounterId      = "Miasma",
+		NumericTier      = 1,
 	},
 	T2 = {
 		DungeonName = "Sunken Crypt",
 		KeyItemId   = "T2DungeonKey",
+		NumericTier = 2,
 	},
 	T3 = {
 		DungeonName = "Obsidian Depths",
 		KeyItemId   = "T3DungeonKey",
+		NumericTier = 3,
 	},
 }
 

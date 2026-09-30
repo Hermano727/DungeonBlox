@@ -4,6 +4,8 @@ local tool = script.Parent
 local player = Players.LocalPlayer
 local bowFire = tool:WaitForChild("BowFire")
 
+local AimRay = require(game:GetService("ReplicatedStorage"):WaitForChild("AimRay"))
+
 local function getAimPosition()
     local camera = workspace.CurrentCamera
     if not camera then
@@ -12,6 +14,9 @@ local function getAimPosition()
 
     local mouse = player:GetMouse()
     local ray = camera:ScreenPointToRay(mouse.X, mouse.Y)
+    -- Front view: the camera looks back at the player; shoot where the character faces.
+    local frontOrigin, frontDirection = AimRay.FrontView()
+    if frontOrigin then ray = Ray.new(frontOrigin, frontDirection) end
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
 

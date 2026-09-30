@@ -31,6 +31,7 @@
 ]]
 
 local HttpService = game:GetService("HttpService")
+local ItemIdentity = require(game:GetService("ReplicatedStorage"):WaitForChild("ItemIdentity"))
 
 local Item = {}
 Item.__index = Item
@@ -105,6 +106,7 @@ end
 
 -- The one place an owned item record gets built. `opts` is optional:
 --   count, rarity, tier, enchantLevel, subStats -- override the corresponding default.
+--   origin -- ItemIdentity origin context; see ItemIdentity.NewOrigin.
 function Item:CreateOwnedRecord(opts: { [string]: any }?)
 	opts = opts or {}
 	local record: { [string]: any } = {
@@ -132,6 +134,14 @@ function Item:CreateOwnedRecord(opts: { [string]: any }?)
 	local extraSubStats = self:GetExtraSubStats(opts)
 	if extraSubStats then
 		record.subStats = extraSubStats
+	end
+
+	-- Durable identity. Stackables are skipped on purpose: a per-unit serial is
+	-- meaningless for something that merges into an existing pile by count, and
+	-- skipping them is what keeps ProfileTypes.AuditItemIdentity honest (every
+	-- stack merge would otherwise look like a dropped serial).
+	if not self.stackable then
+		ItemIdentity.Stamp(record, opts.origin)
 	end
 
 	return record

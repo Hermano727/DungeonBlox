@@ -69,7 +69,7 @@ local function addLabel(parent, adornee, zone, extra)
 	lbl.TextSize = 13
 	lbl.TextStrokeTransparency = 0.35
 	lbl.TextColor3 = ZoneConfig.ALIGNMENT_COLORS[zone.alignment] or YELLOW
-	lbl.Text = string.format("%s\n%s  %s", zone.name, zone.alignment, extra or "")
+	lbl.Text = string.format("%s\n%s  %s", zone.name, ZoneConfig.DisplayAlignment(zone.alignment), extra or "")
 	lbl.Parent = bb
 end
 

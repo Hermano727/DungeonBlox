@@ -146,7 +146,7 @@ local Items = {
 	TrainingBow   = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Bow, Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 1, Rarity = "Common", WeaponId = "WoodenBow", HotbarEquippable = true, ProtectedOnDeath = false, DisplayName = "Training Bow" },
 	WoodenSword   = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Sword, Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 1, Rarity = "Common", WeaponId = "WoodenSword", HotbarEquippable = true, ProtectedOnDeath = false, DisplayName = "Wooden Sword", ToolPrefabName = "Wood Sword" },
 	Low_tier_sword = { Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 1, Rarity = "Common", WeaponId = "WoodenSword", HotbarEquippable = true, ProtectedOnDeath = false, DisplayName = "Low Tier Sword", ToolPrefabName = "Low_tier_sword" },
-	AdminSword    = { Icon = ItemConfig.ADMIN_SWORD_ICON, Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 99, Rarity = "Legendary", WeaponId = "AdminSword", HotbarEquippable = true, ProtectedOnDeath = false, DisplayName = "Admin Sword", ToolPrefabName = "Low_tier_sword" },
+	AdminSword    = { Icon = ItemConfig.ADMIN_SWORD_ICON, Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 99, Rarity = "Legendary", WeaponId = "AdminSword", HotbarEquippable = true, ProtectedOnDeath = false, DisplayName = "Admin Sword", ToolPrefabName = "TrainingSword" },
 	WoodenBow     = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Bow, Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 1, Rarity = "Common", WeaponId = "WoodenBow", HotbarEquippable = true, ProtectedOnDeath = false, DisplayName = "Wooden Bow" },
 
 	-- Starter / training armor (T1-tier catalog ids; rolled stats live on the item instance).

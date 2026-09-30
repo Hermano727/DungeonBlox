@@ -7,6 +7,7 @@ local Players             = game:GetService("Players")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local Builder   = require(ServerScriptService:WaitForChild("MythicItemBuilder"))
+local ItemIdentity = require(game:GetService("ReplicatedStorage"):WaitForChild("ItemIdentity"))
 local DungeonProfile = require(ServerScriptService:WaitForChild("ProfileService"))
 local WorldLoot = require(ServerScriptService:WaitForChild("WorldLootService"))
 
@@ -38,7 +39,14 @@ function DungeonBossLootService.OnBossKilled(bossMob, candidates, dropPosition)
                 if not okTpl or not template then
                     warn("[DungeonBossLootService] toGrantTemplate failed for " .. tostring(mobId))
                 else
-                    local okGrant, errGrant = DungeonProfile.GrantItem(player, template, 1)
+                    -- `def` = the Mythic key, so ItemStatRanges can resolve this
+                    -- item's authored substat windows rather than the generic ones.
+                    local okGrant, errGrant = DungeonProfile.GrantItem(player, template, 1, {
+                        by = player,
+                        kind = ItemIdentity.SOURCE.DUNGEON_BOSS,
+                        src = mobId,
+                        def = item.mythicKey,
+                    })
                     if okGrant then
                         table.insert(results, { player = player, item = item, template = template })
                     else

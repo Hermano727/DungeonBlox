@@ -25,6 +25,7 @@ function DungeonTrashSpawner.new(location, mobId, count, opts)
     setmetatable(self, DungeonTrashSpawner)
     self.HasSpawned = false
     self.IsDungeonTrash = true
+    self.NeverDeaggro = true -- dungeon mobs chase for good (see MobClass.NeverDeaggro)
     return self
 end
 

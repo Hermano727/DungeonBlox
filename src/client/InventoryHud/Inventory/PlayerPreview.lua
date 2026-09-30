@@ -36,6 +36,7 @@ local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"
 local UITheme = require(ReplicatedStorage:WaitForChild("UITheme"))
 local RarityBorder = require(script.Parent:WaitForChild("RarityBorder"))
 local LegendaryGlow = require(script.Parent:WaitForChild("LegendaryGlow"))
+local EnchantBadge = require(script.Parent:WaitForChild("EnchantBadge"))
 local CharacterViewport = require(script.Parent:WaitForChild("CharacterViewport"))
 local e = React.createElement
 
@@ -154,6 +155,10 @@ local function EquipmentSlot(props: SlotProps)
 			})
 		end
 	end
+
+	-- "+N" enchant chip -- kept in step with ItemSlot's (this component reimplements the
+	-- bag slot rather than rendering ItemSlot; see the CLAUDE.md drift note).
+	boxChildren.EnchantBadge = item and EnchantBadge.ForItem(item) or nil
 
 	boxChildren.Hit = e("ImageButton", {
 		Size = UDim2.fromScale(1, 1),

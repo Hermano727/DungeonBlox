@@ -1,4 +1,4 @@
-local m = game.ServerScriptService:WaitForChild("DungeonProfileService")
+local m = game.ServerScriptService:WaitForChild("ProfileService")
 local src = m.Source
 
 if not string.find(src, "local EnchantScrollApply = require", 1, true) then
@@ -9,15 +9,15 @@ if not string.find(src, "local EnchantScrollApply = require", 1, true) then
 end
 
 local startPat = "local MAX_PLUS_SCROLL = 99"
-local endPat = "\nfunction DungeonProfileService.ConsumeItemId"
+local endPat = "\nfunction ProfileService.ConsumeItemId"
 local i = string.find(src, startPat, 1, true)
 local j = string.find(src, endPat, 1, true)
 if not i or not j then
 	return "markers_not_found", i, j
 end
 
-local newBlock = [==[function DungeonProfileService.ApplyEnchantScroll(player, scrollUuid, targetUuid)
-	local profile = DungeonProfileService.Load(player)
+local newBlock = [==[function ProfileService.ApplyEnchantScroll(player, scrollUuid, targetUuid)
+	local profile = ProfileService.Load(player)
 	if type(scrollUuid) ~= "string" or scrollUuid == "" or type(targetUuid) ~= "string" or targetUuid == "" then
 		return false, "bad_arg"
 	end
@@ -62,9 +62,9 @@ local newBlock = [==[function DungeonProfileService.ApplyEnchantScroll(player, s
 	end
 
 	StatsService.RecomputeRuntimeHp(profile)
-	DungeonProfileService.PushProfile(player)
+	ProfileService.PushProfile(player)
 	Hotbar.syncFromProfile(player, profile)
-	return true, DungeonProfileService.GetLastSnapshotPayload(player)
+	return true, ProfileService.GetLastSnapshotPayload(player)
 end
 
 ]==]

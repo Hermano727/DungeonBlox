@@ -16,6 +16,11 @@
         armorSlot   string   "Helm"|"Chest"|"Legs"|"Boots"|nil
         substatCount number  optional; force an exact substat count (clamped to what's
                               possible for the tier/kind). Random if nil.
+        highRoll    boolean  optional; take the TOP of every base-stat range for
+                              the chosen rarity instead of rolling inside it.
+                              Named-elite signature gear only -- see
+                              docs/named-elite-loot.md. Level scaling still
+                              applies on top, unchanged.
         -- If neither weaponType nor armorSlot is given, picks randomly.
 ]]
 
@@ -122,34 +127,52 @@ end
 -- Returns array of { id, label, value, valueType }.
 -- No duplicates -- already-picked ids are excluded from subsequent rolls.
 ------------------------------------------------------------------------
-local MELEE_TYPES = { Sword=true, Scythe=true, Axe=true, Mace=true }
+local MELEE_TYPES = Config.MELEE_WEAPON_TYPES
 
-local function rollWeaponSubstats(tier, rarity, weaponType, count, forcedSubstat)
+-- Look up one forced { id, value } pair, returning the substat entry to reserve
+-- or nil if the id isn't valid for this item kind. A bad id from the dev tool is
+-- silently skipped rather than trusted.
+--
+-- Resolves against Config.GetSubstatEffects, the shared "what can sit on this
+-- kind of item" pool -- so anything the F8 picker offers can actually be forced,
+-- including the bonus-only stats (block etc.) that never roll randomly.
+local function resolveForcedSubstat(kind, weaponType, forced, fallbackValueType)
+    if type(forced) ~= "table" or type(forced.id) ~= "string" or forced.id == "" then
+        return nil
+    end
+    for _, effect in ipairs(Config.GetSubstatEffects(kind, weaponType)) do
+        if effect.id == forced.id then
+            return {
+                id        = effect.id,
+                label     = effect.label,
+                -- The effect's own valueType wins: armor's str/vit carry none and
+                -- fall back to flat, but block is a pct and must not be mislabelled.
+                valueType = effect.valueType or fallbackValueType,
+                value     = math.max(0, math.floor(tonumber(forced.value) or 0)),
+            }
+        end
+    end
+    return nil
+end
+
+local function rollWeaponSubstats(tier, rarity, weaponType, count, forcedSubstats)
     local typeOverrides = Config.WEAPON_TYPE_WEIGHTS[weaponType] or {}
     local rarityMult    = Config.RARITY_SUBSTAT_MULT[rarity]
     local isMelee       = MELEE_TYPES[weaponType] == true
     local usedIds       = {}
     local results       = {}
 
-    -- forcedSubstat (dev tool only): { id, value } -- reserves this exact
-    -- substat/value first (skipping the normal weighted roll and rarity
-    -- multiplier for it), then the loop below fills any remaining slots
+    -- forcedSubstats (dev tool only): array of { id, value } -- reserves each
+    -- exact substat/value first (skipping the normal weighted roll and rarity
+    -- multiplier for them), then the loop below fills any remaining slots
     -- normally. Real mob-drop calls never pass this (nil).
     local remaining = count
-    if forcedSubstat ~= nil and type(forcedSubstat.id) == "string" then
-        local def = nil
-        for _, effect in ipairs(Config.WEAPON_EFFECTS) do
-            if effect.id == forcedSubstat.id then def = effect break end
-        end
-        if def ~= nil then
-            usedIds[def.id] = true
-            table.insert(results, {
-                id        = def.id,
-                label     = def.label,
-                value     = math.max(0, math.floor(tonumber(forcedSubstat.value) or 0)),
-                valueType = def.valueType,
-            })
-            remaining = count - 1
+    for _, forced in ipairs(forcedSubstats or {}) do
+        local entry = resolveForcedSubstat("Weapon", weaponType, forced)
+        if entry ~= nil and not usedIds[entry.id] then
+            usedIds[entry.id] = true
+            table.insert(results, entry)
+            remaining -= 1
         end
     end
 
@@ -189,7 +212,7 @@ end
 -- Each successful roll picks uniformly from the remaining VIT/STR/INT/DEX pool.
 -- Hard cap of 2 substats per armor piece.
 ------------------------------------------------------------------------
-local function rollArmorSubstats(tier, rarity, forceCount, forcedSubstat)
+local function rollArmorSubstats(tier, rarity, forceCount, forcedSubstats)
     local rarityMult = Config.RARITY_SUBSTAT_MULT[rarity]
     local range      = Config.ARMOR_SUBSTAT_RANGE[tier]
     local chances    = Config.ARMOR_SUBSTAT_ROLL_CHANCE
@@ -202,21 +225,13 @@ local function rollArmorSubstats(tier, rarity, forceCount, forcedSubstat)
     -- original random chance-gated behavior is unchanged for them.
     local target = forceCount ~= nil and math.clamp(math.floor(forceCount), 0, #chances) or nil
 
-    -- forcedSubstat (dev tool only): { id, value } -- reserves one slot with
-    -- this exact value up front, same idea as rollWeaponSubstats.
-    if forcedSubstat ~= nil and type(forcedSubstat.id) == "string" then
-        local def = nil
-        for _, effect in ipairs(Config.ARMOR_EFFECTS) do
-            if effect.id == forcedSubstat.id then def = effect break end
-        end
-        if def ~= nil then
-            usedIds[def.id] = true
-            table.insert(results, {
-                id        = def.id,
-                label     = def.label,
-                value     = math.max(0, math.floor(tonumber(forcedSubstat.value) or 0)),
-                valueType = "flat",
-            })
+    -- forcedSubstats (dev tool only): array of { id, value } -- reserves a slot
+    -- each with that exact value up front, same idea as rollWeaponSubstats.
+    for _, forced in ipairs(forcedSubstats or {}) do
+        local entry = resolveForcedSubstat("Armor", nil, forced, "flat")
+        if entry ~= nil and not usedIds[entry.id] then
+            usedIds[entry.id] = true
+            table.insert(results, entry)
         end
     end
 
@@ -272,12 +287,22 @@ function ItemGenerator.generate(options)
 
     local isWeapon = weaponType ~= nil
 
+    -- highRoll: named-elite gear is "high roll <rarity> equivalent" -- the top
+    -- of each base range rather than a roll inside it, so a Rare-equivalent
+    -- drop is always the best Rare of its tier. Substats are authored
+    -- separately by the caller; this only affects BASE stats.
+    local highRoll = options.highRoll == true
+    local function baseRoll(lo, hi)
+        if highRoll then return hi end
+        return randRange(lo, hi)
+    end
+
     -- Roll base stats
     local baseStats = {}
     if isWeapon then
         local d      = Config.WEAPON_DMG_RANGES[tier][rarity]
-        local rawMin = randRange(d.min[1], d.min[2])
-        local rawMax = randRange(d.max[1], d.max[2])
+        local rawMin = baseRoll(d.min[1], d.min[2])
+        local rawMax = baseRoll(d.max[1], d.max[2])
         local lo = scaleStat(rawMin, level, tierMedian)
         local hi = scaleStat(rawMax, level, tierMedian)
         if lo > hi then lo, hi = hi, lo end
@@ -289,12 +314,12 @@ function ItemGenerator.generate(options)
         local hpR      = Config.ARMOR_HP_RANGES[tier][rarity]
         local arR      = Config.ARMOR_ARMOR_RANGES[tier][rarity]
         local enR      = Config.ARMOR_ENERGY_RANGES[tier][rarity]
-        local rawHp    = randRange(hpR[1], hpR[2])
+        local rawHp    = baseRoll(hpR[1], hpR[2])
         local scaledHp = scaleStat(rawHp, level, tierMedian)
         baseStats._rawHp = rawHp
-        local enRoll   = enR[1] + math.random() * (enR[2] - enR[1])
+        local enRoll   = highRoll and enR[2] or (enR[1] + math.random() * (enR[2] - enR[1]))
         baseStats.hp     = scaledHp
-        baseStats.armor  = randRange(arR[1], arR[2])
+        baseStats.armor  = baseRoll(arR[1], arR[2])
         -- HP/s and Energy/s are mutually exclusive by slot:
         --   Shields roll HP/s (half the HP roll) and never roll Energy/s.
         --   Helm/Chest/Legs/Boots roll Energy/s and never roll HP/s.
@@ -306,18 +331,25 @@ function ItemGenerator.generate(options)
         -- dmgRed is shield-exclusive; regular armor slots do not roll it
         if armorSlot == "Shield" then
             local drR = Config.ARMOR_DMGRED_RANGES[tier][rarity]
-            baseStats.dmgRed = randRange(drR[1], drR[2])
+            baseStats.dmgRed = baseRoll(drR[1], drR[2])
         end
     end
 
-    -- Dev tool override: force one specific substat id to an exact value
-    -- (e.g. { id = "critical", value = 100 } for a guaranteed-crit test
-    -- weapon). Real mob drops never pass this. Validated against the
-    -- matching effect table so a bad/mismatched id is silently ignored
-    -- rather than corrupting the roll.
-    local forcedSubstat = nil
+    -- Dev tool override: force specific substat ids to exact values (e.g.
+    -- critical @ 100 + lifesteal @ 50 for a test weapon). Real mob drops never
+    -- pass this. Each id is validated against the matching effect table, so a
+    -- bad/mismatched one is silently ignored rather than corrupting the roll.
+    -- `forceSubstat` (singular) is the older one-at-a-time form, still accepted.
+    local forcedSubstats = {}
+    if type(options.forceSubstats) == "table" then
+        for _, forced in ipairs(options.forceSubstats) do
+            if type(forced) == "table" and type(forced.id) == "string" and forced.id ~= "" then
+                table.insert(forcedSubstats, forced)
+            end
+        end
+    end
     if type(options.forceSubstat) == "table" and type(options.forceSubstat.id) == "string" and options.forceSubstat.id ~= "" then
-        forcedSubstat = options.forceSubstat
+        table.insert(forcedSubstats, options.forceSubstat)
     end
 
     local substats
@@ -337,16 +369,16 @@ function ItemGenerator.generate(options)
         else
             subCount = math.random(1, maxSubs)
         end
-        if forcedSubstat ~= nil then
-            subCount = math.max(subCount, 1)
-        end
-        substats = rollWeaponSubstats(tier, rarity, weaponType, subCount, forcedSubstat)
+        -- Never roll fewer slots than there are forced substats, or the ones
+        -- past the count would be dropped on the floor.
+        subCount = math.max(subCount, #forcedSubstats)
+        substats = rollWeaponSubstats(tier, rarity, weaponType, subCount, forcedSubstats)
     else
         local armorCount = options.substatCount
-        if forcedSubstat ~= nil then
-            armorCount = math.max(tonumber(armorCount) or 0, 1)
+        if #forcedSubstats > 0 then
+            armorCount = math.max(tonumber(armorCount) or 0, #forcedSubstats)
         end
-        substats = rollArmorSubstats(tier, rarity, armorCount, forcedSubstat)
+        substats = rollArmorSubstats(tier, rarity, armorCount, forcedSubstats)
     end
 
     -- Build a human-readable name: "<tier material> <kind>", e.g. "Wooden Sword" /

@@ -7,6 +7,12 @@ local StarterPlayer = game:GetService("StarterPlayer")
 local DefaultWalkspeed = StarterPlayer.CharacterWalkSpeed
 local MaxFPS = 1/30 -- 1/FPS -- this only applies to raycasting!! raycasting is used for comparing speed on moving platforms
 local FootstepsPerSecond = 2.5
+-- ElapsedSinceLastFootstep (below) accumulates actual distance travelled, not
+-- time, so FootstepTimer is really "studs per stride" -- this multiplier
+-- stretches that distance uniformly, which stretches the TIME gap between
+-- footsteps by the same 10% at any speed, walk or sprint alike, without
+-- touching the sound assets themselves.
+local FOOTSTEP_GAP_SCALE = 1.1
 local MaxDistance = 250 -- if any character is beyond this distance they wont make any sound
 
 local LocalPlayer = Players.LocalPlayer
@@ -86,7 +92,7 @@ local function OnCharacterAdded(Character:Model)
 	local Connection
 	local Connections = {}
 
-	local FootstepTimer = DefaultWalkspeed/FootstepsPerSecond
+	local FootstepTimer = (DefaultWalkspeed/FootstepsPerSecond) * FOOTSTEP_GAP_SCALE
 	local Velocity, MoveDirection, FloorMaterial, HumanoidState, LastFloorMaterial
 
 

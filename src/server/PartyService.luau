@@ -406,6 +406,11 @@ local function onPartyRequest(player, action, arg)
 	if type(action) ~= "string" then
 		return false, "bad_action"
 	end
+	-- Read-only: the caller's current party state (a UI opening needs it now, not at the next
+	-- change). Not throttled; it changes nothing.
+	if action == "sync" then
+		return true, buildPayloadFor(player)
+	end
 	if not throttle(player.UserId) then
 		return false, "throttled"
 	end

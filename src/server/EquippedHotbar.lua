@@ -290,7 +290,21 @@ local function toolPrefabNameForItem(item)
 		return nil
 	end
 	local name = nil
-	if type(item.toolPrefabName) == "string" and item.toolPrefabName ~= "" then
+	-- CATALOG DEFINITION WINS over the item's own stamped toolPrefabName.
+	-- GrantItem copies ToolPrefabName onto the owned record at grant time, so that
+	-- field is a SNAPSHOT of whatever ItemDefinitions said back then -- editing the
+	-- definition afterwards did nothing for items already in someone's profile, and
+	-- there is no migration pass for it (hit 2026-09-17: AdminSword was repointed
+	-- from Low_tier_sword to TrainingSword and existing admin swords kept the old
+	-- prefab). Reading the definition first makes a definition edit self-healing.
+	-- Rolled/procedural gear has no catalog itemId, so it still uses its stamp.
+	if type(item.itemId) == "string" and item.itemId ~= "" then
+		local def = ItemDefinitions.Get(item.itemId)
+		if def and type(def.ToolPrefabName) == "string" and def.ToolPrefabName ~= "" then
+			name = def.ToolPrefabName
+		end
+	end
+	if not name and type(item.toolPrefabName) == "string" and item.toolPrefabName ~= "" then
 		name = item.toolPrefabName
 	end
 	if not name then
@@ -299,9 +313,6 @@ local function toolPrefabNameForItem(item)
 	if not name and type(item.itemId) == "string" then
 		local def = ItemDefinitions.Get(item.itemId)
 		if def then
-			if type(def.ToolPrefabName) == "string" and def.ToolPrefabName ~= "" then
-				name = def.ToolPrefabName
-			end
 			if not name and def.Kind == "Food" then
 				name = "DefaultFoodTool"
 			end
@@ -310,7 +321,7 @@ local function toolPrefabNameForItem(item)
 			end
 		end
 	end
-	-- Legacy: sword loot used WoodenSword as the mesh prefab; all swords use Low_tier_sword now.
+	-- Legacy: sword loot used WoodenSword as the mesh prefab; all swords use TrainingSword now.
 	if name == "WoodenSword" and item.type == "Weapon" and type(item.tags) == "table" then
 		for _, tag in ipairs(item.tags) do
 			if tag == "Sword" then

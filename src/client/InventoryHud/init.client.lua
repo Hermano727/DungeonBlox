@@ -26,6 +26,8 @@ local ReactRoblox = require(ReplicatedStorage.Packages.ReactRoblox)
 local React = require(ReplicatedStorage.Packages.React)
 local Inventory = require(script:WaitForChild("Inventory"))
 local ProfileMenusState = require(ReplicatedStorage:WaitForChild("ProfileMenusState"))
+local InteractionLock = require(ReplicatedStorage:WaitForChild("InteractionLock"))
+local HudVitals = require(ReplicatedStorage:WaitForChild("HudVitals"))
 
 -- The three FigBloxUI-imported copies stay as design references but must
 -- never render themselves -- this new ScreenGui is what players see.
@@ -100,6 +102,16 @@ local function setOpen(v: boolean)
 		render()
 	end
 	gui.Enabled = v
+	-- One menu at a time (InteractionLock's UI stack): opening this closes the party panel /
+	-- settings, and vice versa.
+	-- keepVitals: the Inventory tab keeps HP/energy on screen; the OTHER tabs hide them
+	-- (Inventory/init.lua's tab effect, owner "ProfileMenuTab"), cleared here on close.
+	if v then
+		InteractionLock.OpenMenu("Inventory", function() setOpen(false) end, { keepVitals = true })
+	else
+		InteractionLock.MenuClosed("Inventory")
+		HudVitals.SetHidden("ProfileMenuTab", false)
+	end
 	ProfileMenusState.SetOpen(v)
 	TweenService:Create(blur :: BlurEffect, BLUR_TWEEN, { Size = v and BLUR_SIZE or 0 }):Play()
 	if v then
@@ -109,8 +121,19 @@ local function setOpen(v: boolean)
 	end
 end
 
+-- A modal world interaction (Enchanting Station, ...) owns the screen: Tab must not open a
+-- second menu on top of it, and if the inventory was already open when one starts, close it.
+InteractionLock.Subscribe(function(locked)
+	if locked then
+		setOpen(false)
+	end
+end)
+
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if input.KeyCode == Keys.SkillsTab then
+		if InteractionLock.IsLocked() then
+			return
+		end
 		setOpen(not open)
 		return
 	end

@@ -68,6 +68,13 @@ local ActiveEquipment = require(ReplicatedStorage:WaitForChild("ActiveEquipment"
 local WALK_ANIM_SPEED = 1.0
 local WALK_SPEED_SCALE = 8.7
 local BACKWARDS_WALK_SPEED = 1.0
+-- The authored RunLoop clip reads as sluggish at its native pace and its
+-- stride no longer lines up with Footsteps.client.lua's velocity-driven
+-- cadence (that system fires off actual root speed, not clip playback --
+-- see FootstepTimer/UpdateTimestep there). Flat multiplier, not a
+-- per-frame scale like Walk's -- RunLoop's authored pace only needs
+-- uniformly quickening, not gait-speed-tracking.
+local RUN_LOOP_ANIM_SPEED = 1.5
 
 local isRunning = false
 
@@ -102,7 +109,7 @@ local animator = Humanoid:WaitForChild("Animator")
 local trackCache = {}
 
 local function loadTrack(id)
-	if not id then
+	if not id or id == "" then
 		return nil
 	end
 	local anim = Instance.new("Animation")
@@ -139,6 +146,10 @@ local function getProfileTracks(profileName)
 	tracks.Walk = loadTrack(cfg.Walk)
 	tracks.RunStart = loadTrack(cfg.RunStart)
 	tracks.RunLoop = loadTrack(cfg.RunLoop)
+    for _, name in ipairs({"CrouchIdle", "CrouchWalk"}) do
+        tracks[name] = loadTrack(cfg[name])
+        if tracks[name] then tracks[name].Priority = Enum.AnimationPriority.Core; tracks[name].Looped = true end
+    end
 
 	if tracks.Idle then
 		tracks.Idle.Priority = Enum.AnimationPriority.Core
@@ -222,7 +233,8 @@ local function playState(stateName, fadeTime, preservePhase)
 			previousPhase = previousTrack.TimePosition / previousTrack.Length
 		end
 		-- Read the latest gait speed, including movement changes while loading.
-		local playbackSpeed = stateName == "Walk" and walkPlaybackSpeed or 1
+		local playbackSpeed = (stateName == "Walk" or stateName == "CrouchWalk") and walkPlaybackSpeed
+			or (stateName == "RunLoop" and RUN_LOOP_ANIM_SPEED) or 1
 		if track.IsPlaying then
 			-- A quick toggle can return to a track that is still fading out.
 			-- Bring its existing weight back instead of restarting from zero.
@@ -252,7 +264,7 @@ local function playState(stateName, fadeTime, preservePhase)
 
 	if track and track.Length > 0 then
 		startReadyTrack()
-		return
+		return true
 	end
 	-- Keep looped idle/walk playing while the next clip loads. A one-shot
 	-- must hold its current pose instead of finishing and exposing the rest pose.
@@ -267,9 +279,11 @@ local function playState(stateName, fadeTime, preservePhase)
 		end
 		Figure:SetAttribute("LocomotionPlaybackSpeed", 0)
 	end
+	-- No clip authored for this profile/state. Nothing was swapped, so the
+	-- caller must NOT record this profile as applied -- see refreshProfile.
 	if not track then
 		Figure:SetAttribute("LocomotionTransitionStatus", "MissingClip")
-		return
+		return false
 	end
 	Figure:SetAttribute("LocomotionTransitionStatus", "Loading")
 	local startedAt, warned = os.clock(), false
@@ -282,6 +296,9 @@ local function playState(stateName, fadeTime, preservePhase)
 			warn("[Animate2] Keeping previous pose while waiting for clip", profileName, stateName)
 		end
 	end)
+	-- Pending, not failed: the clip exists and the Heartbeat above will
+	-- apply it as soon as it finishes loading.
+	return true
 end
 
 -- Re-resolves the active profile (Unarmed/Sword/...) and, if it changed,
@@ -290,13 +307,30 @@ end
 -- and never restarts RunStart's acceleration burst. Idle now has real
 -- per-profile clips too (armed vs unarmed rest pose), so an equip/unequip
 -- while standing still swaps those the same way as any other state.
+--
+-- The early-out below compares against currentProfileName, so that variable is
+-- the ONLY thing standing between an equip and the right pose -- if it is ever
+-- recorded as changed when nothing actually swapped, every later equip/unequip
+-- of that same weapon silently no-ops and the character is stuck in the wrong
+-- profile's pose until some unrelated state change (walk/run/crouch) happens to
+-- re-issue playState. That is exactly the failure mode where "I'm holding a
+-- sword but I'm still in the unarmed idle" becomes permanent.
+--
+-- So only commit the new profile when playState reports it actually applied it.
+-- A pending clip load counts as applied (the Heartbeat in playState finishes the
+-- swap); a missing clip does not, and reverting leaves the next equip free to
+-- retry. Missing clips are a live case here, not a hypothetical -- Jump/Fall/
+-- Landing/RunStop are documented as unauthored for this skeleton.
 local function refreshProfile()
 	local newProfile = resolveProfileName()
 	if newProfile == currentProfileName then
 		return
 	end
+	local previousProfile = currentProfileName
 	currentProfileName = newProfile
-	playState(currentState, 0.1, true)
+	if not playState(currentState, 0.1, true) then
+		currentProfileName = previousProfile
+	end
 end
 
 local stopObservingEquipment = ActiveEquipment.Observe(Figure, refreshProfile)
@@ -307,6 +341,16 @@ local stopObservingEquipment = ActiveEquipment.Observe(Figure, refreshProfile)
 local function onRunning(speed)
 	if Humanoid.Health <= 0 then return end
 	locomotionSpeed = speed
+    isRunning = Figure:GetAttribute("IsSprinting") == true
+    if IsCrouching() then
+        local state = speed > 0.01 and "CrouchWalk" or "CrouchIdle"
+        local localVelocity = HumanoidRootPart.CFrame:VectorToObjectSpace(HumanoidRootPart.AssemblyLinearVelocity)
+        walkPlaybackSpeed = (localVelocity.Z > 0.1 and -1 or 1) * speed / 4
+        if currentState ~= state then playState(state, 0.18) end
+        if currentTrack and playingState == "CrouchWalk" then currentTrack:AdjustSpeed(walkPlaybackSpeed) end
+        tweenFOV(defaultFOV())
+        return
+    end
 	if speed <= 0.01 then
 		if currentState ~= "Idle" then
 			playState("Idle", 0.2)
@@ -342,11 +386,11 @@ local function onRunning(speed)
 
 	if isRunning then
 		tweenFOV(defaultFOV() + RUN_FOV_BOOST)
-		if currentState == "Idle" or currentState == "Walk" then
+		if currentState ~= "RunStart" and currentState ~= "RunLoop" then
 			playState("RunStart", 0.15)
 		end
 		-- else: already RunStart (let it finish -> auto-hands-off to
-		-- RunLoop) or already RunLoop (its own authored pace is used as-is,
+		-- RunLoop) or already RunLoop (already playing at RUN_LOOP_ANIM_SPEED,
 		-- no per-frame speed scaling needed for a looped cycle).
 	else
 		tweenFOV(defaultFOV())
@@ -376,51 +420,22 @@ end
 -- ============================================
 -- INPUT HANDLING (unchanged from before)
 -- ============================================
-local function onInputBegan(input, gameProcessed)
-	if gameProcessed then return end
-	if input.KeyCode == Enum.KeyCode.LeftShift or input.KeyCode == Enum.KeyCode.RightShift or input.KeyCode == Enum.KeyCode.ButtonL2 then
-		if not isRunning then
-			isRunning = true
-			RequestSprint:FireServer(true)
-			onRunning(locomotionSpeed)
-		end
-	end
+local inputConnections = {}
+local function sprintKey(input)
+    return input.KeyCode == Enum.KeyCode.LeftShift or input.KeyCode == Enum.KeyCode.RightShift
+        or input.KeyCode == Enum.KeyCode.ButtonL2
 end
-
-local function onInputEnded(input, gameProcessed)
-	if input.KeyCode == Enum.KeyCode.LeftShift or input.KeyCode == Enum.KeyCode.RightShift or input.KeyCode == Enum.KeyCode.ButtonL2 then
-		if isRunning then
-			isRunning = false
-			RequestSprint:FireServer(false)
-			onRunning(locomotionSpeed)
-		end
-	end
-end
-
--- If the server denies/cancels sprint (out of energy, panting, etc.), sync local state
-EnergyChanged.OnClientEvent:Connect(function(_, isPanting)
-	if isPanting and isRunning then
-		isRunning = false
-		onRunning(locomotionSpeed)
-	end
+UserInputService = game:GetService("UserInputService")
+inputConnections[1] = UserInputService.InputBegan:Connect(function(input, processed)
+    if not processed and sprintKey(input) then RequestSprint:FireServer(true) end
 end)
-
-local function setupInputConnection()
-	local player = Players.LocalPlayer
-	if player then
-		UserInputService = game:GetService("UserInputService")
-		if player.Character == Figure or player.CharacterAdded:Wait() == Figure then
-			pcall(function()
-				UserInputService.InputBegan:Connect(onInputBegan)
-				UserInputService.InputEnded:Connect(onInputEnded)
-			end)
-		end
-	end
-end
-
-spawn(function()
-	wait(1)
-	setupInputConnection()
+inputConnections[2] = UserInputService.InputEnded:Connect(function(input)
+    if sprintKey(input) then RequestSprint:FireServer(false) end
+end)
+inputConnections[3] = Figure:GetAttributeChangedSignal("IsSprinting"):Connect(function() onRunning(locomotionSpeed) end)
+inputConnections[4] = HumanoidRootPart:GetAttributeChangedSignal("IsCrouching"):Connect(function() onRunning(locomotionSpeed) end)
+script.Destroying:Connect(function()
+    for _, connection in ipairs(inputConnections) do connection:Disconnect() end
 end)
 
 -- ============================================

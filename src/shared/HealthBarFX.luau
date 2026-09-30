@@ -18,6 +18,15 @@
 	Script (mob HP -- server-authoritative like the rest of this project's
 	mob systems, see MobHPBarUI).
 
+	hitStyle picks how a damage hit FEELS (default "jitter"):
+	  "jitter"  flash + size punch + random positional shake -- the original
+	            behaviour, still used by the player's own HP bar.
+	  "wobble"  a short hard white flash, THEN a single side-to-side kick
+	            (one push out, one swing back) with a touch of rotation, and no size punch. Built for
+	            the floating mob bar (see MobHPBarUI), where the punch was the
+	            thing making the bar grow sideways on every hit, and now used
+	            by the player HP bar and the top-of-screen boss bar too.
+
 	Feature toggles (all default true) let a sparser bar opt out of
 	everything but the smooth drain -- e.g. Energy only wants req #1:
 		HealthBarFX.new{ fill=.., background=.., chunkPreview=false,
@@ -63,6 +72,19 @@ local SHAKE_HZ = 30
 
 local PUNCH_SCALE = 1.12
 local PUNCH_TIME = 0.18
+
+-- hitStyle = "wobble". Amplitude is a FRACTION OF THE BAR'S OWN WIDTH, so the
+-- swing is proportional on every bar: a 5-stud floating mob bar, the player HP
+-- bar, and the half-width boss segments all move by the same share of
+-- themselves. See _wobble for how that fraction is turned into real units.
+local WOBBLE_AMOUNT = 0.035   -- at a 100%-of-max hit
+local WOBBLE_FLOOR = 0.6      -- fraction of WOBBLE_AMOUNT even the tiniest hit gets
+local WOBBLE_DEGREES = 3      -- rotation at full amplitude
+-- ONE cycle, not a buzz: a single push one way, one swing back the other, then
+-- rest. It used to run ~4 oscillations over 0.32s (13Hz), which read as a
+-- glitching bar rather than a bar that just got hit. The whole cycle is this
+-- long; shorten it for a snappier kick.
+local WOBBLE_DURATION = 0.18
 
 local DMG_NUMBER_COLOR = Color3.fromRGB(255, 90, 90)
 local FULL_TEXT_COLOR = Color3.fromRGB(110, 255, 120)
@@ -209,6 +231,13 @@ function HealthBarFX.new(config)
 
 	self.shakeMaxOffset = config.shakeMaxOffset or SHAKE_MAX_OFFSET
 	self.punchScale = config.punchScale or PUNCH_SCALE
+	self.hitStyle = config.hitStyle or "jitter"
+	self.flashTime = config.flashTime or FLASH_TIME
+	self.flashStartTransparency = config.flashStartTransparency or 0.25
+	-- The wobble's own contribution currently applied to the bar -- tracked so
+	-- it can be REMOVED again rather than restoring a saved position. See _wobble.
+	self._wobbleOffset = UDim2.new()
+	self._wobbleRotation = 0
 
 	self._chunk = nil
 	self._chunkTween = nil
@@ -326,8 +355,8 @@ function HealthBarFX:_flash(color)
 	if not self.enableFlash then return end
 	local overlay = self:_ensureFlashOverlay()
 	overlay.BackgroundColor3 = color
-	overlay.BackgroundTransparency = 0.25
-	TweenService:Create(overlay, TweenInfo.new(FLASH_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+	overlay.BackgroundTransparency = self.flashStartTransparency
+	TweenService:Create(overlay, TweenInfo.new(self.flashTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 		BackgroundTransparency = 1,
 	}):Play()
 end
@@ -373,6 +402,73 @@ function HealthBarFX:_shake(damagePct)
 		end
 		if self._shakeToken == myToken then
 			self.background.Position = basePos
+		end
+	end)
+end
+
+-- hitStyle = "wobble": waits out the flash, then swings the bar side to side
+-- on a damped sine with a little rotation. Deterministic rather than random, so
+-- it reads as a deliberate wobble instead of noise. Every hit wobbles -- there
+-- is no minimum-damage skip like the jitter's, which is what made chip damage
+-- on a high-HP mob (Kane) feel like nothing happened. Shares _shakeToken with
+-- the jitter so a newer hit always takes over cleanly.
+--
+-- ADDITIVE, not "save a base position and restore it". Other code owns these
+-- bars' placement at runtime -- HealthClient tweens the player HP bar when the
+-- profile menu opens, and F6 tuning rewrites the boss bar's Position AND
+-- Rotation -- so restoring a position captured at construction would snap a
+-- bar back and undo that layout on the next hit. Instead each frame strips the
+-- offset this wobble itself applied last frame, leaving whatever the owner set,
+-- and lays the new offset on top. A tween running concurrently is at worst off
+-- by one frame's (already decaying) offset.
+function HealthBarFX:_wobble(damagePct, startDelay)
+	if not self.enableShake then return end
+	damagePct = math.clamp(damagePct or 0, 0, 1)
+	local strength = WOBBLE_FLOOR + (1 - WOBBLE_FLOOR) * math.sqrt(damagePct)
+	local amplitude = WOBBLE_AMOUNT * strength
+	local degrees = WOBBLE_DEGREES * strength
+	self._shakeToken += 1
+	local myToken = self._shakeToken
+	local bg = self.background
+
+	local function apply(offset, rotation)
+		bg.Position = (bg.Position - self._wobbleOffset) + offset
+		bg.Rotation = (bg.Rotation - self._wobbleRotation) + rotation
+		self._wobbleOffset, self._wobbleRotation = offset, rotation
+	end
+
+	-- One swing of `amplitude` bar-widths, in units the bar's Position accepts.
+	-- AbsoluteSize is only laid out on a client; mob bars run on the SERVER,
+	-- where it reads 0, so fall back to scale units of the parent. That is
+	-- exact for the mob bar, which spans its whole BillboardGui.
+	local function swingOffset(swing)
+		local width = bg.AbsoluteSize.X
+		if width > 0 then
+			return UDim2.fromOffset(amplitude * width * swing, 0)
+		end
+		return UDim2.new(amplitude * bg.Size.X.Scale * swing, 0, 0, 0)
+	end
+
+	task.delay(startDelay or 0, function()
+		if self._shakeToken ~= myToken then return end
+		local started = os.clock()
+		while true do
+			-- A newer hit took over: leave our offset in place, it strips it.
+			if self._shakeToken ~= myToken then return end
+			-- Real elapsed time, not a fixed per-step increment, so a slow
+			-- frame (this runs on the server for mob bars) cannot stretch it.
+			local t = os.clock() - started
+			if t >= WOBBLE_DURATION then break end
+			-- Exactly one sine period: out, back past centre, home. The linear
+			-- fade makes the return swing a little smaller than the first push,
+			-- so it lands like an impact instead of a pendulum.
+			local phase = t / WOBBLE_DURATION
+			local swing = math.sin(phase * math.pi * 2) * (1 - 0.35 * phase)
+			apply(swingOffset(swing), degrees * swing)
+			task.wait()
+		end
+		if self._shakeToken == myToken then
+			apply(UDim2.new(), 0)
 		end
 	end)
 end
@@ -584,8 +680,14 @@ function HealthBarFX:Update(current, max, opts)
 
 		self:_showDamageNumber(dmgAmount, newRatio)
 		self:_flash(FLASH_DAMAGE_COLOR)
-		self:_punch()
-		self:_shake(dmgPct)
+		if self.hitStyle == "wobble" then
+			-- Flash first, wobble after it -- sequenced, not stacked, so each
+			-- reads on its own. No punch: see the hitStyle note up top.
+			self:_wobble(dmgPct, self.flashTime)
+		else
+			self:_punch()
+			self:_shake(dmgPct)
+		end
 
 		if self.enableChunkPreview then
 			local chunk = self:_ensureChunk()

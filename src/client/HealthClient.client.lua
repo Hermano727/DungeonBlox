@@ -25,6 +25,7 @@ local MobData = require(ReplicatedStorage:WaitForChild("MobData"))
 local UIDevTuning = require(ReplicatedStorage:WaitForChild("UIDevTuning"))
 local HealthBarFX = require(ReplicatedStorage:WaitForChild("HealthBarFX"))
 local ProfileMenusState = require(ReplicatedStorage:WaitForChild("ProfileMenusState"))
+local LifeStealBarFeedback = require(script.Parent:WaitForChild("LifeStealBarFeedback"))
 
 -- Disable Roblox's built-in top-right health bar
 StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Health, false)
@@ -82,7 +83,6 @@ local HUNGER_SIZE_MULTIPLIER = 1.2
 local GAP_HP_TO_ENERGY = 24     -- generous -- HP/Energy's ornate borders overhang their own trough box
 local GAP_ENERGY_TO_HUNGER = 10 -- was 5; nudged down another 5px (2026-09-10, "move the hunger
                                  -- bar maybe 5 px down (VERY slight)")
-local GAP_ELITEPITY_TO_HP = 10
 
 -- Imported "hp bar border" art (Elden-Ring-style ornate frame). Fixed-size,
 -- never resizes with HP -- only the gradient fill below does that. Sized as
@@ -114,67 +114,120 @@ gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent         = playerGui
 
 ---------------------------------------------------------------------------
--- Elite-pity indicator (sits just above the HP bar, hidden outside elite zones)
+-- Elite-pity "omen" plate (top-centre, only in an elite zone before the elite spawns):
+--        ------- (skull) -------     dark-red rules fading outward
+--          KANE THE ENRAGED          Display font, bone white, faint dark edge
+--          [=======.........]        hairline progress, blood red
+--               42 / 100             small, muted
+-- The skull pulses when the count goes up. All pieces live in the ElitePity table (this
+-- script is near Luau's local limit).
 ---------------------------------------------------------------------------
+local ElitePity = {}
+do
+    local HudIcons = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Icons"):WaitForChild("Hud"):WaitForChild("HudIcons"))
+    local BONE = Color3.fromRGB(236, 226, 208)
+    local MUTED = Color3.fromRGB(176, 164, 150)
+    local BLOOD = Color3.fromRGB(190, 38, 34)
+    local BLOOD_DARK = Color3.fromRGB(96, 14, 14)
+    local WIDTH = 300
 
-local ELITEPITY_HEIGHT = 34
+    local frame = Instance.new("Frame")
+    frame.Name = "ElitePityFrame"
+    frame.AnchorPoint = Vector2.new(0.5, 0)
+    frame.Position = UDim2.new(0.5, 0, 0, 8)
+    frame.Size = UDim2.fromOffset(WIDTH, 0)
+    frame.AutomaticSize = Enum.AutomaticSize.Y
+    frame.BackgroundTransparency = 1
+    frame.Visible = false
+    frame.Parent = gui
+    local layout = Instance.new("UIListLayout", frame)
+    layout.FillDirection = Enum.FillDirection.Vertical
+    layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Padding = UDim.new(0, 4)
 
-local elitePityFrame = Instance.new("Frame")
-elitePityFrame.Name = "ElitePityFrame"
-elitePityFrame.AnchorPoint = Vector2.new(0.5, 1)
-elitePityFrame.Position = UDim2.new(0.5, 0, 1, -(math.abs(ENERGY_BOTTOM_OFFSET) + ENERGY_HEIGHT + GAP_HP_TO_ENERGY + HP_HEIGHT + HP_BORDER_PAD_Y * 2 + GAP_ELITEPITY_TO_HP))
-elitePityFrame.Size = UDim2.fromOffset(510, ELITEPITY_HEIGHT)
-elitePityFrame.BackgroundTransparency = 1
-elitePityFrame.Parent = gui
-local DEFAULT_ELITEPITY_ANCHOR, DEFAULT_ELITEPITY_POS = elitePityFrame.AnchorPoint, elitePityFrame.Position
+    -- Skull between two rules that fade outward.
+    local skullRow = Instance.new("Frame", frame)
+    skullRow.Name = "SkullRow"
+    skullRow.LayoutOrder = 1
+    skullRow.Size = UDim2.fromOffset(WIDTH, 34)
+    skullRow.BackgroundTransparency = 1
+    for _, side in ipairs({ -1, 1 }) do
+        local rule = Instance.new("Frame", skullRow)
+        rule.AnchorPoint = Vector2.new(side < 0 and 1 or 0, 0.5)
+        rule.Position = UDim2.new(0.5, side * 26, 0.5, 0)
+        rule.Size = UDim2.fromOffset(92, 2)
+        rule.BackgroundColor3 = BLOOD
+        rule.BorderSizePixel = 0
+        local fade = Instance.new("UIGradient", rule)
+        -- Solid at the skull, gone at the outer end.
+        fade.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, side < 0 and 1 or 0.1),
+            NumberSequenceKeypoint.new(1, side < 0 and 0.1 or 1),
+        })
+    end
+    local skullScale = Instance.new("UIScale")
+    local skull = Instance.new("ImageLabel", skullRow)
+    skull.Name = "Skull"
+    skull.AnchorPoint = Vector2.new(0.5, 0.5)
+    skull.Position = UDim2.fromScale(0.5, 0.5)
+    skull.Size = UDim2.fromOffset(34, 34)
+    skull.BackgroundTransparency = 1
+    skull.Image = HudIcons.SKULL
+    skull.ScaleType = Enum.ScaleType.Fit
+    skull.ImageColor3 = BONE
+    skullScale.Parent = skull
 
-local elitePityTitle = Instance.new("TextLabel", elitePityFrame)
-elitePityTitle.Name = "ElitePityTitle"
-elitePityTitle.Size = UDim2.fromOffset(440, 16)
-elitePityTitle.Position = UDim2.fromOffset(26, 0)
-elitePityTitle.BackgroundTransparency = 1
-elitePityTitle.FontFace = UIFonts.HUDLabel
-elitePityTitle.TextSize = 12
-elitePityTitle.TextColor3 = Color3.fromRGB(222, 188, 255)
-elitePityTitle.TextStrokeTransparency = 0.35
-elitePityTitle.TextStrokeColor3 = Color3.fromRGB(58, 26, 92)
-elitePityTitle.TextXAlignment = Enum.TextXAlignment.Left
-elitePityTitle.Text = "Lvl -- [Elite]"
-elitePityTitle.ZIndex = 3
-elitePityTitle.Visible = false
+    local name = Instance.new("TextLabel", frame)
+    name.Name = "EliteName"
+    name.LayoutOrder = 2
+    name.Size = UDim2.fromOffset(WIDTH, 22)
+    name.BackgroundTransparency = 1
+    name.FontFace = UIFonts.DisplayBold
+    name.TextSize = 18
+    name.TextColor3 = BONE
+    name.TextStrokeColor3 = Color3.fromRGB(10, 6, 6)
+    name.TextStrokeTransparency = 0.55
+    name.Text = "ELITE"
 
-local elitePityBarBg = Instance.new("Frame", elitePityFrame)
-elitePityBarBg.Name = "ElitePityBarBg"
-elitePityBarBg.Size = UDim2.fromOffset(380, 10)
-elitePityBarBg.Position = UDim2.fromOffset(26, 16)
-elitePityBarBg.BackgroundColor3 = Color3.fromRGB(38, 20, 52)
-elitePityBarBg.BorderSizePixel = 0
-elitePityBarBg.ZIndex = 2
-elitePityBarBg.Visible = false
-Instance.new("UICorner", elitePityBarBg).CornerRadius = UDim.new(0, 4)
+    local track = Instance.new("Frame", frame)
+    track.Name = "Progress"
+    track.LayoutOrder = 3
+    track.Size = UDim2.fromOffset(170, 3)
+    track.BackgroundColor3 = Color3.fromRGB(20, 12, 12)
+    track.BackgroundTransparency = 0.35
+    track.BorderSizePixel = 0
+    Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
+    local fill = Instance.new("Frame", track)
+    fill.Name = "Fill"
+    fill.Size = UDim2.fromScale(0, 1)
+    fill.BackgroundColor3 = Color3.new(1, 1, 1)
+    fill.BorderSizePixel = 0
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+    local fillGradient = Instance.new("UIGradient", fill)
+    fillGradient.Color = ColorSequence.new(BLOOD_DARK, BLOOD)
 
-local elitePityFill = Instance.new("Frame", elitePityBarBg)
-elitePityFill.Name = "Fill"
-elitePityFill.Size = UDim2.new(0.01, 0, 1, 0)
-elitePityFill.BackgroundColor3 = Color3.fromRGB(176, 92, 255)
-elitePityFill.BorderSizePixel = 0
-elitePityFill.ZIndex = 3
-Instance.new("UICorner", elitePityFill).CornerRadius = UDim.new(0, 4)
+    local count = Instance.new("TextLabel", frame)
+    count.Name = "Count"
+    count.LayoutOrder = 4
+    count.Size = UDim2.fromOffset(WIDTH, 16)
+    count.BackgroundTransparency = 1
+    count.FontFace = UIFonts.BodyBold
+    count.TextSize = 13
+    count.TextColor3 = MUTED
+    count.TextStrokeColor3 = Color3.fromRGB(10, 6, 6)
+    count.TextStrokeTransparency = 0.7
+    count.Text = "0 / 100"
 
-local elitePityText = Instance.new("TextLabel", elitePityFrame)
-elitePityText.Name = "ElitePityText"
-elitePityText.Size = UDim2.fromOffset(98, 18)
-elitePityText.Position = UDim2.fromOffset(412, 12)
-elitePityText.BackgroundTransparency = 1
-elitePityText.FontFace = UIFonts.HUDLabel
-elitePityText.TextSize = 11
-elitePityText.TextColor3 = Color3.fromRGB(222, 188, 255)
-elitePityText.TextStrokeTransparency = 0.4
-elitePityText.TextStrokeColor3 = Color3.fromRGB(58, 26, 92)
-elitePityText.TextXAlignment = Enum.TextXAlignment.Left
-elitePityText.Text = "Elite 1%"
-elitePityText.ZIndex = 3
-elitePityText.Visible = false
+    ElitePity.frame, ElitePity.name, ElitePity.count, ElitePity.fill = frame, name, count, fill
+    ElitePity.lastKills = nil
+
+    -- A short thump on the skull whenever the count climbs.
+    function ElitePity.Pulse()
+        skullScale.Scale = 1.3
+        TweenService:Create(skullScale, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+    end
+end
 
 ---------------------------------------------------------------------------
 -- HP bar -- same auto-scaling architecture as EnergyBarGui.BarBackground
@@ -377,7 +430,10 @@ potionMountLayout.Parent = potionMount
 ---------------------------------------------------------------------------
 
 local MENU_ANCHOR = Vector2.new(0.5, 0) -- top-center -- hangs off the carousel's own bottom-center anchor
-local MENU_PAD_TOP = 16 -- gap between the carousel's bottom edge and the first bar (Elite Pity)
+local MENU_PAD_TOP = 16 -- gap between the carousel's bottom edge and the first bar (HP)
+-- Extra drop as a fraction of screen height: the carousel's hover labels/tiles reach below its
+-- published anchor, and the cluster overlapped them (2026-09-30). EnergyClient mirrors this.
+local MENU_DROP_SCALE = 0.10
 local MENU_MOVE_TWEEN = TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 local function setMenuLayout(frame: GuiObject, open: boolean, defaultAnchor: Vector2, defaultPos: UDim2, menuPos: UDim2?)
@@ -393,34 +449,57 @@ local function setMenuLayout(frame: GuiObject, open: boolean, defaultAnchor: Vec
 	}):Play()
 end
 
+-- Valve-puzzle layout (2026-09-27): while the Miasma valve maze is open (the MiasmaMazeOpen
+-- player attribute, set by MiasmaValveMazeUI), HP / Energy / Hunger+Potions move as one group
+-- to the top-left, under Roblox's own top-bar buttons, so nothing overlaps the centred puzzle.
+-- EnergyClient mirrors MAZE_TOP_LEFT and the stacking below -- keep the two in step.
+local MAZE_ANCHOR = Vector2.new(0, 0)
+local MAZE_TOP_LEFT = Vector2.new(20, 76)
+
+local function applyMazeLayout()
+	local hpY = MAZE_TOP_LEFT.Y
+	local energyY = hpY + HP_HEIGHT + GAP_HP_TO_ENERGY -- EnergyClient.client.lua computes this same value
+	local hungerY = energyY + ENERGY_HEIGHT + GAP_ENERGY_TO_HUNGER
+	for frame, y in pairs({ [barBg] = hpY, [hungerPotionRow] = hungerY }) do
+		TweenService:Create(frame, MENU_MOVE_TWEEN, {
+			AnchorPoint = MAZE_ANCHOR,
+			Position = UDim2.fromOffset(MAZE_TOP_LEFT.X, y),
+		}):Play()
+	end
+end
+
 local function applyProfileMenusLayout()
+	if player:GetAttribute("MiasmaMazeOpen") == true then
+		applyMazeLayout()
+		return
+	end
 	local open = ProfileMenusState.IsOpen()
 	local anchor = ProfileMenusState.GetCarouselAnchor()
 
-	local elitePityPos, hpPos, hungerPos
+	-- The elite pity bar is pinned to the top of the screen and no longer moves with
+	-- the menu, so HP now takes the first slot under the carousel. EnergyClient
+	-- mirrors this same math -- keep the two in step.
+	local hpPos, hungerPos
 	if anchor then
-		local elitePityY = anchor.Y + MENU_PAD_TOP
-		local hpY = elitePityY + ELITEPITY_HEIGHT + GAP_ELITEPITY_TO_HP
+		local hpY = anchor.Y + MENU_PAD_TOP
 		local energyY = hpY + HP_HEIGHT + GAP_HP_TO_ENERGY -- EnergyClient.client.lua computes this same value
 		local hungerY = energyY + ENERGY_HEIGHT + GAP_ENERGY_TO_HUNGER
-		elitePityPos = UDim2.fromOffset(anchor.X, elitePityY)
-		hpPos = UDim2.fromOffset(anchor.X, hpY)
-		hungerPos = UDim2.fromOffset(anchor.X, hungerY)
+		hpPos = UDim2.new(0, anchor.X, MENU_DROP_SCALE, hpY)
+		hungerPos = UDim2.new(0, anchor.X, MENU_DROP_SCALE, hungerY)
 	end
 
-	setMenuLayout(elitePityFrame, open, DEFAULT_ELITEPITY_ANCHOR, DEFAULT_ELITEPITY_POS, elitePityPos)
 	setMenuLayout(barBg, open, DEFAULT_HP_ANCHOR, DEFAULT_HP_POS, hpPos)
 	setMenuLayout(hungerPotionRow, open, DEFAULT_HUNGER_ANCHOR, DEFAULT_HUNGER_POS, hungerPos)
 end
 
 ProfileMenusState.Subscribe(applyProfileMenusLayout)
+player:GetAttributeChangedSignal("MiasmaMazeOpen"):Connect(applyProfileMenusLayout)
 
 ---------------------------------------------------------------------------
 -- Update logic
 ---------------------------------------------------------------------------
 
 local barTweenInfo = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local currentElitePityTween = nil
 
 -- Smooth drain/chunk-preview/shake/flash/punch/damage-number/heal-dots/
 -- "Full!" all live in HealthBarFX now (shared with MobHPBarUI and, in a
@@ -433,7 +512,26 @@ local hpBarFX = HealthBarFX.new({
     fill = barFill,
     background = barBg,
     gradient = barFillGradient,
+    -- Same hit feel as the floating mob bars: hard white flash, then a fast
+    -- wobble, no size punch. See HealthBarFX's hitStyle note.
+    punch = false, hitStyle = "wobble", flashTime = 0.2, flashStartTransparency = 0.05,
 })
+local lifeStealFX = LifeStealBarFeedback.new(barBg)
+local lifeStealConnection
+task.spawn(function()
+    local event = ReplicatedStorage:WaitForChild("DamageNumberEvent", 60)
+    if not event or not gui.Parent then return end
+    lifeStealConnection = event.OnClientEvent:Connect(function(_, _, _, _, feedback)
+        local receipt = type(feedback) == "table" and feedback.lifeSteal
+        if type(receipt) ~= "table" or receipt.character ~= player.Character then return end
+        local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+        if hum and hum.Health > 0 then lifeStealFX:Play(receipt) end
+    end)
+end)
+gui.Destroying:Connect(function()
+    if lifeStealConnection then lifeStealConnection:Disconnect() end
+    lifeStealFX:Destroy()
+end)
 
 -- Feed the REAL server-authoritative combat state (same "combat"/"safe" event
 -- CombatTimerClient's HUD timer listens to) into HealthBarFX instead of letting it guess from
@@ -455,6 +553,7 @@ end
 
 local function updateHealth(current, max)
     if max <= 0 then return end
+    if current <= 0 then lifeStealFX:Reset() end
 
     hpBarFX:Update(current, max)
 
@@ -472,9 +571,10 @@ end
 local function refreshElitePityBar()
     local inEliteZone = player:GetAttribute("IsInEliteZone") == true
     local eliteActive = player:GetAttribute("EliteActive") == true
-    local chancePercent = tonumber(player:GetAttribute("ElitePityChance")) or 1
+    local pityKills = tonumber(player:GetAttribute("ElitePityKills")) or 0
+    local pityMax = math.max(1, tonumber(player:GetAttribute("ElitePityMax")) or 100)
     local eliteMobId = player:GetAttribute("CurrentEliteMobId")
-    chancePercent = math.clamp(chancePercent, 1, 100)
+    pityKills = math.clamp(pityKills, 0, pityMax)
 
     -- Pre-spawn "chance building up" meter only. This frame used to ALSO
     -- double as a second HP readout once an elite went active -- removed
@@ -483,37 +583,31 @@ local function refreshElitePityBar()
     -- BossHealthBar.client.lua's dedicated top-middle bar is the one real
     -- HP readout for named elites. So this frame hides itself entirely the
     -- moment EliteActive flips true, instead of switching modes.
-    local shouldShow = inEliteZone and not eliteActive
-    elitePityBarBg.Visible = shouldShow
-    elitePityText.Visible = shouldShow
-    elitePityTitle.Visible = shouldShow
+    -- Also hidden while ANY named elite is up server-wide (EliteSpawnLocked): pity
+    -- progress and the lucky roll are both frozen then, so a bar would be lying.
+    local spawnLocked = player:GetAttribute("EliteSpawnLocked") == true
+    local shouldShow = inEliteZone and not eliteActive and not spawnLocked
+    ElitePity.frame.Visible = shouldShow
     if not shouldShow then
+        ElitePity.lastKills = nil
         return
     end
 
-    local level = "--"
     local name = "Elite"
     if type(eliteMobId) == "string" and eliteMobId ~= "" then
         local mobStats = MobData.FindMobById(eliteMobId)
-        if type(mobStats) == "table" then
-            if mobStats.Level ~= nil then
-                level = tostring(mobStats.Level)
-            end
-            if type(mobStats.Name) == "string" and mobStats.Name ~= "" then
-                name = mobStats.Name
-            end
+        if type(mobStats) == "table" and type(mobStats.Name) == "string" and mobStats.Name ~= "" then
+            name = mobStats.Name
         end
     end
 
-    local fillRatio = chancePercent / 100
-    elitePityText.Text = string.format("Elite %d%%", math.floor(chancePercent + 0.5))
-    elitePityTitle.Text = string.format("Lvl %s [%s]", level, name)
-
-    if currentElitePityTween then currentElitePityTween:Cancel() end
-    currentElitePityTween = TweenService:Create(elitePityFill, barTweenInfo, {
-        Size = UDim2.new(fillRatio, 0, 1, 0),
-    })
-    currentElitePityTween:Play()
+    ElitePity.name.Text = string.upper(name)
+    ElitePity.count.Text = string.format("%d / %d", pityKills, pityMax)
+    TweenService:Create(ElitePity.fill, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        Size = UDim2.fromScale(pityKills / pityMax, 1),
+    }):Play()
+    if ElitePity.lastKills and pityKills > ElitePity.lastKills then ElitePity.Pulse() end
+    ElitePity.lastKills = pityKills
 end
 
 ---------------------------------------------------------------------------
@@ -523,6 +617,7 @@ end
 local healthConn = nil
 
 local function connectCharacter(character)
+    lifeStealFX:Reset()
     if healthConn then healthConn:Disconnect(); healthConn = nil end
 
     local humanoid = character:WaitForChild("Humanoid", 5)
@@ -559,11 +654,25 @@ else
 end
 
 player:GetAttributeChangedSignal("IsInEliteZone"):Connect(refreshElitePityBar)
-player:GetAttributeChangedSignal("ElitePityChance"):Connect(refreshElitePityBar)
+player:GetAttributeChangedSignal("ElitePityKills"):Connect(refreshElitePityBar)
+player:GetAttributeChangedSignal("ElitePityMax"):Connect(refreshElitePityBar)
+player:GetAttributeChangedSignal("EliteSpawnLocked"):Connect(refreshElitePityBar)
 player:GetAttributeChangedSignal("CurrentEliteMobId"):Connect(refreshElitePityBar)
 player:GetAttributeChangedSignal("EliteActive"):Connect(refreshElitePityBar)
 player:GetAttributeChangedSignal("EliteCurrentHealth"):Connect(refreshElitePityBar)
 player:GetAttributeChangedSignal("EliteMaxHealth"):Connect(refreshElitePityBar)
 task.defer(refreshElitePityBar)
+
+-- Vitals hide while a menu is up (RS/HudVitals; InteractionLock feeds it, the inventory and
+-- the cleanse channel opt out). In a do-block: this script is near Luau's local limit.
+do
+    local HudVitals = require(ReplicatedStorage:WaitForChild("HudVitals"))
+    local function applyVitals(hidden)
+        barBg.Visible = not hidden
+        hungerPotionRow.Visible = not hidden
+    end
+    applyVitals(HudVitals.IsHidden())
+    HudVitals.Subscribe(applyVitals)
+end
 
 print("[HealthClient] ready")

@@ -17,12 +17,14 @@ local StatsService = require(ServerScriptService:WaitForChild("StatsService"))
 local EnergyData = require(ServerScriptService:WaitForChild("EnergyData"))
 local Hotbar = require(ServerScriptService:WaitForChild("EquippedHotbar"))
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
+local ItemIdentity = require(ReplicatedStorage:WaitForChild("ItemIdentity"))
 local ItemFactory = require(ReplicatedStorage:WaitForChild("Items"):WaitForChild("ItemFactory"))
 local EnchantScrollApply = require(ReplicatedStorage:WaitForChild("EnchantScrollApply"))
 local ProtectionScrollApply = require(ReplicatedStorage:WaitForChild("ProtectionScrollApply"))
 local CraftingOrbApply = require(ReplicatedStorage:WaitForChild("CraftingOrbApply"))
 local AltarUpgrade = require(ServerScriptService:WaitForChild("AltarUpgrade"))
 local ArmorVisualsService = require(ServerScriptService:WaitForChild("ArmorVisualsService"))
+local InventoryAudit = require(ServerScriptService:WaitForChild("InventoryAudit"))
 
 local ProfileService = {}
 
@@ -93,6 +95,37 @@ local function isApiDisabledError(err)
 	return RunService:IsStudio() and string.find(tostring(err), "StudioAccessToApisNotAllowed", 1, true) ~= nil
 end
 
+--[[
+	The form a profile is WRITTEN to the DataStore in (2026-09-28). In memory, bagSlots /
+	hotbar / chestSlots are numeric lists with GAPS (an empty slot is nil). DataStores store
+	JSON, and a list with gaps is not safely representable there: entries after a gap can be
+	dropped on the way in (slot 1 empty -> potentially the whole list). Every item stayed
+	owned (profile.inventory is keyed by uuid) but nothing pointed at it any more, so the bag
+	came back empty while equipped gear (a string-keyed dict) survived -- the "wipe" reported
+	after a dungeon, and why cold loads kept finding owned items in no slot. The saved form
+	keys each filled slot by its number as a STRING ({"3" = uuid}), which JSON keeps exactly;
+	Types.Reconcile already reads string keys back into the in-memory lists. The live profile
+	is never modified (shallow clone; only the three slot tables are replaced).
+]]
+local function denseSlots(slots, count)
+	local out = {}
+	if type(slots) ~= "table" then return out end
+	for i = 1, count do
+		local v = slots[i]
+		if v == nil then v = slots[tostring(i)] end
+		if v ~= nil and v ~= "" then out[tostring(i)] = v end
+	end
+	return out
+end
+
+local function toSaveForm(profile)
+	local saved = table.clone(profile)
+	saved.hotbar = denseSlots(profile.hotbar, 9)
+	saved.bagSlots = denseSlots(profile.bagSlots, Types.BAG_SLOT_COUNT)
+	saved.chestSlots = denseSlots(profile.chestSlots, Types.CHEST_SLOT_COUNT)
+	return saved
+end
+
 -- Attempts to take the session lock for `player`, reading + reconciling whatever is
 -- currently saved. Returns the (now locked-by-us) profile table, or nil if the lock
 -- is held by another live server (age < LOCK_STALE_AFTER) or the DataStore call failed.
@@ -103,7 +136,9 @@ local function tryAcquireLock(player)
 
 	local ok, err = pcall(function()
 		store:UpdateAsync(keyFor(player), function(old)
-			old = Types.Reconcile(old)
+			-- This is where a migration actually PERSISTS -- the cached-path
+			-- Reconcile in Load() only fixes up the in-memory copy.
+			old = Types.Reconcile(old, player.UserId)
 			local lock = old.Lock
 			if lock and lock.JobId ~= jobId then
 				local age = now - (lock.UpdatedAt or 0)
@@ -113,7 +148,7 @@ local function tryAcquireLock(player)
 			end
 			old.Lock = { JobId = jobId, UpdatedAt = now }
 			profile = old
-			return old
+			return toSaveForm(old)
 		end)
 	end)
 
@@ -305,6 +340,28 @@ local function ensureBagSlots(profile)
 	end
 end
 
+-- Set of every uuid some slot points at (bag, hotbar, equip boxes). An owned item NOT in
+-- this set is invisible: the UI only ever draws slots.
+local function slottedUuidSet(profile)
+	local set = {}
+	for i = 1, Types.BAG_SLOT_COUNT do
+		local u = bagSlotUuid(profile.bagSlots, i)
+		if u then set[u] = true end
+	end
+	for i = 1, 9 do
+		local u = hotbarSlotUuid(profile.hotbar, i)
+		if u then set[u] = true end
+	end
+	if type(profile.equipped) == "table" then
+		for _, u in pairs(profile.equipped) do
+			if type(u) == "string" and u ~= "" then set[u] = true end
+		end
+	end
+	return set
+end
+
+local rehomeOrphanedItems -- assigned below placeItemInFirstEmptyBagSlot
+
 local function hasFreeBagSlot(profile)
 	ensureBagSlots(profile)
 	for i = 1, Types.BAG_SLOT_COUNT do
@@ -367,6 +424,27 @@ function ProfileService.HasRoomForStackable(profile, itemId, count)
 		end
 	end
 	return hasFreeBagSlot(profile)
+end
+
+-- HOW MANY more of stackable `itemId` would find a home: room left in existing
+-- under-cap stacks, plus a full stack per free bag slot. HasRoomForStackable only
+-- answers yes/no, which is not enough to split a large grant -- one partial stack
+-- makes it say "yes" to 5000 coins that are mostly going to land nowhere.
+function ProfileService.StackableCapacity(profile, itemId)
+	local maxStack = ItemDefinitions.GetMaxStack(itemId)
+	local room = 0
+	for _, it in pairs(profile.inventory or {}) do
+		if type(it) == "table" and it.itemId == itemId and type(it.count) == "number" and it.count < maxStack then
+			room += maxStack - it.count
+		end
+	end
+	ensureBagSlots(profile)
+	for i = 1, Types.BAG_SLOT_COUNT do
+		if bagSlotUuid(profile.bagSlots, i) == nil then
+			room += maxStack
+		end
+	end
+	return room
 end
 
 -- Whether granting one more of catalog `itemId` would find a home. Dispatches to
@@ -506,7 +584,7 @@ function ProfileService.Load(player)
 	local existing = sessions[player.UserId]
 	if existing then
 		-- Reconcile in case new fields were added after the profile was first created
-		Types.Reconcile(existing)
+		Types.Reconcile(existing, player.UserId)
 		ensureSkillStats(existing)
 		dedupeHotbarInPlace(existing)
 		dedupeBagSlotsInPlace(existing)
@@ -553,6 +631,15 @@ function ProfileService.Load(player)
 	ensureSkillStats(profile)
 	dedupeHotbarInPlace(profile)
 	dedupeBagSlotsInPlace(profile)
+	local rehomed, orphaned = rehomeOrphanedItems(profile)
+	if orphaned > 0 then
+		warn(("[ProfileService] %s had %d owned item(s) in no slot; re-homed %d into the bag"):format(player.Name, orphaned, rehomed))
+		pcall(InventoryAudit.Report, player, "orphans_on_load", { lostCount = orphaned, rehomed = rehomed, context = "load" }, "SEV2")
+	end
+	pcall(InventoryAudit.Observe, player, profile, "load") -- the baseline later checks compare against
+	-- COLD path only. Deliberately not inside Reconcile, which re-runs on every
+	-- cached Load() and therefore on every mob kill.
+	Types.WarnOnItemIdentityAnomalies(profile, player.Name .. " (load)")
 	sessions[player.UserId] = profile
 	loadingInProgress[player.UserId] = nil
 	return profile
@@ -574,7 +661,7 @@ function ProfileService.Unload(player)
 					return nil
 				end
 				profile.Lock = nil
-				return profile
+				return toSaveForm(profile)
 			end)
 		end)
 	end
@@ -599,6 +686,8 @@ function ProfileService.SaveProfile(player)
 	if not profile or profile.IsEphemeral or studioFallback then
 		return
 	end
+	Types.WarnOnItemIdentityAnomalies(profile, player.Name .. " (save)")
+	pcall(InventoryAudit.Observe, player, profile, "save") -- catch a wipe before it is written
 	local jobId = jobIdString()
 	local ok, err = pcall(function()
 		store:UpdateAsync(keyFor(player), function(old)
@@ -606,7 +695,7 @@ function ProfileService.SaveProfile(player)
 				return nil
 			end
 			profile.Lock = { JobId = jobId, UpdatedAt = os.time() }
-			return profile
+			return toSaveForm(profile)
 		end)
 	end)
 	if not ok then
@@ -631,7 +720,10 @@ end
 -- hand; both call sites now go through ItemFactory.CreateOwnedItem (src/shared/Items/),
 -- whose Item base class does this same Kind -> type mapping itself. Removed as dead code.
 
-local function mergeStackableIntoInventory(player, profile, itemId, count)
+-- `originCtx` threads through to ItemFactory. Stackables get no serial today, so
+-- this is a no-op in practice -- it is wired anyway so a future non-stackable
+-- path through here is already covered.
+local function mergeStackableIntoInventory(player, profile, itemId, count, originCtx)
 	local def = ItemDefinitions.Get(itemId)
 	if not def or not ItemDefinitions.IsStackable(itemId) then
 		return false, "not_stackable"
@@ -642,10 +734,15 @@ local function mergeStackableIntoInventory(player, profile, itemId, count)
 	end
 	local maxStack = ItemDefinitions.GetMaxStack(itemId)
 	local remaining = n
+	-- Only top up stacks the player can SEE. Merging into a stack no slot points at is how
+	-- F8's T1ArmorScroll grants vanished. Give orphans a slot first, then skip any still
+	-- without one (a new, placed stack is created instead).
+	rehomeOrphanedItems(profile)
+	local slotted = slottedUuidSet(profile)
 	while remaining > 0 do
 		local merged = false
-		for _, it in pairs(profile.inventory) do
-			if type(it) == "table" and it.itemId == itemId and type(it.count) == "number" and it.count < maxStack then
+		for uuid, it in pairs(profile.inventory) do
+			if slotted[uuid] and type(it) == "table" and it.itemId == itemId and type(it.count) == "number" and it.count < maxStack then
 				local room = maxStack - it.count
 				local add = math.min(room, remaining)
 				it.count = it.count + add
@@ -664,7 +761,7 @@ local function mergeStackableIntoInventory(player, profile, itemId, count)
 			-- ItemFactory stamps equipSlot correctly per Kind (see src/shared/Items/) --
 			-- the old inline table here never set it at all, which is how e.g. training
 			-- armor lost its specific Helm/Chest/Legs/Boots/Shield slot identity.
-			local it = ItemFactory.CreateOwnedItem(itemId, { count = take })
+			local it = ItemFactory.CreateOwnedItem(itemId, { count = take, origin = originCtx })
 			if not it then
 				break
 			end
@@ -710,7 +807,55 @@ ensureSkillStats = function(profile)
 	profile.stats.fishing.fishingLevel = profile.stats.fishing.level
 end
 
-function ProfileService.GrantItem(player, template, count)
+-- Builds one owned-item record from a grant template. Shared by GrantItem (to the
+-- bag) and GrantItemToChest (to the bank), so there is exactly one place that
+-- decides an owned item's shape and identity.
+--
+-- `mayCarryIdentity` must be true for at most ONE unit per template. A template
+-- that carries a serial is one item being transferred; DevService grants up to 20
+-- units from a single template, and those must be 20 distinct items.
+local function buildOwnedItemFromTemplate(template, mayCarryIdentity, originCtx)
+	local item = {
+		uuid = HttpService:GenerateGUID(false),
+		name = template.name,
+		type = template.type,
+		rarity = template.rarity,
+		tier = template.tier,
+		level = template.level,
+		enchantLevel = template.enchantLevel,
+		subStats = template.subStats,
+		equipSlot = template.equipSlot,
+		tags = template.tags,
+		toolPrefabName = template.toolPrefabName,
+		durability    = template.durability,
+		maxDurability = template.maxDurability,
+	}
+	if type(template.itemId) == "string" and template.itemId ~= "" then
+		item.itemId = template.itemId
+	else
+		local inferred = Types.InferLegacyItemIdFromName(template.name)
+		if type(inferred) == "string" and inferred ~= "" then
+			item.itemId = inferred
+		end
+	end
+	if type(item.count) ~= "number" or item.count < 1 or item.count ~= math.floor(item.count) then
+		item.count = 1
+	end
+	-- Identity. The field list above is a fixed literal, so serial/origin do NOT
+	-- come across from the template on their own -- do not "fix" that by adding
+	-- two more lines to the literal, the next field would drift the same way.
+	-- CarryForward is the one sanctioned path.
+	if not (mayCarryIdentity and ItemIdentity.CarryForward(item, template)) then
+		ItemIdentity.Stamp(item, originCtx)
+	end
+	return item
+end
+
+-- `originCtx` is an optional ItemIdentity origin context (see ItemIdentity.NewOrigin).
+-- Trailing and optional so existing callers keep compiling; anything that omits it
+-- mints with kind = "unknown" and warns once, which is how the un-threaded grant
+-- paths announce themselves.
+function ProfileService.GrantItem(player, template, count, originCtx)
 	local profile = ProfileService.Load(player)
 	local ok, err = Types.ValidateItemTemplate(template)
 	if not ok then
@@ -727,41 +872,15 @@ function ProfileService.GrantItem(player, template, count)
 		if template.rarity == "Common" then
 			per = Economy.SCRAP_PER_COMMON_IN_RAID
 		end
-		local okm, errm = mergeStackableIntoInventory(player, profile, "T1Scrap", per * n)
+		local okm, errm = mergeStackableIntoInventory(player, profile, "T1Scrap", per * n, originCtx)
 		if not okm then
 			return false, errm or "merge_failed"
 		end
 	else
-		for _ = 1, n do
-			local uuid = HttpService:GenerateGUID(false)
-			local item = {
-				uuid = uuid,
-				name = template.name,
-				type = template.type,
-				rarity = template.rarity,
-				tier = template.tier,
-				level = template.level,
-				enchantLevel = template.enchantLevel,
-				subStats = template.subStats,
-				equipSlot = template.equipSlot,
-				tags = template.tags,
-				toolPrefabName = template.toolPrefabName,
-				durability    = template.durability,
-				maxDurability = template.maxDurability,
-			}
-			if type(template.itemId) == "string" and template.itemId ~= "" then
-				item.itemId = template.itemId
-			else
-				local inferred = Types.InferLegacyItemIdFromName(template.name)
-				if type(inferred) == "string" and inferred ~= "" then
-					item.itemId = inferred
-				end
-			end
-			if type(item.count) ~= "number" or item.count < 1 or item.count ~= math.floor(item.count) then
-				item.count = 1
-			end
-			profile.inventory[uuid] = item
-			placeItemInFirstEmptySlot(profile, uuid, player)
+		for i = 1, n do
+			local item = buildOwnedItemFromTemplate(template, i == 1, originCtx)
+			profile.inventory[item.uuid] = item
+			placeItemInFirstEmptySlot(profile, item.uuid, player)
 		end
 	end
 
@@ -859,6 +978,37 @@ function ProfileService.PlaceItemInFirstEmptySlot(profile, uuid, player)
 	return placeItemInFirstEmptySlot(profile, uuid, player)
 end
 
+--[[
+	Self-heal for "owned but invisible" items (2026-09-27): anything in profile.inventory that
+	no bag/hotbar/equip slot points at is put into the first empty BAG slots (sorted by uuid, so
+	the result is stable). Found live: one dev profile held 24 such items -- real gear (Kane's
+	Greaves, two Miasma Carapaces) and a T1ArmorScroll x24 stack that every F8 grant kept
+	topping up (stack grants merge into ANY existing stack), so the scrolls "never arrived".
+	Sources include ProfileTypes' legacy scroll migrations (they mint stacks straight into
+	inventory, and Reconcile has no slot access) and grants/returns that landed while the bag
+	was full. Runs on the cold Load and on every snapshot build; an item that still finds no
+	room simply stays put and is retried next time. Bag only: an orphan is never auto-equipped.
+	Returns placedCount, orphanCount.
+]]
+rehomeOrphanedItems = function(profile)
+	if type(profile) ~= "table" or type(profile.inventory) ~= "table" then return 0, 0 end
+	ensureBagSlots(profile)
+	local slotted = slottedUuidSet(profile)
+	local orphans = {}
+	for uuid, item in pairs(profile.inventory) do
+		if type(item) == "table" and not slotted[uuid] then
+			table.insert(orphans, uuid)
+		end
+	end
+	if #orphans == 0 then return 0, 0 end
+	table.sort(orphans)
+	local placed = 0
+	for _, uuid in ipairs(orphans) do
+		if placeItemInFirstEmptyBagSlot(profile, uuid) then placed += 1 end
+	end
+	return placed, #orphans
+end
+
 -- Public wrapper around the same bag-count logic maybeFireT1KeyFragment30Milestone already
 -- uses internally (countItemIdInBag). Exposed for callers outside this module that need a
 -- read-only "how many of itemId does this player have" check -- e.g. the dungeon system
@@ -872,7 +1022,8 @@ function ProfileService.CountItemId(player, itemId)
 	return countItemIdInBag(profile, itemId)
 end
 
-function ProfileService.GrantItemId(player, itemId, count)
+-- `originCtx`: see ProfileService.GrantItem.
+function ProfileService.GrantItemId(player, itemId, count, originCtx)
 	local profile = ProfileService.Load(player)
 	local prevT1Frags = countItemIdInBag(profile, "T1KeyFragment")
 	local def = ItemDefinitions.Get(itemId)
@@ -898,12 +1049,12 @@ function ProfileService.GrantItemId(player, itemId, count)
 		if def.Rarity == "Common" then
 			per = Economy.SCRAP_PER_COMMON_IN_RAID
 		end
-		local okm, errm = mergeStackableIntoInventory(player, profile, "T1Scrap", per * n)
+		local okm, errm = mergeStackableIntoInventory(player, profile, "T1Scrap", per * n, originCtx)
 		if not okm then
 			return false, errm or "merge_failed"
 		end
 	elseif ItemDefinitions.IsStackable(itemId) then
-		local okm, errm = mergeStackableIntoInventory(player, profile, itemId, n)
+		local okm, errm = mergeStackableIntoInventory(player, profile, itemId, n, originCtx)
 		if not okm then
 			return false, errm or "merge_failed"
 		end
@@ -915,7 +1066,7 @@ function ProfileService.GrantItemId(player, itemId, count)
 			-- hand. The old version never set equipSlot at all -- every weapon collapsed
 			-- onto "Weapon" (Bow included) and every armor piece onto a generic "Armor"
 			-- bucket that isn't even a real equip-panel slot.
-			local it = ItemFactory.CreateOwnedItem(itemId)
+			local it = ItemFactory.CreateOwnedItem(itemId, { origin = originCtx })
 			if not it then
 				break
 			end
@@ -1168,6 +1319,33 @@ function ProfileService.ChestDepositToSlot(player, uuid, slotIndex)
 	StatsService.RecomputeRuntimeHp(profile)
 	ProfileService.PushProfile(player)
 	Hotbar.syncFromProfile(player, profile)
+	return true, nil
+end
+
+-- Grants a template STRAIGHT into the bank (chest storage) -- the first empty
+-- UNLOCKED chest slot -- instead of the bag. For grants that must not be lost when
+-- the bag is full: dungeon cash-out uses it for whatever doesn't fit (see
+-- DungeonRunService.EndRunFor). Returns false, "chest_full" when no unlocked slot
+-- is free; locked rows are never used, since an item parked behind a coin unlock
+-- would read as held hostage.
+--
+-- Mints through the same buildOwnedItemFromTemplate GrantItem uses, so a banked
+-- item is identical to one that landed in the bag -- same shape, same serial.
+function ProfileService.GrantItemToChest(player, template, originCtx)
+	local profile = ProfileService.Load(player)
+	local ok, err = Types.ValidateItemTemplate(template)
+	if not ok then
+		return false, err
+	end
+	ensureChest(profile)
+	local slot = findFirstEmptyChestSlot(profile)
+	if not slot then
+		return false, "chest_full"
+	end
+	local item = buildOwnedItemFromTemplate(template, true, originCtx)
+	profile.chestInventory[item.uuid] = item
+	profile.chestSlots[slot] = item.uuid
+	ProfileService.PushProfile(player)
 	return true, nil
 end
 
@@ -1707,6 +1885,26 @@ end
 	Lawful/"safe" zone (ZoneService.IsPlayerInSafeZone) -- destroying gear is
 	irreversible, so it's gated tighter than a drop.
 ]]
+-- For outside callers that take an item out of profile.inventory themselves (the auction
+-- house escrows the item table into its own DataStore): drops every slot pointer to the uuid
+-- (hotbar, bag, equip boxes) so nothing is left rendering a ghost or rejecting drops.
+function ProfileService.ClearItemReferences(profile, itemUuid)
+	if type(profile) ~= "table" or type(itemUuid) ~= "string" then return end
+	clearItemUuidFromAllHotbar(profile, itemUuid)
+	clearUuidFromBagSlots(profile, itemUuid)
+	clearItemUuidFromAllEquipped(profile, itemUuid)
+	dedupeHotbarInPlace(profile)
+end
+
+-- True when this player's session is a real, DataStore-backed profile (loaded under our
+-- lock), false for the ephemeral stand-in used when the load failed (lock held elsewhere,
+-- Studio API access off). Anything that moves value IN from outside the profile (auction
+-- payouts) must check this first, or the value lands in a profile that is never saved.
+function ProfileService.IsPersistent(player)
+	local profile = sessions[player.UserId]
+	return profile ~= nil and not profile.IsEphemeral and not studioFallback
+end
+
 function ProfileService.TrashItem(player, itemUuid)
 	local cs = getCombatState()
 	if cs and cs.IsInCombat(player) then
@@ -1724,11 +1922,25 @@ function ProfileService.TrashItem(player, itemUuid)
 	return true, nil
 end
 
+-- Returns a NEW dict of per-item copies with `origin` removed. Never mutates the
+-- source -- see the note at the call site in BuildSnapshotPayload.
+local function stripOriginFromItems(inv)
+	if type(inv) ~= "table" then
+		return inv
+	end
+	local out = {}
+	for uuid, item in pairs(inv) do
+		out[uuid] = (type(item) == "table") and ItemIdentity.StripForWire(item) or item
+	end
+	return out
+end
+
 function ProfileService.BuildSnapshotPayload(player)
 	local profile = ProfileService.Load(player)
 	ensureHotbar(profile)
 	ensureBagSlots(profile)
 	ensureChest(profile)
+	rehomeOrphanedItems(profile) -- nothing owned may be left invisible in what the client draws
 	local derived = StatsService.BuildSnapshot(profile)
 	local uid = player.UserId
 	local seq = (snapshotGenByUserId[uid] or 0) + 1
@@ -1749,6 +1961,18 @@ function ProfileService.BuildSnapshotPayload(player)
 	profileWire.bagSlots = bagSlotsWire
 	-- Internal persistence plumbing -- no client-side use for it, and no reason to ship it.
 	profileWire.Lock = nil
+	-- The world map's explored bitsets grow with play; the map has its own remote
+	-- (MinimapStateRequest), so they never ride on the profile push.
+	profileWire.map = nil
+	-- Item provenance is server-side forensics; the client has no use for it and
+	-- it would add ~9 KB to every push.
+	--
+	-- This MUST build new dicts of per-item copies. table.clone above is SHALLOW,
+	-- so profileWire.inventory is literally profile.inventory and every item table
+	-- inside it is shared with the live profile -- nilling `origin` in place here
+	-- would silently and permanently destroy provenance on the server's own data.
+	profileWire.inventory = stripOriginFromItems(profile.inventory)
+	profileWire.chestInventory = stripOriginFromItems(profile.chestInventory)
 	return {
 		profile = profileWire,
 		derived = derived,
@@ -1768,8 +1992,10 @@ function ProfileService.PushProfile(player)
 	local humanoid = char and char:FindFirstChildOfClass("Humanoid")
 	if humanoid then
 		local maxHp = payload.derived.combat.maxHp
+		local wasFull = humanoid.Health > 0 and humanoid.Health >= humanoid.MaxHealth - 0.5
 		humanoid.MaxHealth = maxHp
-		if humanoid.Health > maxHp then
+		if humanoid.Health > maxHp or (wasFull and humanoid.Health < maxHp) then
+			-- A full bar stays full when the max rises (spawn: legacy 100 -> the real max).
 			humanoid.Health = maxHp
 		end
 	end
@@ -1779,6 +2005,10 @@ function ProfileService.PushProfile(player)
 
 	-- Replicate alignment to all clients via player attribute
 	player:SetAttribute("PlayerAlignment", ProfileService.GetAlignment(player))
+	-- ...and the combat level, for everyone's nametags (client/Nametags). Every XP gain pushes.
+	local stats = payload.profile and payload.profile.stats
+	local combatLevel = stats and stats.combat and tonumber(stats.combat.level)
+	if combatLevel then player:SetAttribute("CombatLevel", math.floor(combatLevel)) end
 
 	local ok, err = pcall(function()
 		getPushEvent():FireClient(player, payload)
@@ -1868,6 +2098,10 @@ function ProfileService.SetAlignment(player, newAlignment)
 	return true, nil
 end
 
+-- Returns true, nil, { level, xp, levelsGained } -- the bucket AFTER the gain. The XP events
+-- (CombatXPEvent/MiningXPEvent/FishingXPEvent) forward that table to the client, which SETS its
+-- display state from it (SkillXPShared.ApplyServerGain) instead of re-adding the amount on top
+-- of a client-side count that never knew the saved value.
 function ProfileService.AddSkillXP(player, branch, amount)
 	local profile = ProfileService.Load(player)
 	ensureSkillStats(profile)
@@ -1885,9 +2119,11 @@ function ProfileService.AddSkillXP(player, branch, amount)
 	bucket.xp = bucket.xp + gain
 
 	local required = xpRequiredForLevel(bucket.level)
+	local levelsGained = 0
 	while bucket.xp >= required do
 		bucket.xp = bucket.xp - required
 		bucket.level = bucket.level + 1
+		levelsGained = levelsGained + 1
 		required = xpRequiredForLevel(bucket.level)
 	end
 
@@ -1897,6 +2133,31 @@ function ProfileService.AddSkillXP(player, branch, amount)
 		profile.stats.fishing.fishingLevel = bucket.level
 	end
 
+	ProfileService.PushProfile(player)
+	return true, nil, { level = bucket.level, xp = bucket.xp, levelsGained = levelsGained }
+end
+
+-- Dev tool (F8 Profile tab): set a skill to an exact level with 0 XP into it, and push so the
+-- client's SkillXPShared (SkillXPSync) shows it straight away. branch: combat/mining/fishing.
+function ProfileService.DevSetSkillLevel(player, branch, level)
+	local profile = ProfileService.Load(player)
+	ensureSkillStats(profile)
+	local key = string.lower(tostring(branch or ""))
+	if key ~= "combat" and key ~= "mining" and key ~= "fishing" then
+		return false, "bad_branch"
+	end
+	local lv = math.floor(tonumber(level) or 0)
+	if lv < 1 or lv > 200 then
+		return false, "bad_level"
+	end
+	local bucket = profile.stats[key]
+	bucket.level = lv
+	bucket.xp = 0
+	if key == "mining" then
+		profile.stats.mining.miningLevel = lv
+	elseif key == "fishing" then
+		profile.stats.fishing.fishingLevel = lv
+	end
 	ProfileService.PushProfile(player)
 	return true, nil
 end
@@ -2077,5 +2338,9 @@ game:BindToClose(function()
 	end
 	task.wait(5)
 end)
+
+
+-- Wipe detection: periodic bulk-loss checks on every live session (InventoryAudit).
+InventoryAudit.Start(ProfileService.Get)
 
 return ProfileService

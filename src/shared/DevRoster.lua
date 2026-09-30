@@ -27,6 +27,7 @@ DevRoster.IDS = {
 	62963717,
 	446429007,
 	49263337,
+	25162613, -- spinjitzumaster47
 }
 
 -- True for any listed dev, and for anyone in a Studio session (solo or Team

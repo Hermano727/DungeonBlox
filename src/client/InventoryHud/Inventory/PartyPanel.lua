@@ -20,8 +20,6 @@ local e = React.createElement
 local player = Players.LocalPlayer
 
 local PartyRequestUtil = require(ReplicatedStorage:WaitForChild("PartyRequestUtil"))
-local gameEvents = ReplicatedStorage:WaitForChild("GameEvents")
-local PartyStateSync = gameEvents:WaitForChild("PartyStateSync")
 
 -- Shared with PartyClient (the legacy popup) so both UIs talk to
 -- PartyRequest the same way instead of each keeping their own copy.
@@ -30,17 +28,19 @@ local function request(action: string, arg: any?): (boolean, any)
 end
 
 local function PartyPanel(props: { onClose: () -> () })
-	local myParty, setMyParty = React.useState(nil :: any)
+	-- Seeded from the shared cache: this panel re-mounts on every open, and used to start
+	-- empty ("No Party", Leave greyed out) until the next party change.
+	local myParty, setMyParty = React.useState(PartyRequestUtil.GetMyParty() :: any)
 	local inviteOpen, setInviteOpen = React.useState(false)
 	local status, setStatus = React.useState("")
 	local players, setPlayers = React.useState(Players:GetPlayers())
 
 	React.useEffect(function()
-		local conn = PartyStateSync.OnClientEvent:Connect(function(payload)
-			if type(payload) == "table" then
-				setMyParty(payload.myParty)
-			end
+		local conn = PartyRequestUtil.Changed:Connect(function(payload)
+			setMyParty(payload.myParty)
 		end)
+		-- And ask the server once on open, in case the cache missed the join-time push.
+		task.spawn(PartyRequestUtil.Refresh)
 		return function()
 			conn:Disconnect()
 		end

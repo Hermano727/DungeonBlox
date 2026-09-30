@@ -59,7 +59,15 @@ function SfxService.PlayEffect(key)
 	if not RunService:IsClient() then
 		return
 	end
-	local assetId = SoundEffects[key]
+	-- A registry entry may be one id or a list of variations; pick one per call.
+	local entry = SoundEffects[key]
+	local assetId = entry
+	if type(entry) == "table" then
+		if #entry == 0 then
+			return
+		end
+		assetId = entry[math.random(1, #entry)]
+	end
 	if type(assetId) ~= "string" or assetId == "" then
 		return
 	end

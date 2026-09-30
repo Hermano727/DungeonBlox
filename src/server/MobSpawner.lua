@@ -86,9 +86,17 @@ function MobSpawner:Tick(deltaTime, players)
     end
 end
 
--- Count alive mobs in SpawnedMobs list
+-- Count alive mobs in SpawnedMobs list.
+-- `_pendingSpawns` counts mobs currently being CREATED. Creating a mob yields
+-- (MobAnimController.attach fetches a KeyframeSequence for AttackHitFrame over
+-- the network), and the mob is only inserted into SpawnedMobs once createMob
+-- returns -- so during that yield this spawner looked empty, the Heartbeat
+-- ticked it, and it spawned a duplicate. Hit 2026-09-17: the F8 "Force Spawn
+-- Elite" button reliably produced TWO Kanes the moment he was given an
+-- AttackHitFrame (i.e. the moment his creation started yielding). Counting
+-- in-flight spawns as occupied slots closes that window.
 function MobSpawner:CountAliveMobs()
-    local count = 0
+    local count = self._pendingSpawns or 0
     for i = #self.SpawnedMobs, 1, -1 do
         local mob = self.SpawnedMobs[i]
         if mob and mob:IsAlive() then
@@ -316,12 +324,23 @@ function MobSpawner:SpawnMob()
         spawnLevel = baseStats and baseStats.Level or 1
     end
     
-    -- Create the mob
+    -- Create the mob. Reserve the slot across the call: it yields, and another
+    -- Tick in that window would otherwise see a free slot (see CountAliveMobs).
+    -- pcall so a failed creation can never leak the reservation and wedge this
+    -- spawner into "permanently full" forever.
     local spawnPosition = (typeof(forcedSpawnPosition) == "Vector3") and forcedSpawnPosition or self:_findSpawnPosition()
-    local mob = createMob(mobIdToSpawn, spawnPosition, self, spawnLevel)
+    self._pendingSpawns = (self._pendingSpawns or 0) + 1
+    local created, mobOrErr = pcall(createMob, mobIdToSpawn, spawnPosition, self, spawnLevel)
+    self._pendingSpawns = math.max(0, (self._pendingSpawns or 1) - 1)
 
     self.NextForcedSpawnPosition = nil
     self.NextForcedRiseAnimation = false
+
+    if not created then
+        warn("[MobSpawner] createMob failed for " .. tostring(mobIdToSpawn) .. ": " .. tostring(mobOrErr))
+        return nil
+    end
+    local mob = mobOrErr
     
     if mob then
         table.insert(self.SpawnedMobs, mob)

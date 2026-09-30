@@ -6,7 +6,56 @@
 -- numbers/Vector3s. Kept as free functions rather than a class since there
 -- is no per-instance state to carry between calls.
 
+local Players = game:GetService("Players")
+
 local MobGroundUtils = {}
+
+-- "Ground" means terrain and structures -- never a creature.
+--
+-- The downward probes below start ABOVE the mob, so anything standing or
+-- flying over it is squarely in the ray's path. With only the mob itself
+-- excluded, a player hovering above a mob was reported as ground: the mob
+-- snapped up to the player's feet, and from there could be shoved under the
+-- map, where the "no hit, keep fallbackY" fallback means it never recovers --
+-- it falls until Roblox's FallenPartsDestroyHeight destroys the model, which
+-- reads in game as the mob despawning (2026-09-18, flying above Kane).
+--
+-- Player characters are tracked here rather than rebuilt per probe: these run
+-- every tick per mob, and a table rebuild per mob per frame is pure waste.
+local characterFilter = {}
+
+local function rebuildCharacterFilter()
+	table.clear(characterFilter)
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player.Character then
+			table.insert(characterFilter, player.Character)
+		end
+	end
+end
+
+local function watchPlayer(player)
+	player.CharacterAdded:Connect(rebuildCharacterFilter)
+	player.CharacterRemoving:Connect(rebuildCharacterFilter)
+	rebuildCharacterFilter()
+end
+
+for _, player in ipairs(Players:GetPlayers()) do
+	watchPlayer(player)
+end
+Players.PlayerAdded:Connect(watchPlayer)
+Players.PlayerRemoving:Connect(function()
+	task.defer(rebuildCharacterFilter)
+end)
+
+-- One reusable table, refilled per probe: index 1 is the caller's own model,
+-- the rest are the live player characters.
+local probeFilter = {}
+local function groundProbeFilter(excludeInstance)
+	table.clear(probeFilter)
+	probeFilter[1] = excludeInstance
+	table.move(characterFilter, 1, #characterFilter, #probeFilter + 1, probeFilter)
+	return probeFilter
+end
 
 -- Height from the model's true geometric bottom (feet) up to its
 -- PrimaryPart, measured on the model in its current pose (translation does
@@ -34,7 +83,7 @@ function MobGroundUtils.ResolveGroundedSpawnPosition(model, position, feetToRoot
 
     local rayParams = RaycastParams.new()
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
-    rayParams.FilterDescendantsInstances = {model}
+    rayParams.FilterDescendantsInstances = groundProbeFilter(model)
     -- Without this, the raycast hits whatever geometry is physically first
     -- in its path regardless of collision -- including purely-decorative,
     -- CanCollide=false clutter (grass blades, foliage clumps, the various
@@ -49,9 +98,20 @@ function MobGroundUtils.ResolveGroundedSpawnPosition(model, position, feetToRoot
     -- geometry.
     rayParams.RespectCanCollide = true
 
+    -- Start the downward probe 50 studs up, but never above a collidable roof
+    -- sitting over the spawn point: indoors (the Miasma arena's ceiling slab, a
+    -- station recess roof) a probe from above the roof lands the mob ON the roof
+    -- (2026-09-25: phase-1 slimes spawning on top of the arena). With no roof
+    -- overhead this is exactly the old behaviour.
+    local probeTop = position + Vector3.new(0, 50, 0)
+    local roof = workspace:Raycast(position, Vector3.new(0, 50, 0), rayParams)
+    if roof then
+        probeTop = roof.Position - Vector3.new(0, 0.05, 0)
+    end
+
     local hit = workspace:Raycast(
-        position + Vector3.new(0, 50, 0),
-        Vector3.new(0, -150, 0),
+        probeTop,
+        Vector3.new(0, -(probeTop.Y - position.Y) - 100, 0),
         rayParams
     )
     if not hit then
@@ -69,7 +129,7 @@ end
 function MobGroundUtils.FindGroundY(excludeInstance, x, z, fallbackY)
     local rayParams = RaycastParams.new()
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
-    rayParams.FilterDescendantsInstances = {excludeInstance}
+    rayParams.FilterDescendantsInstances = groundProbeFilter(excludeInstance)
     -- See the matching comment in ResolveGroundedSpawnPosition above -- same
     -- fix, same reason (skip non-collidable decorative geometry so this
     -- always resolves to the real walkable surface, not a grass mesh sitting

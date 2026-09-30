@@ -3,7 +3,15 @@
 --
 -- Walk:           string  = single animation ID
 --                 table   = list of IDs; one is picked randomly each time walking starts
--- Attack:         string  = plays on PerformAttack
+-- Attack:         string  = the mob's ordinary swing, plays on PerformAttack
+-- AttackSpeed:    number  = optional playback rate for Attack (2 = twice as
+--                 fast, default 1). AttackHitFrame and the attack-state lock
+--                 are rescaled with it automatically. ScriptedBody mobs ignore
+--                 it -- their pulse is generated, not played from a clip.
+-- Moveset:        table   = { <Id> = animation ID } -- one entry per authored
+--                 special (combo, slam, ...). The Id matches a MobData
+--                 Moveset entry's `Id`; MobMovesetBehaviour plays it and
+--                 lands its impacts from that entry's HitTimes.
 -- Idle:           string  = loops when the mob is standing still
 -- AttackHitFrame: number  = optional. 0-indexed frame, matching however the
 --                 clip was authored, at which PerformAttack's damage should
@@ -12,7 +20,14 @@
 --                 by reading the animation's own KeyframeSequence at attach
 --                 time (not a guessed fixed frame rate), and caches it on
 --                 the mob as _attackHitDelay. Omit for the old instant-hit
---                 behavior.
+--                 behavior. DOES NOT WORK for FBX-imported clips -- they
+--                 upload as curve animations and report zero keyframes -- use
+--                 AttackHitDelay for those.
+-- AttackHitDelay: number  = optional. Same thing as seconds into the clip's
+--                 AUTHORED timing, instead of a frame index. Used when
+--                 AttackHitFrame can't resolve (FBX imports) and by
+--                 ScriptedBody mobs, which have no clip to read frames from.
+--                 AttackSpeed rescales it, same as AttackHitFrame.
 --
 -- Omit any key the mob doesn't need — it falls back gracefully.
 
@@ -90,25 +105,71 @@ return {
 	-- Kane the Enraged (first named-elite boss, 2026-09-14). Skinned-mesh
 	-- import driven by a real Humanoid+Animator (not AnimationController --
 	-- see the ServerStorage.MobModels.Kane rebuild), so this loads exactly
-	-- like any other mob's Walk track. No Attack yet, per direct request.
+	-- like any other mob's tracks.
+	--
+	-- Attack is his ORDINARY swing (single diagonal slash, 42 authored frames
+	-- at 24 FPS -- Kane_Axe_Slash_Diagonal.fbx). It replaced the old
+	-- proximity/"thorns" damage, so he now hits like any other mob when you
+	-- are in range and in front of him. Impact measured off the axe tip in the
+	-- source .blend: the windup apexes at authored frame 17 and tip speed peaks
+	-- at frame 20, so AttackHitFrame is 19 (0-indexed).
+	--
+	-- The three-hit combo moved into Moveset -- see MobData.Kane.Moveset,
+	-- driven by MobMovesetBehaviour off the playing track's own time.
 	Kane = {
 		Walk = "rbxassetid://105344590641520",
+		Attack = "rbxassetid://90231379538528",
+		-- Seconds, not AttackHitFrame: this clip was imported from FBX, so its
+		-- KeyframeSequence reads back empty and a frame index can never resolve
+		-- (see MobAnimController.attach). 19/24 is the same measured impact --
+		-- authored frame 20 of 42 at 24 FPS -- expressed in the clip's own
+		-- timebase, so AttackSpeed below still halves it to ~0.40s real.
+		AttackHitDelay = 19 / 24,
+		AttackSpeed = 2, -- 42-frame slash plays in ~0.88s instead of ~1.75s
+		Moveset = {
+			AxeCombo3Hit = "rbxassetid://95812769767613",
+		},
 	},
 
-	-- Miasma (T1 dungeon boss). No walk animation authored yet, so it slides
-	-- while chasing -- acceptable for now. AggroStart doubles as the attack
-	-- animation since there is no dedicated active-aggro loop yet.
+	-- Miasma (T1 dungeon boss). Skinned-mesh model (Miasma_Skin + Bones, driven by an
+	-- AnimationController, NOT the old R15 rig -- the old ids below this rig were authored for
+	-- R15 joints and don't apply). No walk clip: while chasing it plays AggroLoop instead.
+	-- AggroStart plays once on acquiring a target, then AggroLoop holds until the target is lost.
+	-- AggroStart doubles as the ordinary attack clip (no dedicated attack authored).
 	MiasmaBoss = {
-		Idle       = "rbxassetid://74796988436650",
-		Attack     = "rbxassetid://119310311898063",  -- Aggro Start, reused
-		AggroStart = "rbxassetid://119310311898063",
-		CeilingLatch = "rbxassetid://83086053617866",
+		Idle       = "rbxassetid://103328246296289",
+		Attack     = "rbxassetid://126756643218296",  -- AggroStart, reused
+		-- The swing lands after a windup (seconds into Attack) instead of the instant it starts,
+		-- and MobData's Telegraph ring fills over exactly this time. Tune against the clip.
+		AttackHitDelay = 0.55,
+		AggroStart = "rbxassetid://126756643218296",
+		AggroLoop  = "rbxassetid://131702188473926",
+		-- Plays on the separate ceiling-latch model (MobData CeilingLatchModelName), not on the
+		-- boss mesh -- see DungeonBossMobClass._spawnLatchProxy.
+		CeilingLatch = "rbxassetid://83190161792275",
+		-- Phase 1 -> 2 bridge (0.6s each, played together; see MiasmaEncounterConfig.BossDropSequence).
+		-- LatchDetach plays on the CEILING-LATCH model's Animator, CeilingToBody on the boss's.
+		LatchDetach  = "rbxassetid://74367298964889",
+		CeilingToBody = "rbxassetid://115862676634720",
+		-- Defeat presentation (DungeonBossMobClass:PlayDefeatPresentation): Defeat plays on the
+		-- upright boss; DefeatFlat plays on the flat puddle model (MobData DefeatFlatModelName)
+		-- while the runtime shrinks it. Neither loops.
+		Defeat     = "rbxassetid://131193462993192", -- upright -> flat
+		DefeatFlat = "rbxassetid://125610215342818", -- flat -> gone (body pulses; shrink is scripted)
 	},
+	MiasmaSlime = {
+		ScriptedBody = true,
+		AttackHitDelay = 0.25,
+	},
+	MiasmaClog = { ScriptedBody = true },
+	MiasmaSack = { ScriptedBody = true },
 
 	-- Template for adding future mobs:
 	-- MyNewMob = {
 	-- 	Walk   = WalkRegistry.Walk1,
 	-- 	Attack = "rbxassetid://...",
 	-- 	Idle   = "rbxassetid://...",
+	-- 	-- Only for mobs with authored specials (see MobMovesetBehaviour):
+	-- 	-- Moveset = { MySpecial = "rbxassetid://..." },
 	-- },
 }

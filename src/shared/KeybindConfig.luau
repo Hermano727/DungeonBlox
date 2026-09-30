@@ -25,6 +25,12 @@ local Keybinds = {
 	SkillsTab   = K.Tab,
 	PartyMenu   = K.P,
 	CloseMenu   = K.Escape,       -- used by every closable panel
+	ReleaseValve = K.X,           -- lets go of a Miasma valve maze (Esc also tries, but Roblox's menu may eat it)
+	ToggleMap   = K.M,            -- expands / collapses the world map (Minimap)
+	MapZoomIn   = { K.Equals, K.KeypadPlus },  -- only while the map is expanded
+	MapZoomOut  = { K.Minus, K.KeypadMinus },
+	SpectatePrev = K.Left,        -- while spectating the boss fight: previous / next teammate
+	SpectateNext = K.Right,
 
 	-- Admin / dev tools
 	DevPlacer       = K.F8,
@@ -36,6 +42,7 @@ local Keybinds = {
 	DevPlaceConfirm = K.Return,
 	DevPlaceCorner  = K.E,
 	DevPlaceDelete  = K.Backspace,
+	DevToggleFly    = K.F,          -- DevPlacer fly on/off, independent of zone drawing
 }
 
 -- Tool-equip slots 1-4 (replaces the old freeform 9-slot hotbar): fixed mapping to the

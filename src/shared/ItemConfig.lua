@@ -149,8 +149,11 @@ ItemConfig.ARMOR_EFFECTS = {
     { id="dex", label="DEX (Sword DMG)",  baseWeight=100 },
 }
 
--- ARMOR_BONUS_EFFECTS: extra substats available only via Alteration Orb (not on initial rolls).
--- None have gameplay effects yet; listed here for future wiring.
+-- ARMOR_BONUS_EFFECTS: extra substats not available on initial random rolls --
+-- via Alteration Orb, or authored onto named-elite gear (NamedEliteLootDefs).
+-- `block` IS wired up (2026-09-17): summed across equipped gear, rolled on every
+-- incoming hit in DamageService.ApplyToPlayer, and negates the hit entirely.
+-- Capped at BLOCK_CHANCE_CAP_PCT below. The rest are still inert data.
 ItemConfig.ARMOR_BONUS_EFFECTS = {
     { id="block",    label="Block",                baseWeight=100, valueType="pct",
       ranges={ {3,4},{3,4},{3,4},{4,5},{4,6} } },
@@ -168,9 +171,31 @@ ItemConfig.ARMOR_BONUS_EFFECTS = {
 -- Slot 1: 50% to roll any of the 4 stats (equal weights)
 -- Slot 2: 25% to roll one of the 3 remaining stats
 -- Hard cap: 2 substats total
+-- Hard ceiling on total block chance from all equipped gear combined. A player
+-- stacking 32% is floored to this -- blocking is all-or-nothing per hit, so an
+-- uncapped stack would trend toward immunity.
+ItemConfig.BLOCK_CHANCE_CAP_PCT = 30
+
 ItemConfig.ARMOR_SUBSTAT_ROLL_CHANCE = { 0.50, 0.25 }
 ItemConfig.ARMOR_SUBSTAT_DMG_PER_200 = 0.05  -- 5% damage per 200 stat
 ItemConfig.ARMOR_SUBSTAT_WEAPON_MAP = { vit="Mace", str="Axe", int="Scythe", dex="Sword" }
+
+------------------------------------------------------------------------
+-- SUBSTAT RANGE VERSION
+--
+-- ***BUMP THIS WHENEVER YOU EDIT ANY `ranges` TABLE, ARMOR_SUBSTAT_RANGE, OR
+-- RARITY_SUBSTAT_MULT BELOW.***
+--
+-- That bump is the whole operator interface for rebalancing: change the
+-- numbers, bump the integer, done. On each player's next load,
+-- ProfileTypes.Reconcile clamps every already-owned substat back inside the new
+-- window (upper bound only -- see ItemStatRanges for the policy and the
+-- authored-loot exemption) and stamps the profile so the pass never re-runs.
+--
+-- Forgetting the bump is not destructive, it just means existing items keep
+-- their old out-of-range values until some later bump sweeps them up.
+------------------------------------------------------------------------
+ItemConfig.SUBSTAT_RANGES_VERSION = 1
 
 ------------------------------------------------------------------------
 -- WEAPON SUBSTATS
@@ -203,12 +228,17 @@ ItemConfig.WEAPON_EFFECTS = {
       ranges={ {8,12},{6,10},{5,8},{5,8},{5,8} } },
     { id="glowing",  label="Glowing",        baseWeight=20, valueType="flat", rangedOnly=true,
       ranges={ {15,30},{20,40},{25,50},{30,60},{35,70} } },
-    { id="bleeding", label="Bleeding",       baseWeight=5,  valueType="flat",
-      ranges={ {4,8},{4,8},{4,8},{4,8},{4,8} } },
+    -- PROC CHANCE, not damage (changed 2026-09-18): a bleed now deals a share of
+    -- the hit that applied it, so the item value is how often it lands. See
+    -- BleedDamageFraction in CombatEnchantConfig.
+    { id="bleeding", label="Bleeding",       baseWeight=5,  valueType="pct",
+      ranges={ {3,5},{4,6},{5,8},{6,10},{8,12} } },
     { id="blinding", label="Blinding",       baseWeight=15, valueType="pct", rangedOnly=true,
       ranges={ {3,5},{4,6},{5,8},{6,10},{8,12} } },
+    -- Bows only (rangedOnly). T1 widened to 6-12 (2026-09-17) now that Slowness
+    -- actually slows -- see docs/enchant-hit-effects.md.
     { id="slowness", label="Slowness",       baseWeight=15, valueType="pct", rangedOnly=true,
-      ranges={ {3,5},{4,6},{5,8},{6,10},{8,12} } },
+      ranges={ {6,12},{4,6},{5,8},{6,10},{8,12} } },
 }
 
 ItemConfig.WEAPON_TYPE_WEIGHTS = {
@@ -226,6 +256,60 @@ ItemConfig.WEAPON_TYPE_WEIGHTS = {
 -- Canonical rarity order (Common -> Legendary). Single source of truth for anything that
 -- must iterate rarities in a fixed order -- ItemGenerator.rollRarity's deterministic roll,
 -- and DevClient's Item Spawner tab (rarity cycle control).
+-- Which weapon types count as melee, for the meleeOnly/rangedOnly flags on
+-- WEAPON_EFFECTS. Single source of truth -- ItemGenerator and the F8 dev tool
+-- both read this instead of keeping their own copies.
+ItemConfig.MELEE_WEAPON_TYPES = { Sword=true, Scythe=true, Axe=true, Mace=true }
+
+------------------------------------------------------------------------
+-- GetSubstatEffects(kind, weaponType)
+--
+-- The one answer to "which substats can legitimately sit on an item of this
+-- kind", returned as the effect tables themselves (id/label/valueType/ranges).
+--
+-- READ THIS instead of hand-picking WEAPON_EFFECTS / ARMOR_EFFECTS /
+-- ARMOR_BONUS_EFFECTS at a call site. Adding or removing a substat anywhere
+-- above -- or adding a whole new table here -- then updates every consumer at
+-- once: the F8 dev tool's force-substat picker, ItemGenerator's forced-substat
+-- validation, and whatever comes next. The dev tool should never need a manual
+-- edit to learn about a new stat.
+--
+-- IMPORTANT: this is the "can be ON the item" pool, NOT the "rolls randomly"
+-- pool. ARMOR_BONUS_EFFECTS (block, reflect, dodge, ...) stays out of initial
+-- random rolls -- that gating lives in ItemGenerator's roll loops, which walk
+-- ARMOR_EFFECTS/WEAPON_EFFECTS directly, not this.
+------------------------------------------------------------------------
+function ItemConfig.GetSubstatEffects(kind, weaponType)
+    local out = {}
+    if kind == "Armor" then
+        for _, effect in ipairs(ItemConfig.ARMOR_EFFECTS) do table.insert(out, effect) end
+        for _, effect in ipairs(ItemConfig.ARMOR_BONUS_EFFECTS) do table.insert(out, effect) end
+        return out
+    end
+    -- Weapon (and "Random" -- crit and friends only exist on weapons, so the
+    -- weapon pool is the useful default there too).
+    local isMelee = ItemConfig.MELEE_WEAPON_TYPES[weaponType] == true
+    for _, effect in ipairs(ItemConfig.WEAPON_EFFECTS) do
+        if not (effect.meleeOnly and not isMelee) and not (effect.rangedOnly and isMelee) then
+            table.insert(out, effect)
+        end
+    end
+    return out
+end
+
+-- Find one substat definition by id across every table, when the item kind
+-- isn't known or doesn't matter (authored gear, tooltips). Kind-aware callers
+-- should use GetSubstatEffects instead so a weapon can't be handed an armor stat.
+function ItemConfig.FindSubstatEffect(id)
+    if type(id) ~= "string" then return nil end
+    for _, tbl in ipairs({ ItemConfig.WEAPON_EFFECTS, ItemConfig.ARMOR_EFFECTS, ItemConfig.ARMOR_BONUS_EFFECTS }) do
+        for _, effect in ipairs(tbl or {}) do
+            if effect.id == id then return effect end
+        end
+    end
+    return nil
+end
+
 ItemConfig.RARITY_ORDER = { "Common", "Uncommon", "Rare", "Epic", "Legendary" }
 ItemConfig.DEFAULT_RARITY_WEIGHTS  = { Common=45, Uncommon=27, Rare=16, Epic=9, Legendary=3 }
 ItemConfig.TIER_DROP_CHANCE        = { [1]=0.18,[2]=0.28,[3]=0.40,[4]=0.55,[5]=0.72 }

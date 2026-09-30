@@ -59,6 +59,7 @@ local rfBankRequest = ensureRemoteFunction("BankRequest")
 local rfBankSync = ensureRemoteFunction("BankSync")
 
 local DungeonProfile      = require(ServerScriptService:WaitForChild("ProfileService"))
+local ItemIdentity = require(game:GetService("ReplicatedStorage"):WaitForChild("ItemIdentity"))
 local Types               = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
 local HearthstoneConfig   = require(ReplicatedStorage:WaitForChild("HearthstoneConfig"))
 local HearthstoneRegistry = require(ServerScriptService:WaitForChild("HearthstoneRegistry"))
@@ -358,7 +359,7 @@ local function grantAdminTestWeaponIfMissing(player)
 			return
 		end
 	end
-	DungeonProfile.GrantItemId(player, "AdminSword", 1)
+	DungeonProfile.GrantItemId(player, "AdminSword", 1, { by = player, kind = ItemIdentity.SOURCE.DEV_TOOL, src = "AdminSword" })
 end
 
 local function syncDungeonBackpackAfterCharacter(player)
@@ -427,7 +428,9 @@ function seedStarterIfEmpty(player)
 			if existingUuid then
 				DungeonProfile.EquipItem(player, existingUuid)
 			else
-				local ok = DungeonProfile.GrantItemId(player, trainingItemId, 1)
+				local ok = DungeonProfile.GrantItemId(player, trainingItemId, 1, {
+					by = player, kind = ItemIdentity.SOURCE.STARTER_SEED, src = trainingItemId,
+				})
 				if ok then
 					profile = DungeonProfile.Load(player)
 					for uuid, item in pairs(profile.inventory) do
@@ -594,6 +597,80 @@ rfDevGrant.OnServerInvoke = function(player, itemId, qty)
 	end
 	local ok, err = DungeonProfile.GrantItemId(player, itemId, qty)
 	return ok, err
+end
+
+--[[
+  DevProfileAction (F8 Profile tab): admin-only, same gate as DevGrantItem.
+    ("setSkill", { branch = "combat"|"mining"|"fishing", level = n })
+    ("refillHp") / ("refillEnergy") / ("refillHunger") / ("refillAll")
+  Returns ok, err.
+]]
+local rfDevProfile = ensureRemoteFunction("DevProfileAction")
+rfDevProfile.OnServerInvoke = function(player, action, args)
+	local isAdmin = RunService:IsStudio()
+		or table.find(HearthstoneConfig.ADMIN_IDS, player.UserId) ~= nil
+	if not isAdmin then return false, "unauthorized" end
+	args = type(args) == "table" and args or {}
+	local function refillHp()
+		local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+		if not humanoid or humanoid.Health <= 0 then return false, "no_character" end
+		humanoid.Health = humanoid.MaxHealth
+		return true
+	end
+	local function refillEnergy()
+		local EnergyData = require(ServerScriptService:WaitForChild("EnergyData"))
+		return EnergyData.refill(player) and true or false, "no_energy_state"
+	end
+	local function refillHunger()
+		local HungerData = require(ServerScriptService:WaitForChild("HungerData"))
+		return HungerData.refill(player) and true or false, "no_hunger_state"
+	end
+	-- Debuffs: the same full cleanse death and dungeon exits use (SSS/StatusCleanse).
+	local function cleanse()
+		require(ServerScriptService:WaitForChild("StatusCleanse")).All(player, "Dev")
+		return true
+	end
+	-- Test debuffs: slow + blind + a bleed, and 2 poison stacks (real ones inside an encounter,
+	-- display-only outside one).
+	local function debuff()
+		local character = player.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		if not humanoid or humanoid.Health <= 0 then return false, "no_character" end
+		local Status = require(ServerScriptService:WaitForChild("CombatEnchantStatus"))
+		local DamageService = require(ServerScriptService:WaitForChild("DamageService"))
+		Status.Apply(character, { slowness = 100, blinding = 100, bleeding = 100 }, function(rawTick)
+			if player.Character ~= character or humanoid.Health <= 0 then return false end
+			return DamageService.ApplyToPlayer(player, rawTick, nil, nil, true) > 0
+		end, { hitDamage = 40 })
+		local inEncounter = false
+		pcall(function()
+			inEncounter = require(ServerScriptService:WaitForChild("MiasmaEncounterService", 2)).AddPoison(player, 2)
+		end)
+		if not inEncounter then
+			player:SetAttribute("MiasmaPoisonStacks", math.min(5, (tonumber(player:GetAttribute("MiasmaPoisonStacks")) or 0) + 2))
+		end
+		return true
+	end
+	if action == "setSkill" then
+		return DungeonProfile.DevSetSkillLevel(player, args.branch, args.level)
+	elseif action == "cleanse" then
+		return cleanse()
+	elseif action == "debuff" then
+		return debuff()
+	elseif action == "refillHp" then
+		return refillHp()
+	elseif action == "refillEnergy" then
+		return refillEnergy()
+	elseif action == "refillHunger" then
+		return refillHunger()
+	elseif action == "refillAll" then
+		local okH = refillHp()
+		local okE = refillEnergy()
+		local okF = refillHunger()
+		cleanse()
+		return okH and okE and okF, "partial"
+	end
+	return false, "bad_action"
 end
 
 -- Require DungeonRunService at boot purely so its ensureRemotes() runs now.

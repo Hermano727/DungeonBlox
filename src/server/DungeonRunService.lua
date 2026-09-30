@@ -23,8 +23,14 @@ local Types         = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
 local Pity          = require(ServerScriptService:WaitForChild("LootPityService"))
 local DungeonScore  = require(ServerScriptService:WaitForChild("DungeonScoreService"))
 local DungeonProfile= require(ServerScriptService:WaitForChild("ProfileService"))
+local WorldLoot     = require(ServerScriptService:WaitForChild("WorldLootService"))
+local ItemIdentity  = require(ReplicatedStorage:WaitForChild("ItemIdentity"))
+local InventoryAudit = require(ServerScriptService:WaitForChild("InventoryAudit"))
 
 local DungeonRunService = {}
+
+-- Defined under "Payout routing" below; declared up here so EndRunFor can call them.
+local routeRunDrop, payRunCoins
 
 local activeRun = nil   -- single shared run for now: { players = {}, size = n, scaling = {} }
 
@@ -48,6 +54,84 @@ local function ensureRemotes()
 end
 
 local evStart, evEnd, evSummary, evExit = ensureRemotes()
+
+------------------------------------------------------------------
+-- Payout routing
+--
+-- A run's drops must never be lost to a full bag. Each one goes to the first
+-- place that can hold it:
+--   "inventory"  the bag, or an empty equip box (ProfileService.HasRoomForItem's
+--                own rule, so this agrees with every other grant)
+--   "bank"       the Treasure Chest -- first empty UNLOCKED slot
+--   "ground"     only if bag AND bank are both full: a world drop owned by the
+--                player, at their feet once they are back on their feet. Kept so
+--                an item is never silently destroyed, not expected to happen.
+-- The destination rides along in the summary so the UI can say "sent to bank".
+------------------------------------------------------------------
+
+local function dropAtPlayerWhenAlive(player, template, scatterIndex)
+    local function drop(character)
+        local root = character and character:WaitForChild("HumanoidRootPart", 10)
+        if not root or not player.Parent then return end
+        pcall(function()
+            WorldLoot.SpawnMobDrop(root.Position, player.UserId,
+                { kind = "item_template", template = template }, scatterIndex)
+        end)
+    end
+    local character = player.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if humanoid and humanoid.Health > 0 then
+        drop(character)
+    else
+        -- Died in the run: the realm they fell in is about to be torn down, so
+        -- wait for the respawn and drop it wherever they come back.
+        task.spawn(function() drop(player.CharacterAdded:Wait()) end)
+    end
+end
+
+-- Returns "inventory" | "bank" | "ground", or nil if the player has no profile.
+routeRunDrop = function(player, template, originCtx, scatterIndex)
+    local profile = DungeonProfile.Load(player)
+    if not profile then return nil end
+
+    if DungeonProfile.HasRoomForItem(profile, template) then
+        local ok = DungeonProfile.GrantItem(player, template, 1, originCtx)
+        if ok then return "inventory" end
+    end
+    local okBank = DungeonProfile.GrantItemToChest(player, template, originCtx)
+    if okBank then return "bank" end
+
+    warn(("[DungeonRunService] %s: bag and bank both full -- dropping %s on the ground")
+        :format(player.Name, tostring(template.name)))
+    -- Stamp it now so it keeps a dungeon-reward origin through the world orb.
+    ItemIdentity.Stamp(template, originCtx)
+    dropAtPlayerWhenAlive(player, template, scatterIndex)
+    return "ground"
+end
+
+-- Pays run coins: as many as fit go to the bag as the Coins item, the rest are
+-- credited straight to the wallet, which IS the bank's coin balance (BankClient
+-- reads currencies.Coins). Returns how many went to the bank.
+payRunCoins = function(player, coins)
+    local profile = DungeonProfile.Load(player)
+    if not profile then return 0 end
+    local fit = math.min(coins, DungeonProfile.StackableCapacity(profile, "Coins"))
+    local toBank = coins - fit
+    if fit > 0 then
+        local ok, err = DungeonProfile.GrantItemId(player, "Coins", fit,
+            { by = player, kind = ItemIdentity.SOURCE.DUNGEON_REWARD })
+        if not ok then
+            warn("[DungeonRunService] coin grant failed, banking instead: " .. tostring(err))
+            toBank = coins
+        end
+    end
+    if toBank > 0 then
+        profile.currencies = profile.currencies or {}
+        profile.currencies.Coins = (tonumber(profile.currencies.Coins) or 0) + toBank
+        DungeonProfile.PushProfile(player)
+    end
+    return toBank
+end
 
 ------------------------------------------------------------------
 -- Public
@@ -82,26 +166,33 @@ function DungeonRunService.StartRun(playerList, tier)
     return true
 end
 
+local END_BANNERS = {
+    cleared = "DungeonComplete",
+    died    = "DungeonFailed",
+    failed  = "DungeonFailed",
+    left    = "DungeonFailed", -- walking out of a run is failing it
+}
+
 function DungeonRunService.EndRunFor(player, reason)
     if not player then return nil end
     local summary = DungeonScore.EndRun(player, reason or "cleared", nil)
     if not summary then return nil end
+    InventoryAudit.Note(player, ("run cashed out (%s), %d drop(s)"):format(tostring(reason), #(summary.items or {})))
 
-    -- Grant straight to inventory and build a display list.
+    -- Grant each drop and build a display list that says where it WENT.
     local granted = {}
-    for _, item in ipairs(summary.items or {}) do
+    local originCtx = { by = player, kind = ItemIdentity.SOURCE.DUNGEON_REWARD, src = "run_" .. tostring(reason) }
+    for index, item in ipairs(summary.items or {}) do
         local okTpl, template = pcall(function() return item:toGrantTemplate() end)
-        if okTpl and template then
-            local valid = Types.ValidateItemTemplate(template)
-            if valid then
-                local okGrant = pcall(DungeonProfile.GrantItem, player, template, 1)
-                if okGrant then
-                    table.insert(granted, {
-                        name   = template.name,
-                        rarity = template.rarity,
-                        level  = template.level,
-                    })
-                end
+        if okTpl and template and Types.ValidateItemTemplate(template) then
+            local destination = routeRunDrop(player, template, originCtx, index)
+            if destination then
+                table.insert(granted, {
+                    name        = template.name,
+                    rarity      = template.rarity,
+                    level       = template.level,
+                    destination = destination,
+                })
             end
         end
     end
@@ -114,12 +205,9 @@ function DungeonRunService.EndRunFor(player, reason)
     -- is no AddCurrency and no CurrencyService; guessing at one meant the
     -- grant silently did nothing inside its pcall.
     local coins = summary.coins or 0
+    local coinsToBank = 0
     if coins > 0 then
-        local okCoins, errCoins = DungeonProfile.GrantItemId(player, "Coins", coins)
-        if not okCoins then
-            warn("[DungeonRunService] coin grant failed: " .. tostring(errCoins))
-            coins = 0
-        end
+        coinsToBank = payRunCoins(player, coins)
     end
 
     local xp = summary.xp or 0
@@ -128,10 +216,10 @@ function DungeonRunService.EndRunFor(player, reason)
         -- argument as the amount -- firing (name, xp, tier) makes it read a
         -- string and award nothing, which is the bug MobManager's live path
         -- avoids by sending the bare number.
-        pcall(DungeonProfile.AddSkillXP, player, "combat", xp)
+        local _, _, _, totals = pcall(DungeonProfile.AddSkillXP, player, "combat", xp)
         local xpEvent = ReplicatedStorage:FindFirstChild("CombatXPEvent")
         if xpEvent then
-            xpEvent:FireClient(player, xp)
+            xpEvent:FireClient(player, xp, type(totals) == "table" and totals or nil)
         end
     end
 
@@ -141,9 +229,13 @@ function DungeonRunService.EndRunFor(player, reason)
         kills     = summary.kills,
         drops     = granted,
         coins     = coins,
+        coinsToBank = coinsToBank,
         xp        = xp,
         coinsLost = summary.coinsLost or 0,
         xpLost    = summary.xpLost or 0,
+        -- The full-screen end banner (RS/Assets/Images/Banners key; the client's
+        -- DungeonCompleteBanner), and the summary panel waits for it.
+        Banner    = END_BANNERS[reason],
     })
 
     print(("[DungeonRunService] %s ended (%s): %d score, %d kills, %d drop(s)")
@@ -222,9 +314,14 @@ function DungeonRunService.BeginExitWindow(players)
                 -- Hearthstone teleport is the fallback exit; if the service
                 -- isn't reachable, DungeonInstanceService's own teardown will
                 -- still pull them out when the realm is destroyed.
+                -- (This used to call HearthstoneService.TeleportToHearth, which doesn't exist,
+                -- so the pcall swallowed it and nobody was ever moved.)
                 local ok = pcall(function()
-                    local hs = ServerScriptService:FindFirstChild("HearthstoneService")
-                    if hs then require(hs).TeleportToHearth(plr) end
+                    local hs = require(ServerScriptService:WaitForChild("HearthstoneService", 5))
+                    local char = plr.Character
+                    if char and char:FindFirstChild("HumanoidRootPart") then
+                        char:PivotTo(hs.GetHearthstoneLocation(plr))
+                    end
                 end)
                 if not ok then
                     warn("[DungeonRunService] hearthstone teleport failed for " .. plr.Name)
@@ -232,6 +329,14 @@ function DungeonRunService.BeginExitWindow(players)
             end
         end
     end)
+end
+
+-- Just the countdown banner (with its Leave Now button), for an instance that runs its own
+-- exit timer (DungeonInstanceService's Miasma finish): no despawns, no teleport of its own.
+function DungeonRunService.ShowExitCountdown(players, seconds)
+    for _, plr in ipairs(players or {}) do
+        if plr and plr.Parent then evExit:FireClient(plr, { seconds = seconds }) end
+    end
 end
 
 function DungeonRunService.CancelExitWindow(player)
@@ -250,18 +355,11 @@ evEnd.OnServerEvent:Connect(function(player)
     DungeonRunService.EndRunFor(player, "cleared")
 end)
 
--- Dying mid-run cashes out at full value (the key was already paid).
-Players.PlayerAdded:Connect(function(player)
-    player.CharacterAdded:Connect(function(char)
-        local hum = char:WaitForChild("Humanoid", 10)
-        if not hum then return end
-        hum.Died:Connect(function()
-            if DungeonScore.IsInRun(player) then
-                DungeonRunService.EndRunFor(player, "died")
-            end
-        end)
-    end)
-end)
+-- Dying mid-run is handled by DeathLootService, NOT a Died hook here. There used
+-- to be one, and it raced DeathLootService's own Died hook on the same death:
+-- whichever ran second decided whether the player lost their inventory, and
+-- nothing guaranteed the order. DeathLootService now checks "in a run?" first,
+-- skips the inventory drop if so, and calls EndRunFor(player, "died") itself.
 
 print("[DungeonRunService] ready")
 return DungeonRunService

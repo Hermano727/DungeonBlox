@@ -89,6 +89,7 @@
 ]]
 
 local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local AssetService = game:GetService("AssetService")
 
@@ -236,6 +237,9 @@ root.AutomaticSize = Enum.AutomaticSize.Y
 root.BackgroundTransparency = 1
 root.Visible = false
 root.Parent = gui
+
+-- Shrinks the whole bar in valve-puzzle mode (see applyBarTuning); 1 otherwise.
+local rootScale = Instance.new("UIScale", root)
 
 local widthConstraint = Instance.new("UISizeConstraint", root)
 widthConstraint.MinSize = Vector2.new(BAR_WIDTH_MIN, 0)
@@ -397,14 +401,29 @@ ornamentImage.Parent = ornamentRow
 -- UIDevTool (F6) live tuning
 ---------------------------------------------------------------------------
 
+-- Valve-puzzle mode (2026-09-27): while the Miasma valve maze is open (MiasmaMazeOpen, set
+-- by MiasmaValveMazeUI) the bar would cover the top of the centred puzzle, so it moves to the
+-- left edge, below the HP/Energy/Hunger group HealthClient parks top-left in the same mode
+-- (that group starts at y=76 and ends ~y=180), and shrinks. Tweened both ways.
+local MAZE_POSITION = UDim2.fromOffset(12, 196)
+local MAZE_SCALE = 0.55
+local MAZE_TWEEN = TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
 local function applyBarTuning()
     local t = BossHealthBarTuning:Get().Bar
     root.Size = UDim2.new(BAR_WIDTH_SCALE * t.Scale, 0, 0, 0)
     widthConstraint.MinSize = Vector2.new(BAR_WIDTH_MIN * t.Scale, 0)
     widthConstraint.MaxSize = Vector2.new(BAR_WIDTH_MAX * t.Scale, math.huge)
-    root.Position = UDim2.new(0.5, t.OffsetX, 0, TOP_OFFSET + t.OffsetY)
     root.Rotation = t.Rotation
+    local inMaze = player:GetAttribute("MiasmaMazeOpen") == true
+    TweenService:Create(root, MAZE_TWEEN, {
+        AnchorPoint = inMaze and Vector2.new(0, 0) or Vector2.new(0.5, 0),
+        Position = inMaze and MAZE_POSITION or UDim2.new(0.5, t.OffsetX, 0, TOP_OFFSET + t.OffsetY),
+    }):Play()
+    TweenService:Create(rootScale, MAZE_TWEEN, { Scale = inMaze and MAZE_SCALE or 1 }):Play()
 end
+
+player:GetAttributeChangedSignal("MiasmaMazeOpen"):Connect(applyBarTuning)
 
 -- Centered scaling: grows/shrinks the composite slot rect around its own
 -- base center (rather than off the top-left corner), then splits THAT
@@ -443,11 +462,17 @@ local hpBarFXLeft = HealthBarFX.new({
     fill = fillLeft,
     background = backgroundLeft,
     gradient = gradientLeft,
+    -- Same hit feel as the floating mob bars: hard white flash, then a fast
+    -- wobble, no size punch. See HealthBarFX's hitStyle note.
+    punch = false, hitStyle = "wobble", flashTime = 0.2, flashStartTransparency = 0.05,
 })
 local hpBarFXRight = HealthBarFX.new({
     fill = fillRight,
     background = backgroundRight,
     gradient = gradientRight,
+    -- Same hit feel as the floating mob bars: hard white flash, then a fast
+    -- wobble, no size punch. See HealthBarFX's hitStyle note.
+    punch = false, hitStyle = "wobble", flashTime = 0.2, flashStartTransparency = 0.05,
 })
 
 ---------------------------------------------------------------------------
@@ -473,6 +498,10 @@ local function refresh()
         local stats = MobData.FindMobById(mobId)
         if type(stats) == "table" and type(stats.Name) == "string" and stats.Name ~= "" then
             name = stats.Name
+            -- Optional epithet (MobData Title, e.g. Miasma's "the Scourge").
+            if type(stats.Title) == "string" and stats.Title ~= "" then
+                name = name .. " " .. stats.Title
+            end
         end
     end
     nameLabel.Text = string.upper(name)
@@ -489,6 +518,86 @@ local function refresh()
     hpBarFXRight:Update(rightCurrent, halfMax)
     hpBarFXLeft:Update(leftCurrent, halfMax)
 end
+
+---------------------------------------------------------------------------
+-- Stagger meter (solo Miasma, 2026-09-25): a slim bar tucked under the
+-- trough inside the ornament row, shown only while the server publishes
+-- BossStaggerVisible. BossStagger is 0..1 (damage built up toward the
+-- stagger); BossStaggerState "Staggered" while the boss is reeling.
+---------------------------------------------------------------------------
+
+local staggerFrame = Instance.new("Frame")
+staggerFrame.Name = "StaggerMeter"
+staggerFrame.AnchorPoint = Vector2.new(0.5, 0)
+staggerFrame.Position = UDim2.fromScale(0.5, 0.63)
+staggerFrame.Size = UDim2.new(0.36, 0, 0, 22)
+staggerFrame.BackgroundTransparency = 1
+staggerFrame.Visible = false
+staggerFrame.ZIndex = 20
+staggerFrame.Parent = ornamentRow
+
+local staggerLabel = Instance.new("TextLabel")
+staggerLabel.Name = "Label"
+staggerLabel.Size = UDim2.new(1, 0, 0, 12)
+staggerLabel.BackgroundTransparency = 1
+staggerLabel.FontFace = UIFonts.HUDLabel
+staggerLabel.TextSize = 12
+staggerLabel.TextColor3 = Color3.fromRGB(190, 240, 255)
+staggerLabel.TextStrokeTransparency = 0.3
+staggerLabel.Text = "STAGGER"
+staggerLabel.ZIndex = 21
+staggerLabel.Parent = staggerFrame
+
+local staggerTrack = Instance.new("Frame")
+staggerTrack.Name = "Track"
+staggerTrack.Position = UDim2.new(0, 0, 0, 14)
+staggerTrack.Size = UDim2.new(1, 0, 0, 6)
+staggerTrack.BackgroundColor3 = Color3.fromRGB(20, 26, 30)
+staggerTrack.BackgroundTransparency = 0.2
+staggerTrack.BorderSizePixel = 0
+staggerTrack.ZIndex = 21
+staggerTrack.Parent = staggerFrame
+Instance.new("UICorner", staggerTrack).CornerRadius = UDim.new(1, 0)
+local staggerStroke = Instance.new("UIStroke", staggerTrack)
+staggerStroke.Color = Color3.fromRGB(70, 110, 130)
+staggerStroke.Thickness = 1
+
+local staggerFill = Instance.new("Frame")
+staggerFill.Name = "Fill"
+staggerFill.Size = UDim2.fromScale(0, 1)
+staggerFill.BackgroundColor3 = Color3.fromRGB(120, 210, 255)
+staggerFill.BorderSizePixel = 0
+staggerFill.ZIndex = 22
+staggerFill.Parent = staggerTrack
+Instance.new("UICorner", staggerFill).CornerRadius = UDim.new(1, 0)
+
+local function refreshStagger()
+    local visible = player:GetAttribute("BossStaggerVisible") == true
+    staggerFrame.Visible = visible
+    if not visible then return end
+    local ratio = math.clamp(tonumber(player:GetAttribute("BossStagger")) or 0, 0, 1)
+    local staggered = player:GetAttribute("BossStaggerState") == "Staggered"
+    staggerFill.Size = UDim2.fromScale(ratio, 1)
+    if player:GetAttribute("BossStaggerState") == "Recovering" then
+        staggerLabel.Text = "STAGGER"
+        staggerFill.BackgroundColor3 = Color3.fromRGB(80, 96, 104)
+        staggerStroke.Color = Color3.fromRGB(50, 64, 72)
+    elseif staggered then
+        staggerLabel.Text = "STAGGERED"
+        staggerFill.BackgroundColor3 = Color3.fromRGB(235, 250, 255)
+        staggerStroke.Color = Color3.fromRGB(200, 240, 255)
+    else
+        staggerLabel.Text = "STAGGER"
+        -- Warms toward white as it nears the break point.
+        staggerFill.BackgroundColor3 = Color3.fromRGB(120, 210, 255):Lerp(Color3.fromRGB(230, 250, 255), ratio * ratio)
+        staggerStroke.Color = Color3.fromRGB(70, 110, 130)
+    end
+end
+
+player:GetAttributeChangedSignal("BossStaggerVisible"):Connect(refreshStagger)
+player:GetAttributeChangedSignal("BossStagger"):Connect(refreshStagger)
+player:GetAttributeChangedSignal("BossStaggerState"):Connect(refreshStagger)
+task.defer(refreshStagger)
 
 player:GetAttributeChangedSignal("EliteActive"):Connect(refresh)
 player:GetAttributeChangedSignal("EliteCurrentHealth"):Connect(refresh)

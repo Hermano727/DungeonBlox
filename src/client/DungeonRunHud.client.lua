@@ -20,6 +20,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService  = game:GetService("UserInputService")
 local RunService        = game:GetService("RunService")
 
+local CompleteBanner = require(script.Parent:WaitForChild("DungeonCompleteBanner"))
+
 local player    = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
@@ -215,10 +217,13 @@ leaveBtn.ZIndex = 9
 corner(leaveBtn, 5)
 
 local exitDeadline = nil
+-- Leave Now = the real leave (DungeonInstanceService's DungeonLeaveRequest: straight to the
+-- hearthstone). It used to fire DungeonRunEnd, a dev remote that only re-ran the cash-out and
+-- moved nobody, so the player stayed put until the realm was torn down under them.
 leaveBtn.Activated:Connect(function()
     exitDeadline = nil
     banner.Visible = false
-    fireServer("DungeonRunEnd")
+    fireServer("DungeonLeaveRequest")
 end)
 
 RunService.Heartbeat:Connect(function()
@@ -245,9 +250,29 @@ bindWhenReady("DungeonExitWindow", function(remote)
     end)
 end)
 
+-- The server ends the instance (and sends you home) on its own clock; drop the countdown the
+-- moment it says so, instead of leaving "Leave Now" ticking in town.
+local DungeonTypes = require(ReplicatedStorage:WaitForChild("DungeonInstanceTypes"))
+bindWhenReady("DungeonInstanceStateUpdate", function(remote)
+    remote.OnClientEvent:Connect(function(payload)
+        if type(payload) == "table" and payload.state == DungeonTypes.State.ENDED then
+            exitDeadline = nil
+            banner.Visible = false
+        end
+    end)
+end)
+
 ----------------------------------------------------------------
 -- Render summary
 ----------------------------------------------------------------
+
+-- Drops that did NOT land in your bag get a tag on their row. Destinations come
+-- from DungeonRunService's payout routing: "inventory" (no tag), "bank" (bag was
+-- full, it went to your Treasure Chest), "ground" (bag AND bank were full).
+local DESTINATION_TAGS = {
+    bank   = { text = "SENT TO BANK", color = Color3.fromRGB(120, 190, 255) },
+    ground = { text = "BANK FULL - DROPPED AT YOUR FEET", color = Color3.fromRGB(255, 140, 110) },
+}
 local function render(data)
     for _, c in ipairs(list:GetChildren()) do
         if c:IsA("TextLabel") then c:Destroy() end
@@ -268,6 +293,10 @@ local function render(data)
         end
     else
         coinLbl.Text = string.format("  +%d coins", data.coins or 0)
+        -- Bag had no room for all of it: the rest went to the bank balance.
+        if (data.coinsToBank or 0) > 0 then
+            coinLbl.Text ..= string.format("  (%d sent to bank)", data.coinsToBank)
+        end
         xpLbl.Text   = string.format("+%d xp", data.xp or 0)
         coinLbl.TextColor3 = Color3.fromRGB(255, 210, 90)
         xpLbl.TextColor3   = Color3.fromRGB(120, 200, 255)
@@ -295,6 +324,23 @@ local function render(data)
             row.TextColor3 = RARITY_COLORS[d.rarity] or Color3.fromRGB(205, 210, 220)
             row.Text = string.format("   %s  (Lv %s)", tostring(d.name), tostring(d.level or "?"))
             row.ZIndex = 12
+
+            -- Where it actually went, when that is NOT your bag. A child of the
+            -- row, so render()'s TextLabel sweep clears it along with the row.
+            local tag = DESTINATION_TAGS[d.destination]
+            if tag then
+                local tagLbl = Instance.new("TextLabel", row)
+                tagLbl.BackgroundTransparency = 1
+                tagLbl.AnchorPoint = Vector2.new(1, 0)
+                tagLbl.Position = UDim2.new(1, -6, 0, 0)
+                tagLbl.Size = UDim2.new(0.45, 0, 1, 0)
+                tagLbl.Font = Enum.Font.GothamBold
+                tagLbl.TextSize = 11
+                tagLbl.TextXAlignment = Enum.TextXAlignment.Right
+                tagLbl.TextColor3 = tag.color
+                tagLbl.Text = tag.text
+                tagLbl.ZIndex = 13
+            end
         end
     end
 
@@ -302,8 +348,17 @@ local function render(data)
     panel.Visible = true
 end
 
+-- A cleared run opens with the "Dungeon Complete" banner (all other UI hidden while it
+-- plays); the panel appears once it's done.
 bindWhenReady("DungeonRunSummary", function(remote)
-    remote.OnClientEvent:Connect(render)
+    remote.OnClientEvent:Connect(function(data)
+        if type(data) == "table" and type(data.Banner) == "string" then
+            CompleteBanner.Play(data.Banner)
+            CompleteBanner.OnDone(function() render(data) end)
+        else
+            render(data)
+        end
+    end)
 end)
 
 UserInputService.InputBegan:Connect(function(input, gp)

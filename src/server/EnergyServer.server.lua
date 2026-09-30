@@ -8,10 +8,23 @@ local EnergyData=require(SSS:WaitForChild("EnergyData"))
 local HungerData=require(SSS:WaitForChild("HungerData"))
 local ZoneService=require(SSS:WaitForChild("ZoneService"))
 local BuffService=require(SSS:WaitForChild("BuffService"))
+local CombatEnchantStatus=require(SSS:WaitForChild("CombatEnchantStatus"))
 local States=require(RS:WaitForChild("PlayerStateEnum"))
 local EE=RS:WaitForChild("EnergyEvents")
 local EnergyChanged=EE:WaitForChild("EnergyChanged")
 local RequestSprint=EE:WaitForChild("RequestSprint")
+local RequestCrouch=EE:WaitForChild("RequestCrouch")
+local Profiles=require(RS:WaitForChild("CharacterAnimProfiles"))
+local CombatAnimations=require(RS:WaitForChild("CombatAnimConfig"))
+local PresentationConfig=require(RS:WaitForChild("MovementPresentationConfig"))
+local freefallTime = {}
+local function setCrouching(p, value)
+    local c=p.Character
+    local r=c and c:FindFirstChild("HumanoidRootPart")
+    local h=c and c:FindFirstChildOfClass("Humanoid")
+    if r then r:SetAttribute("IsCrouching", value) end
+    if h then h:SetStateEnabled(Enum.HumanoidStateType.Jumping, not value) end
+end
 
 local function ensureRemoteFunction(parent, name)
 	local x = parent:FindFirstChild(name)
@@ -39,13 +52,24 @@ local function applyWalkSpeed(p)
     local h=p.Character and p.Character:FindFirstChildOfClass("Humanoid") if not h then return end
     if h.Health <= 0 then return end
     local base = Config.NORMAL_SPEED
-    if d.isPanting then
+    local root=p.Character:FindFirstChild("HumanoidRootPart")
+    local crouching=root and root:GetAttribute("IsCrouching") == true
+    p.Character:SetAttribute("IsSprinting", d.isSprintHeld == true and not d.isPanting and not crouching)
+    if crouching then
+        base = Config.CROUCH_SPEED
+    elseif d.isPanting then
         base = Config.PANT_WALK_SPEED
     elseif d.isSprintHeld then
         base = Config.SPRINT_SPEED
     end
     local bonus = BuffService.GetSpeedBonusPct(p)
-    h.WalkSpeed = base * (1 + bonus / 100)
+    -- Enchant slow is the last factor: it scales whatever the sprint/crouch/pant
+    -- state and speed buffs already decided, rather than fighting them for
+    -- ownership of WalkSpeed. Multiplier is 1 when not slowed. This function is
+    -- event-driven, so connectCharacter also re-runs it when the slow attribute
+    -- flips -- otherwise a slow landing mid-run wouldn't show until the next
+    -- sprint/crouch/buff change, and wouldn't lift on expiry.
+    h.WalkSpeed = base * (1 + bonus / 100) * CombatEnchantStatus.GetSpeedMultiplier(p.Character)
     -- Cache only a completed write, scoped to this Humanoid. A player can
     -- have energy data before their character exists, or keep the same
     -- buff total across respawns; neither means the new body has its speed.
@@ -130,16 +154,35 @@ end
 local function connectCharacter(p, character)
     if p.Character ~= character then return end
     EnergyData.setSprintHeld(p, false)
+    character:SetAttribute("IsSprinting", false)
+    freefallTime[p.UserId] = 0
     lastSpeedBonusByUid[p.UserId] = nil
     lastSpeedHumanoidByUid[p.UserId] = nil
     lastPositionByUid[p.UserId] = nil
+    character:WaitForChild("HumanoidRootPart", 5)
     local hum = character:WaitForChild("Humanoid", 5)
     if not hum or p.Character ~= character or not p.Parent then
         return
     end
+    setCrouching(p, false)
     applyWalkSpeed(p)
+    character:GetAttributeChangedSignal("EnchantSlowed"):Connect(function()
+        if p.Character ~= character then return end
+        applyWalkSpeed(p)
+    end)
     -- Jump exhaustion is connected once per Humanoid.
     hum.StateChanged:Connect(function(_, new)
+        if p.Character ~= character then return end
+        if new == Enum.HumanoidStateType.Dead or new == Enum.HumanoidStateType.Swimming
+            or new == Enum.HumanoidStateType.Seated or new == Enum.HumanoidStateType.Climbing
+            or new == Enum.HumanoidStateType.Physics then
+            setCrouching(p, false)
+            if new == Enum.HumanoidStateType.Dead then
+                EnergyData.setSprintHeld(p, false)
+                character:SetAttribute("IsSprinting", false)
+            end
+            applyWalkSpeed(p)
+        end
         if new == Enum.HumanoidStateType.Jumping then
             HungerData.addExhaustion(p, HungerConfig.EXHAUSTION.JUMP)
         end
@@ -165,17 +208,48 @@ RunService.Heartbeat:Connect(function(dt)
         -- or a new Humanoid arrives. Failed early attempts never fill the cache.
         local curBonus = BuffService.GetSpeedBonusPct(p)
         local hum = p.Character and p.Character:FindFirstChildOfClass("Humanoid")
-        if lastSpeedBonusByUid[p.UserId] ~= curBonus or lastSpeedHumanoidByUid[p.UserId] ~= hum then
+        local character=p.Character
+        local root=character and character:FindFirstChild("HumanoidRootPart")
+        local crouching=root and root:GetAttribute("IsCrouching") == true
+        freefallTime[p.UserId] = hum and hum:GetState() == Enum.HumanoidStateType.Freefall
+            and ((freefallTime[p.UserId] or 0) + dt) or 0
+        if crouching and freefallTime[p.UserId] >= PresentationConfig.CrouchFreefallTime then
+            setCrouching(p, false)
+            applyWalkSpeed(p)
+            crouching=false
+        end
+        local expectedSprint=d.isSprintHeld == true and not d.isPanting and not crouching
+        if lastSpeedBonusByUid[p.UserId] ~= curBonus or lastSpeedHumanoidByUid[p.UserId] ~= hum
+            or (character and character:GetAttribute("IsSprinting") ~= expectedSprint) then
             applyWalkSpeed(p)
         end
         if now-d.lastSent>=SEND_RATE then EnergyChanged:FireClient(p,d.energy,d.isPanting == true) d.lastSent=now end
     end
 end)
 RequestSprint.OnServerEvent:Connect(function(p,isHeld)
-    if EnergyData.isBlocked(p) or EnergyData.isPanting(p) then return end
-    if isHeld and not HungerData.canSprint(p) then return end
-    local h=p.Character and p.Character:FindFirstChildOfClass("Humanoid") if not h then return end
-    EnergyData.setSprintHeld(p,isHeld)
+    if type(isHeld) ~= "boolean" then return end
+    local h=p.Character and p.Character:FindFirstChildOfClass("Humanoid")
+    if not h or h.Health <= 0 then return end
+    -- Shift always stands up, even when energy/hunger refuses sprint.
+    if isHeld then setCrouching(p, false) end
+    local accepted=isHeld and not EnergyData.isBlocked(p) and not EnergyData.isPanting(p) and HungerData.canSprint(p)
+    EnergyData.setSprintHeld(p, accepted == true)
+    applyWalkSpeed(p)
+end)
+RequestCrouch.OnServerEvent:Connect(function(p,wantCrouch)
+    if type(wantCrouch) ~= "boolean" then return end
+    local h=p.Character and p.Character:FindFirstChildOfClass("Humanoid")
+    if not h or h.Health <= 0 then return end
+    if wantCrouch then
+        -- Remain safely disabled until the exported clips have published IDs.
+        if not Profiles.CrouchReady() or CombatAnimations.CROUCH_SWING_ANIM_ID == "" then return end
+        local state=h:GetState()
+        if EnergyData.isBlocked(p) or h.Sit or h.PlatformStand or h.FloorMaterial == Enum.Material.Air
+            or (state ~= Enum.HumanoidStateType.Running and state ~= Enum.HumanoidStateType.Landed
+                and state ~= Enum.HumanoidStateType.RunningNoPhysics) then return end
+        EnergyData.setSprintHeld(p, false)
+    end
+    setCrouching(p, wantCrouch)
     applyWalkSpeed(p)
 end)
 
@@ -209,6 +283,7 @@ Players.PlayerRemoving:Connect(function(p)
     lastSpeedBonusByUid[p.UserId] = nil
     lastSpeedHumanoidByUid[p.UserId] = nil
     lastPositionByUid[p.UserId] = nil
+    freefallTime[p.UserId] = nil
     EnergyData.remove(p)
     HungerData.remove(p)
 end)

@@ -20,6 +20,17 @@ function EnergyData.chargeHitEnergy(p) local d=_d[p] if not d or d.isBlocked or 
 function EnergyData.setSprintHeld(p,v) local d=_d[p] if d then d.isSprintHeld=v end end
 function EnergyData.isBlocked(p) local d=_d[p] return d~=nil and d.isBlocked end
 
+-- Dev tool (F8 Profile tab): full energy now, ending Low Energy Mode if it was on.
+function EnergyData.refill(p)
+	local d=_d[p] if not d then return false end
+	d.energy=Config.MAX_ENERGY
+	if d.isPanting then
+		d.isPanting=false
+		if EnergyData.onEnergyRecovered then task.spawn(EnergyData.onEnergyRecovered,p) end
+	end
+	return true
+end
+
 function EnergyData.isPanting(p)
 	local d = _d[p]
 	return d ~= nil and d.isPanting == true

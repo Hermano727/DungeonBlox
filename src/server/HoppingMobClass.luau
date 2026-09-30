@@ -24,7 +24,7 @@ end
 
 function HoppingMobClass:GetHopDistance()
 	-- Roughly one hop per second's worth of MoveSpeed, clamped to a sane range.
-	return math.clamp(self.Stats.MoveSpeed or 8, 3, 10)
+	return math.clamp(self:GetEffectiveMoveSpeed(), 3, 10)
 end
 
 function HoppingMobClass:GetHopHeight()
@@ -130,7 +130,7 @@ function HoppingMobClass:Move(goalPosition, deltaTime)
 	local dir = flat.Unit
 	local baseEndX = pos.X + dir.X * hopDist
 	local baseEndZ = pos.Z + dir.Z * hopDist
-	local moveSpeed = self.Stats.MoveSpeed or 8
+	local moveSpeed = self:GetEffectiveMoveSpeed()
 	local hopDuration = hopDist / math.max(moveSpeed, 1)
 
 	-- Clamp the separation push added to this hop's landing spot, same idea

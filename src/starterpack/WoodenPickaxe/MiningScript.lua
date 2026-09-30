@@ -42,7 +42,13 @@ local function addXP(amount)
     SkillXPShared.Notify()
 end
 
-MiningXPEvent.OnClientEvent:Connect(function(xpAmount)
+-- `totals` = the server's saved values after this gain; when present the track is SET to
+-- them (SkillXPShared.ApplyServerGain), so the display matches the saved profile.
+MiningXPEvent.OnClientEvent:Connect(function(xpAmount, totals)
+    if type(totals) == "table" then
+        SkillXPShared.ApplyServerGain("Mining", xpAmount, totals)
+        return
+    end
     local n = (typeof(xpAmount) == "number" and xpAmount > 0) and xpAmount or XP_PER_COAL
     addXP(n)
 end)

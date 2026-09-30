@@ -14,7 +14,7 @@ local evPlace=GE and GE:WaitForChild("DevPlaceSpawner",10)
 local evDelete=GE and GE:WaitForChild("DevDeleteSpawner",10)
 local rfList=GE and GE:WaitForChild("DevListSpawners",10)
 local rfPlaceZone=GE and GE:WaitForChild("DevPlaceZone",10)
-local rfSetZoneMusic=GE and GE:WaitForChild("DevSetZoneMusic",10)
+local rfUpdateZone=GE and GE:WaitForChild("DevUpdateZone",10)
 local rfDayNight=GE and GE:WaitForChild("DevDayNightControl",10)
 local MobData=require(RS:WaitForChild("MobData"))
 local NPCRegistry=require(RS:WaitForChild("NPCRegistry"))
@@ -27,9 +27,31 @@ local DayNightConfig=require(RS:WaitForChild("DayNightConfig"))
 -- natural spawners already placed in the world, loot tables -- still
 -- reference every MobID), this only filters what F8 offers for placing new
 -- ones. Expand this set as more mobs get real models.
-local MOB_ID_WHITELIST={PlainsSlime=true,SmallSkeleton=true,Kane=true}
+-- Named elites are NOT in this list: they get their own ELITE tab (see
+-- NAMED_ELITE_IDS below). A named elite is a one-off world event, not a camp
+-- you place a radius spawner for, and only one may be alive server-wide --
+-- mixing it into the MOB list meant "Force Spawn Elite" fired whichever
+-- ordinary mob happened to be selected.
+local MOB_ID_WHITELIST={PlainsSlime=true,SmallSkeleton=true}
 local MOB_IDS={}
-for t=1,5 do local tb=MobData[t];if type(tb)=="table" then for id in pairs(tb) do if MOB_ID_WHITELIST[id] then table.insert(MOB_IDS,id) end end end end
+local NAMED_ELITE_IDS={}
+for t=1,5 do
+    local tb=MobData[t]
+    if type(tb)=="table" then
+        for id,stats in pairs(tb) do
+            if type(stats)=="table" and (stats.IsNamedElite or stats.IsBoss) then
+                -- Reflected off MobData, so a new named elite shows up here with
+                -- no dev-tool edit -- same idea as the ITEMS/MYTHIC tabs.
+                -- Dungeon bosses (IsBoss) share the tab for playtesting; they
+                -- spawn through a different server path (see spawnNamedEliteAction).
+                table.insert(NAMED_ELITE_IDS,id)
+            elseif MOB_ID_WHITELIST[id] then
+                table.insert(MOB_IDS,id)
+            end
+        end
+    end
+end
+table.sort(NAMED_ELITE_IDS)
 table.sort(MOB_IDS)
 local NPC_TYPES={}
 for k in pairs(NPCRegistry.Types) do table.insert(NPC_TYPES,k) end
@@ -46,6 +68,7 @@ local OTHER_ITEM_IDS={}
 for id in pairs(ItemDefinitions.Items) do table.insert(OTHER_ITEM_IDS,id) end
 table.sort(OTHER_ITEM_IDS)
 local panelOpen,placingMode,mode,mobIdx,npcIdx=false,false,"Mob",1,1
+local eliteIdx=1
 local exploreMode=false
 local panelMouseFree=false
 local rmbLookActive=false
@@ -57,7 +80,17 @@ local setExploreMode
 local showStatus
 local devVisualsActive
 local boxZoneName
+local boxZoneMusicId
 local statusLbl
+-- Fly is its own toggle (Fly button / Keys.DevToggleFly), independent of zone drawing.
+local flyEnabled=false
+-- DevClient sits close to Luau's 200-locals-per-function limit (the whole script is one
+-- chunk). New helpers go into these tables instead of adding more top-level locals;
+-- going over the limit kills the entire script at load (F8 stops working).
+local Fly={}      -- setEnabled, stop, ensure, attachment, mover
+local DrawHud={toastUntil=0} -- refresh
+local Prof={}     -- PROFILE tab: sec (its section frame); MAP tab: mapSec (kept here, 200-locals limit)
+local ZoneAim={}  -- SNAP_GREEN, SNAP_RADIUS, findSnapIndex, update, ZoneAim.rubberBand
 -- Zone placement state (read by ghost + place handler).
 local zoneAlignment="Lawful"
 local zoneBanned={Lawful=false,Neutral=false,Chaotic=false}
@@ -68,12 +101,18 @@ local zonePreview=Instance.new('Folder')
 zonePreview.Name='DevPlacerZonePreview'
 zonePreview.Parent=nil
 local ZONE_YELLOW=ZoneConfig.DEV_ZONE_COLOR
+ZoneAim.SNAP_GREEN=Color3.fromRGB(80,255,120)
+-- Aiming within this many studs (XZ) of an existing corner snaps onto it; placing a
+-- corner there closes the shape and saves the zone.
+ZoneAim.SNAP_RADIUS=math.max(3, ZoneConfig.DEV_ZONE_CORNER_SIZE*2.5)
+local zoneDrawLbl
 local function clearZoneDraw()
 	table.clear(zoneDrawPoints)
 	for _, c in ipairs(zonePreview:GetChildren()) do
 		c:Destroy()
 	end
 	if zoneDrawLbl then zoneDrawLbl.Text = "Pts: 0" end
+	if DrawHud.refresh then DrawHud.refresh() end
 end
 local function addPreviewEdge(x1, z1, x2, z2, y)
 	local p1 = Vector3.new(x1, y + 0.2, z1)
@@ -93,13 +132,13 @@ local function addPreviewEdge(x1, z1, x2, z2, y)
 	e.CFrame = CFrame.new(mid, p2) * CFrame.Angles(0, math.rad(90), 0)
 	e.Parent = zonePreview
 end
-local zoneDrawLbl
 local function refreshZoneDrawPreview()
 	for _, c in ipairs(zonePreview:GetChildren()) do
 		c:Destroy()
 	end
 	local n = #zoneDrawPoints
 	if zoneDrawLbl then zoneDrawLbl.Text = "Pts: " .. n end
+	if DrawHud.refresh then DrawHud.refresh() end
 	if n == 0 then return end
 	local y = zoneDrawPoints[1].Y
 	for i, p in ipairs(zoneDrawPoints) do
@@ -156,15 +195,53 @@ local function getAimWorldPosition()
 	end
 	return pos
 end
+-- Index of the existing corner the aim is snapping to, or nil. Only corners that would
+-- still leave a valid closed loop (that corner through the last one) are snappable.
+function ZoneAim.findSnapIndex(pos)
+	local n = #zoneDrawPoints
+	if n < ZoneConfig.MIN_POLYGON_POINTS then return nil end
+	local bestIdx, bestDist = nil, ZoneAim.SNAP_RADIUS
+	for i, p in ipairs(zoneDrawPoints) do
+		if n - i + 1 >= ZoneConfig.MIN_POLYGON_POINTS then
+			local d = Vector2.new(p.X - pos.X, p.Z - pos.Z).Magnitude
+			if d < bestDist then
+				bestIdx, bestDist = i, d
+			end
+		end
+	end
+	return bestIdx
+end
+local finishZoneDraw
 local function addZoneCorner()
 	if mode ~= "Zone" or not placingMode then return end
+	local pos = getAimWorldPosition()
+	local snapIdx = ZoneAim.findSnapIndex(pos)
+	if snapIdx then
+		-- Placing onto an existing corner closes the shape there. Corners placed before
+		-- the snapped one are left out of the saved polygon (they are not part of the loop).
+		local loop = {}
+		for i = snapIdx, #zoneDrawPoints do
+			table.insert(loop, zoneDrawPoints[i])
+		end
+		if snapIdx > 1 then
+			showStatus("Closed at corner " .. snapIdx .. ", skipping " .. (snapIdx - 1) .. " earlier corner(s). Saving...")
+		else
+			showStatus("Shape closed. Saving...")
+		end
+		finishZoneDraw(loop)
+		return
+	end
 	if #zoneDrawPoints >= ZoneConfig.MAX_POLYGON_POINTS then
 		showStatus("Max polygon points (" .. ZoneConfig.MAX_POLYGON_POINTS .. ")", true)
 		return
 	end
-	table.insert(zoneDrawPoints, getAimWorldPosition())
+	table.insert(zoneDrawPoints, pos)
 	refreshZoneDrawPreview()
-	showStatus("Corner " .. #zoneDrawPoints .. " placed (E or click)")
+	if #zoneDrawPoints >= ZoneConfig.MIN_POLYGON_POINTS then
+		showStatus("Corner " .. #zoneDrawPoints .. " placed. Aim at a corner to close, or Enter to finish")
+	else
+		showStatus("Corner " .. #zoneDrawPoints .. " placed")
+	end
 end
 local function undoZoneCorner()
 	if #zoneDrawPoints == 0 then return end
@@ -172,8 +249,11 @@ local function undoZoneCorner()
 	refreshZoneDrawPreview()
 	showStatus("Removed corner (" .. #zoneDrawPoints .. " left)")
 end
-local function finishZoneDraw()
-	if #zoneDrawPoints < ZoneConfig.MIN_POLYGON_POINTS then
+local setPanelOpen
+-- points: optional corner list (the snapped loop); defaults to every drawn corner.
+finishZoneDraw = function(points)
+	points = type(points) == "table" and points or zoneDrawPoints
+	if #points < ZoneConfig.MIN_POLYGON_POINTS then
 		showStatus("Need at least " .. ZoneConfig.MIN_POLYGON_POINTS .. " points", true)
 		return
 	end
@@ -186,10 +266,11 @@ local function finishZoneDraw()
 		if on then table.insert(banned, name) end
 	end
 	local pts = {}
-	for _, p in ipairs(zoneDrawPoints) do
+	for _, p in ipairs(points) do
 		table.insert(pts, { x = p.X, z = p.Z })
 	end
-	local groundY = zoneDrawPoints[1].Y
+	local groundY = points[1].Y
+	showStatus("Saving zone...")
 	local ok, result = pcall(function()
 		return rfPlaceZone:InvokeServer({
 			Name = boxZoneName.Text,
@@ -209,18 +290,27 @@ local function finishZoneDraw()
 		return
 	end
 	local z = result.zone
-	showStatus("Saved zone: " .. (z and z.name or "?"))
 	clearZoneDraw()
 	setPlacing(false)
 	setExploreMode(false)
+	-- Bring the panel back so the saved outline (ZoneDevVisuals) and its Managed
+	-- Spawners row are visible as confirmation, even if the draw ended with it hidden.
+	if not panelOpen then setPanelOpen(true) end
+	DrawHud.toastUntil = os.clock() + 6
+	task.delay(6.1, function() if DrawHud.refresh then DrawHud.refresh() end end)
+	showStatus("Zone saved: " .. (z and z.name or "?") .. " (" .. #pts .. " corners)")
 	task.delay(0.3, refreshList)
 end
 local ghost=Instance.new("Part");ghost.Name="DevPlacerGhost";ghost.Anchored=true
 ghost.CanCollide=false;ghost.CanQuery=false;ghost.CanTouch=false;ghost.CastShadow=false
 ghost.Transparency=0.55;ghost.Shape=Enum.PartType.Cylinder;ghost.Material=Enum.Material.Neon
 ghost.Size=Vector3.new(1,10,10);ghost.CFrame=CFrame.new(0,-500,0);ghost.Parent=workspace
+-- Live edge from the last placed corner to the aim point (turns green when snapping closed).
+ZoneAim.rubberBand=Instance.new("Part");ZoneAim.rubberBand.Name="DevPlacerZoneRubberBand";ZoneAim.rubberBand.Anchored=true
+ZoneAim.rubberBand.CanCollide=false;ZoneAim.rubberBand.CanQuery=false;ZoneAim.rubberBand.CanTouch=false;ZoneAim.rubberBand.CastShadow=false
+ZoneAim.rubberBand.Material=Enum.Material.Neon;ZoneAim.rubberBand.Transparency=0.5
 local function updateGhost(r)
-    if mode=="Time" or mode=="Gear" or mode=="Items" or mode=="Mythic" then ghost.CFrame=CFrame.new(0,-500,0); return end
+    if mode=="Time" or mode=="Gear" or mode=="Items" or mode=="Mythic" or mode=="Elite" or mode=="Profile" or mode=="Map" then ghost.CFrame=CFrame.new(0,-500,0); return end
     if mode=="Mob" then ghost.Color=Color3.fromRGB(220,60,60)
         local d=math.clamp((r or 100)*2,4,200);ghost.Size=Vector3.new(1,d,d)
     elseif mode=="Zone" then
@@ -231,38 +321,84 @@ local function updateGhost(r)
         ghost.Transparency=0.2
     else ghost.Color=Color3.fromRGB(60,140,220);ghost.Size=Vector3.new(1,6,6) end
 end
+function ZoneAim.update(pos)
+    local snapIdx=ZoneAim.findSnapIndex(pos)
+    local target=pos
+    local s=ZoneConfig.DEV_ZONE_CORNER_SIZE
+    if snapIdx then
+        local p=zoneDrawPoints[snapIdx]
+        target=Vector3.new(p.X,pos.Y,p.Z)
+        ghost.Color=ZoneAim.SNAP_GREEN
+        ghost.Size=Vector3.new(s*2,s*2,s*2)
+    else
+        ghost.Color=ZONE_YELLOW
+        ghost.Size=Vector3.new(s,s,s)
+    end
+    ghost.CFrame=CFrame.new(target.X, target.Y + 0.3, target.Z)
+    local n=#zoneDrawPoints
+    if n==0 then ZoneAim.rubberBand.Parent=nil; return end
+    local last=zoneDrawPoints[n]
+    local p1=Vector3.new(last.X,last.Y+0.2,last.Z)
+    local p2=Vector3.new(target.X,last.Y+0.2,target.Z)
+    local len=(p2-p1).Magnitude
+    if len<0.05 then ZoneAim.rubberBand.Parent=nil; return end
+    ZoneAim.rubberBand.Color=snapIdx and ZoneAim.SNAP_GREEN or ZONE_YELLOW
+    ZoneAim.rubberBand.Size=Vector3.new(len,ZoneConfig.DEV_ZONE_EDGE_THICKNESS,ZoneConfig.DEV_ZONE_EDGE_THICKNESS)
+    ZoneAim.rubberBand.CFrame=CFrame.new((p1+p2)*0.5,p2)*CFrame.Angles(0,math.rad(90),0)
+    ZoneAim.rubberBand.Parent=workspace
+end
+-- Fly uses a LinearVelocity constraint so the velocity is held on every physics step.
+-- Setting AssemblyLinearVelocity once per rendered frame let gravity pull the character
+-- down between frames (physics runs at 240Hz), which read as a slow constant sink.
+function Fly.stop()
+    if Fly.mover then Fly.mover:Destroy(); Fly.mover=nil end
+    if Fly.attachment then Fly.attachment:Destroy(); Fly.attachment=nil end
+    local hum=player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+    if hum then hum.PlatformStand=false end
+end
+function Fly.ensure(hrp)
+    if Fly.mover and Fly.mover.Parent==hrp then return Fly.mover end
+    if Fly.mover then Fly.mover:Destroy() end
+    if Fly.attachment then Fly.attachment:Destroy() end
+    Fly.attachment=Instance.new("Attachment");Fly.attachment.Name="DevFlyAttachment";Fly.attachment.Parent=hrp
+    Fly.mover=Instance.new("LinearVelocity");Fly.mover.Name="DevFlyVelocity"
+    Fly.mover.Attachment0=Fly.attachment
+    Fly.mover.MaxForce=1e9
+    Fly.mover.VectorVelocity=Vector3.zero
+    Fly.mover.Parent=hrp
+    return Fly.mover
+end
 RunService.RenderStepped:Connect(function()
     if placingMode then
         local pos=getAimWorldPosition()
         if mode=="Zone" then
-            ghost.CFrame=CFrame.new(pos.X, pos.Y + 0.3, pos.Z)
+            ZoneAim.update(pos)
         else
             ghost.CFrame=CFrame.new(pos + Vector3.new(0, .5, 0)) * CFrame.Angles(0, 0, math.rad(90))
         end
     elseif ghost.Parent then
         ghost.CFrame=CFrame.new(0, -500, 0)
     end
-    if not (placingMode and mode=="Zone") then
-        local hum=player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-        if hum and hum.PlatformStand then hum.PlatformStand=false end
-        return
-    end
+    if not (placingMode and mode=="Zone") and ZoneAim.rubberBand.Parent then ZoneAim.rubberBand.Parent=nil end
+    if not flyEnabled then return end
     local char=player.Character
     local hum=char and char:FindFirstChildOfClass("Humanoid")
     local hrp=char and char:FindFirstChild("HumanoidRootPart")
     local cam=workspace.CurrentCamera
     if not hum or not hrp or not cam then return end
     hum.PlatformStand=true
+    local typing=UIS:GetFocusedTextBox()~=nil
     local move=Vector3.zero
-    if UIS:IsKeyDown(Enum.KeyCode.W) then move+=cam.CFrame.LookVector end
-    if UIS:IsKeyDown(Enum.KeyCode.S) then move-=cam.CFrame.LookVector end
-    if UIS:IsKeyDown(Enum.KeyCode.A) then move-=cam.CFrame.RightVector end
-    if UIS:IsKeyDown(Enum.KeyCode.D) then move+=cam.CFrame.RightVector end
-    if UIS:IsKeyDown(Enum.KeyCode.Space) then move+=Vector3.yAxis end
-    if UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.C) then move-=Vector3.yAxis end
-    move=Vector3.new(move.X,move.Y,move.Z)
+    if not typing then
+        if UIS:IsKeyDown(Enum.KeyCode.W) then move+=cam.CFrame.LookVector end
+        if UIS:IsKeyDown(Enum.KeyCode.S) then move-=cam.CFrame.LookVector end
+        if UIS:IsKeyDown(Enum.KeyCode.A) then move-=cam.CFrame.RightVector end
+        if UIS:IsKeyDown(Enum.KeyCode.D) then move+=cam.CFrame.RightVector end
+        if UIS:IsKeyDown(Enum.KeyCode.Space) then move+=Vector3.yAxis end
+        if UIS:IsKeyDown(Enum.KeyCode.LeftControl) or UIS:IsKeyDown(Enum.KeyCode.C) then move-=Vector3.yAxis end
+    end
     if move.Magnitude>0 then move=move.Unit end
-    hrp.AssemblyLinearVelocity=move*FLY_SPEED
+    Fly.ensure(hrp).VectorVelocity=move*FLY_SPEED
     hrp.AssemblyAngularVelocity=Vector3.zero
 end)
 local W,H=600,700
@@ -274,7 +410,7 @@ local pnl=Instance.new("Frame",sg);pnl.AnchorPoint=Vector2.new(0,.5)
 pnl.Position=UDim2.new(0,8,.5,0);pnl.Size=UDim2.fromOffset(W,H)
 pnl.BackgroundColor3=DARK;pnl.BorderSizePixel=0;pnl.ZIndex=2
 Instance.new("UICorner",pnl).CornerRadius=UDim.new(0,10)
-local sk=Instance.new("UIStroke",pnl);sk.Thickness=1;sk.Color=ACC
+do local sk=Instance.new("UIStroke",pnl);sk.Thickness=1;sk.Color=ACC end
 local function lbl(p,tx,x,y,w,h,sz,col,bold,xa)
     local l=Instance.new("TextLabel",p);l.BackgroundTransparency=1
     l.Position=UDim2.fromOffset(x,y);l.Size=UDim2.fromOffset(w,h)
@@ -297,6 +433,44 @@ local function mkI(p,ph,x,y,w,h,def)
     b.PlaceholderColor3=Color3.fromRGB(100,85,85);b.ClearTextOnFocus=false
     b.Text=def or "";b.ZIndex=4;Instance.new("UICorner",b).CornerRadius=UDim.new(0,5)
     local s=Instance.new("UIStroke",b);s.Thickness=1;s.Color=ACC;return b
+end
+-- Draw/fly HUD: a separate always-on-top strip so instructions, corner count and the
+-- save result stay visible while the panel is hidden (flying / F8 closed mid-draw).
+do
+local hudGui=Instance.new("ScreenGui");hudGui.Name="DevPlacerDrawHud";hudGui.ResetOnSpawn=false
+hudGui.IgnoreGuiInset=true;hudGui.DisplayOrder=199;hudGui.Enabled=false;hudGui.Parent=playerGui
+local hudFrame=Instance.new("Frame",hudGui);hudFrame.AnchorPoint=Vector2.new(.5,0)
+hudFrame.Position=UDim2.new(.5,0,0,64);hudFrame.Size=UDim2.fromOffset(640,86)
+hudFrame.BackgroundColor3=DARK;hudFrame.BackgroundTransparency=.2;hudFrame.BorderSizePixel=0
+Instance.new("UICorner",hudFrame).CornerRadius=UDim.new(0,8)
+local hudStroke=Instance.new("UIStroke",hudFrame);hudStroke.Thickness=1;hudStroke.Color=ACC
+local hudTitle=lbl(hudFrame,"",10,6,620,20,15,GOLD,true,Enum.TextXAlignment.Center)
+local hudHint1=lbl(hudFrame,"",10,28,620,16,12,Color3.fromRGB(220,210,190),false,Enum.TextXAlignment.Center)
+local hudHint2=lbl(hudFrame,"",10,44,620,16,12,Color3.fromRGB(170,160,140),false,Enum.TextXAlignment.Center)
+local hudStatus=lbl(hudFrame,"",10,62,620,18,12,Color3.fromRGB(255,220,120),false,Enum.TextXAlignment.Center)
+DrawHud.refresh=function()
+    local drawing=placingMode and mode=="Zone"
+    local toast=os.clock()<DrawHud.toastUntil
+    hudGui.Enabled=drawing or flyEnabled or toast
+    if not hudGui.Enabled then return end
+    local flyTxt="F = fly ("..(flyEnabled and "ON" or "OFF")..")"
+    if drawing then
+        local n=#zoneDrawPoints
+        hudTitle.Text="ZONE DRAW  |  "..n.." corner"..(n==1 and "" or "s")
+        hudHint1.Text="E / Click = place corner    Aim at an existing corner (turns green) + E / Click = close and save"
+        hudHint2.Text="Enter = finish    Backspace = undo    Esc = cancel    "..flyTxt.."    F8 = panel"
+    elseif flyEnabled then
+        hudTitle.Text="FLY MODE"
+        hudHint1.Text="WASD = move    Space = up    Ctrl / C = down"
+        hudHint2.Text=flyTxt.."    F8 = panel"
+    else
+        hudTitle.Text="DEV PLACER"
+        hudHint1.Text=""
+        hudHint2.Text=""
+    end
+    hudStatus.Text=statusLbl and statusLbl.Visible and statusLbl.Text or ""
+    hudStatus.TextColor3=statusLbl and statusLbl.TextColor3 or Color3.fromRGB(255,220,120)
+end
 end
 local function div(y) local d=Instance.new("Frame",pnl)
     d.Size=UDim2.fromOffset(W-16,1);d.Position=UDim2.fromOffset(8,y)
@@ -322,16 +496,18 @@ lbl(pnl,"MODE",12,44,120,14,11,ACC,true)
 local MODES={
     { key="Mob",  label="MOB",  color=Color3.fromRGB(160,50,50),  colorOff=Color3.fromRGB(80,30,30) },
     { key="NPC",  label="NPC",  color=Color3.fromRGB(50,50,160),  colorOff=Color3.fromRGB(40,40,80) },
+    { key="Elite", label="ELITE", color=Color3.fromRGB(150,60,150), colorOff=Color3.fromRGB(70,30,70), immediate=true },
     { key="Zone", label="ZONE", color=Color3.fromRGB(110,120,50), colorOff=Color3.fromRGB(60,65,30) },
     { key="Time", label="TIME", color=Color3.fromRGB(90,130,180), colorOff=Color3.fromRGB(40,55,80), immediate=true },
     { key="Gear", label="GEAR", color=Color3.fromRGB(150,110,40), colorOff=Color3.fromRGB(70,55,25), immediate=true },
     { key="Items", label="ITEMS", color=Color3.fromRGB(60,140,120), colorOff=Color3.fromRGB(30,65,55), immediate=true },
     { key="Mythic", label="MYTHIC", color=Color3.fromRGB(255,85,0), colorOff=Color3.fromRGB(110,40,10), immediate=true },
+    { key="Profile", label="PROFILE", color=Color3.fromRGB(70,120,170), colorOff=Color3.fromRGB(35,55,80), immediate=true },
+    { key="Map", label="MAP", color=Color3.fromRGB(150,130,60), colorOff=Color3.fromRGB(70,60,30), immediate=true },
 }
 local modeButtons={}
-local MODE_ROW_Y0=60
 local function layoutModeButtons()
-    local x,y=12,MODE_ROW_Y0
+    local x,y=12,60
     local maxRight=W-12
     local bottom=y
     for _,m in ipairs(MODES) do
@@ -369,16 +545,34 @@ lbl(mobSec,"ACT.RADIUS",12,112,100,14,11,ACC,true)
 local boxRadius=mkI(mobSec,"100",12,128,78,28,"100")
 lbl(mobSec,"ZONE",100,112,60,14,11,ACC,true)
 local boxZone=mkI(mobSec,"Default",100,128,W-116,28,"Default")
--- "Force Spawn Elite" (2026-09-14): instantly spawns whichever mob MOB_TYPE
--- is currently showing as a NAMED ELITE (rise-from-ground intro + top-middle
--- boss bar), through the exact same server path a real elite pity/chance
--- trigger uses -- see MobManager.ForceSpawnNamedElite. Independent of the
--- placing-mode click-to-place flow below; fires immediately on click.
-local btnForceElite=mkB(mobSec,"Force Spawn Elite",12,164,W-24,26,Color3.fromRGB(90,40,90))
+-- ELITE tab: named elites only (MobData IsNamedElite), kept apart from the MOB
+-- tab because they are a different kind of thing -- a single server-wide world
+-- event with a boss bar and its own soundtrack, not a camp you place. Spawns
+-- instantly through the same server path a real pity/chance trigger uses
+-- (rise-from-ground intro, boss-bar tracking) -- see ForceSpawnNamedElite.
+local eliteSec=Instance.new("Frame",pnl);eliteSec.Position=UDim2.fromOffset(0,sectionY)
+eliteSec.Size=UDim2.fromOffset(W,170);eliteSec.BackgroundTransparency=1;eliteSec.Visible=false
+lbl(eliteSec,"NAMED ELITE / BOSS",12,2,200,16,11,ACC,true)
+local eliteDisp=lbl(eliteSec,NAMED_ELITE_IDS[1] or "(none authored)",40,20,W-72,26,13,Color3.new(1,1,1),false,Enum.TextXAlignment.Center)
+do
+    local prev=mkB(eliteSec,"<",12,20,24,26)
+    local nxt=mkB(eliteSec,">",W-34,20,24,26)
+    local function step(delta)
+        if #NAMED_ELITE_IDS==0 then return end
+        eliteIdx=((eliteIdx-1+delta)%#NAMED_ELITE_IDS)+1
+        eliteDisp.Text=NAMED_ELITE_IDS[eliteIdx]
+    end
+    prev.Activated:Connect(function() step(-1) end)
+    nxt.Activated:Connect(function() step(1) end)
+end
+lbl(eliteSec,"Spawns in front of you with the rise intro and boss bar.",12,54,W-24,14,11,Color3.fromRGB(180,170,140),false)
+lbl(eliteSec,"Only ONE named elite may be alive at a time -- kill or despawn",12,70,W-24,12,10,Color3.fromRGB(140,130,110),false)
+lbl(eliteSec,"the current one first. Dying to it despawns it.",12,82,W-24,12,10,Color3.fromRGB(140,130,110),false)
+lbl(eliteSec,"Dungeon bosses (e.g. MiasmaBoss) spawn 45 studs ahead, no run or intro; a new one replaces the old.",12,98,W-24,12,10,Color3.fromRGB(140,130,110),false)
 local npcSec=Instance.new("Frame",pnl);npcSec.Position=UDim2.fromOffset(0,sectionY)
 npcSec.Size=UDim2.fromOffset(W,170);npcSec.BackgroundTransparency=1;npcSec.Visible=false
 local zoneSec=Instance.new("ScrollingFrame",pnl);zoneSec.Position=UDim2.fromOffset(0,sectionY)
-zoneSec.Size=UDim2.fromOffset(W,170);zoneSec.BackgroundTransparency=1;zoneSec.Visible=false
+zoneSec.Size=UDim2.fromOffset(W,SECTION_H);zoneSec.BackgroundTransparency=1;zoneSec.Visible=false
 zoneSec.BorderSizePixel=0
 zoneSec.CanvasSize=UDim2.new(0,0,0,0)
 zoneSec.AutomaticCanvasSize=Enum.AutomaticSize.Y
@@ -397,11 +591,12 @@ local boxTimeHour=mkI(timeSec,"12",12,78,58,28,"12")
 lbl(timeSec,"MIN",80,62,40,14,11,ACC,true)
 local boxTimeMin=mkI(timeSec,"0",80,78,58,28,"0")
 lbl(timeSec,"PRESETS",12,114,W-24,14,11,ACC,true)
-local btnTimeDawn=mkB(timeSec,"Dawn",12,130,58,24,Color3.fromRGB(55,45,35))
-local btnTimeNoon=mkB(timeSec,"Noon",76,130,58,24,Color3.fromRGB(55,50,35))
-local btnTimeDusk=mkB(timeSec,"Dusk",140,130,58,24,Color3.fromRGB(50,40,55))
-local btnTimeMid=mkB(timeSec,"Midnight",204,130,58,24,Color3.fromRGB(35,35,55))
-local btnResumeCycle=mkB(timeSec,"Resume Auto Cycle",12,160,W-24,26,Color3.fromRGB(40,70,110))
+local timeBtns={}
+timeBtns.Dawn=mkB(timeSec,"Dawn",12,130,58,24,Color3.fromRGB(55,45,35))
+timeBtns.Noon=mkB(timeSec,"Noon",76,130,58,24,Color3.fromRGB(55,50,35))
+timeBtns.Dusk=mkB(timeSec,"Dusk",140,130,58,24,Color3.fromRGB(50,40,55))
+timeBtns.Mid=mkB(timeSec,"Midnight",204,130,58,24,Color3.fromRGB(35,35,55))
+timeBtns.Resume=mkB(timeSec,"Resume Auto Cycle",12,160,W-24,26,Color3.fromRGB(40,70,110))
 lbl(npcSec,"NPC TYPE",12,2,80,16,11,ACC,true)
 local npcPrev=mkB(npcSec,"<",12,20,24,26)
 local npcNext=mkB(npcSec,">",W-34,20,24,26)
@@ -415,26 +610,30 @@ local boxNpcId=mkI(npcSec,"e.g. merchant_01",12,128,W-24,28)
 -- banned-alignments toggle row 3.
 lbl(zoneSec,"ZONE NAME",12,2,80,14,11,ACC,true)
 boxZoneName=mkI(zoneSec,"e.g. Stormhaven",12,18,W-24,28,"")
-lbl(zoneSec,"Draw corners (min 3). Fly while drawing.",12,50,W-24,14,11,Color3.fromRGB(180,170,140),false)
-lbl(zoneSec,"E=corner  Enter=finish  RMB=look  Backspace=undo",12,64,W-24,12,10,Color3.fromRGB(140,130,110),false)
+lbl(zoneSec,"Draw corners (min 3). Place a corner on top of an existing one to close and save.",12,50,W-24,14,11,Color3.fromRGB(180,170,140),false)
+lbl(zoneSec,"E/Click=corner  Enter=finish  Backspace=undo  RMB=look  F=toggle fly",12,64,W-24,12,10,Color3.fromRGB(140,130,110),false)
 lbl(zoneSec,"ALIGNMENT",12,82,100,14,11,ACC,true)
-local btnAlnLaw=mkB(zoneSec,"LAWFUL",12,98,76,24)
-local btnAlnNeu=mkB(zoneSec,"NEUTRAL",94,98,76,24)
-local btnAlnCha=mkB(zoneSec,"CHAOTIC",176,98,76,24)
-lbl(zoneSec,"BANNED ALIGNMENTS (entry flash)",12,130,W-24,14,11,ACC,true)
-local btnBanLaw=mkB(zoneSec,"Lawful",12,146,76,24)
-local btnBanNeu=mkB(zoneSec,"Neutral",94,146,76,24)
-local btnBanCha=mkB(zoneSec,"Chaotic",176,146,76,24)
+local alnBtns,banBtns={},{}
+alnBtns.Lawful=mkB(zoneSec,"LAWFUL",12,98,72,24)
+-- A "Neutral" zone is labelled WILDERNESS; the stored value is still "Neutral"
+-- (ZoneConfig.DisplayAlignment). "Neutral" is reserved for the player PvP toggle.
+alnBtns.Neutral=mkB(zoneSec,ZoneConfig.DisplayAlignment("Neutral"):upper(),88,98,104,24)
+alnBtns.Chaotic=mkB(zoneSec,"CHAOTIC",196,98,72,24)
+lbl(zoneSec,"BANNED PLAYER ALIGNMENTS (entry flash)",12,130,W-24,14,11,ACC,true)
+banBtns.Lawful=mkB(zoneSec,"Lawful",12,146,76,24)
+banBtns.Neutral=mkB(zoneSec,"Neutral",94,146,76,24)
+banBtns.Chaotic=mkB(zoneSec,"Chaotic",176,146,76,24)
 lbl(zoneSec,"ELITE MOB ZONE",12,176,120,14,11,ACC,true)
 local btnEliteZone=mkB(zoneSec,"OFF",W-58,172,46,24,Color3.fromRGB(90,40,40))
 local btnElitePrev=mkB(zoneSec,"<",12,200,24,26)
 local btnEliteNext=mkB(zoneSec,">",W-34,200,24,26)
 local eliteMobDisp=lbl(zoneSec,MOB_IDS[zoneEliteMobIdx] or "-",40,200,W-72,26,12,Color3.new(1,1,1),false,Enum.TextXAlignment.Center)
 lbl(zoneSec,"MUSIC ID (optional, blank = none)",12,234,W-24,14,11,ACC,true)
-local boxZoneMusicId=mkI(zoneSec,"rbxassetid://... or bare number",12,250,W-24,28,"")
+boxZoneMusicId=mkI(zoneSec,"rbxassetid://... or bare number",12,250,W-24,28,"")
 local btnFinishZone=mkB(zoneSec,"Finish Zone",12,286,88,26,Color3.fromRGB(40,90,40))
 local btnClearZone=mkB(zoneSec,"Clear",106,286,52,26,Color3.fromRGB(90,40,40))
-local btnHideFly=mkB(zoneSec,"Hide & Fly",164,286,86,26,Color3.fromRGB(50,70,110))
+local btnFly=mkB(zoneSec,"Fly: OFF",164,286,86,26,Color3.fromRGB(55,40,40))
+local btnHidePanel=mkB(zoneSec,"Hide Panel",256,286,96,26,Color3.fromRGB(50,70,110))
 zoneDrawLbl=lbl(zoneSec,"Pts: 0",12,316,W-24,18,11,Color3.fromRGB(255,220,80),false,Enum.TextXAlignment.Left)
 zoneSec.CanvasPosition=Vector2.new(0,0)
 local function tintAlnBtn(b,name,active)
@@ -448,14 +647,14 @@ local function tintAlnBtn(b,name,active)
     end
 end
 local function refreshAlignmentBtns()
-    tintAlnBtn(btnAlnLaw,"Lawful", zoneAlignment=="Lawful")
-    tintAlnBtn(btnAlnNeu,"Neutral",zoneAlignment=="Neutral")
-    tintAlnBtn(btnAlnCha,"Chaotic",zoneAlignment=="Chaotic")
+    tintAlnBtn(alnBtns.Lawful,"Lawful", zoneAlignment=="Lawful")
+    tintAlnBtn(alnBtns.Neutral,"Neutral",zoneAlignment=="Neutral")
+    tintAlnBtn(alnBtns.Chaotic,"Chaotic",zoneAlignment=="Chaotic")
 end
 local function refreshBanBtns()
-    tintAlnBtn(btnBanLaw,"Lawful", zoneBanned.Lawful==true)
-    tintAlnBtn(btnBanNeu,"Neutral",zoneBanned.Neutral==true)
-    tintAlnBtn(btnBanCha,"Chaotic",zoneBanned.Chaotic==true)
+    tintAlnBtn(banBtns.Lawful,"Lawful", zoneBanned.Lawful==true)
+    tintAlnBtn(banBtns.Neutral,"Neutral",zoneBanned.Neutral==true)
+    tintAlnBtn(banBtns.Chaotic,"Chaotic",zoneBanned.Chaotic==true)
 end
 local function refreshEliteZoneUi()
     btnEliteZone.Text = zoneIsElite and "ON" or "OFF"
@@ -467,12 +666,12 @@ local function refreshEliteZoneUi()
     btnElitePrev.TextColor3 = zoneIsElite and Color3.new(1,1,1) or Color3.fromRGB(145,130,130)
     btnEliteNext.TextColor3 = zoneIsElite and Color3.new(1,1,1) or Color3.fromRGB(145,130,130)
 end
-btnAlnLaw.Activated:Connect(function() zoneAlignment="Lawful"; refreshAlignmentBtns() end)
-btnAlnNeu.Activated:Connect(function() zoneAlignment="Neutral";refreshAlignmentBtns() end)
-btnAlnCha.Activated:Connect(function() zoneAlignment="Chaotic";refreshAlignmentBtns() end)
-btnBanLaw.Activated:Connect(function() zoneBanned.Lawful = not zoneBanned.Lawful;  refreshBanBtns() end)
-btnBanNeu.Activated:Connect(function() zoneBanned.Neutral= not zoneBanned.Neutral; refreshBanBtns() end)
-btnBanCha.Activated:Connect(function() zoneBanned.Chaotic= not zoneBanned.Chaotic; refreshBanBtns() end)
+alnBtns.Lawful.Activated:Connect(function() zoneAlignment="Lawful"; refreshAlignmentBtns() end)
+alnBtns.Neutral.Activated:Connect(function() zoneAlignment="Neutral";refreshAlignmentBtns() end)
+alnBtns.Chaotic.Activated:Connect(function() zoneAlignment="Chaotic";refreshAlignmentBtns() end)
+banBtns.Lawful.Activated:Connect(function() zoneBanned.Lawful = not zoneBanned.Lawful;  refreshBanBtns() end)
+banBtns.Neutral.Activated:Connect(function() zoneBanned.Neutral= not zoneBanned.Neutral; refreshBanBtns() end)
+banBtns.Chaotic.Activated:Connect(function() zoneBanned.Chaotic= not zoneBanned.Chaotic; refreshBanBtns() end)
 btnEliteZone.Activated:Connect(function() zoneIsElite = not zoneIsElite; refreshEliteZoneUi() end)
 btnElitePrev.Activated:Connect(function()
     if not zoneIsElite or #MOB_IDS == 0 then return end
@@ -546,31 +745,101 @@ local forceSubNext=mkB(itemSec,">",304,232,24,24)
 lbl(itemSec,"VALUE",340,218,90,12,11,ACC,true)
 local boxForceSubValue=mkI(itemSec,"e.g. 100",340,232,90,24,"")
 
-local btnSpawnItem=mkB(itemSec,"Spawn Item",12,264,W-24,28,Color3.fromRGB(40,80,40))
+local btnSpawnItem=mkB(itemSec,"Spawn Item",12,342,W-24,28,Color3.fromRGB(40,80,40))
 
-local MELEE_WEAPON_TYPES={Sword=true,Scythe=true,Axe=true,Mace=true}
 local forceSubIdx=1
 local FORCE_SUB_POOL={"None"}
 
-local function refreshForceSubPool()
-    local kind=ITEM_KINDS[itemKindIdx]
-    local pool={"None"}
-    if kind=="Armor" then
-        for _,e in ipairs(ItemConfig.ARMOR_EFFECTS) do table.insert(pool,e.id) end
-    else
-        -- Weapon (and Random -- crit etc. only exist on weapons anyway, so the
-        -- weapon pool is the useful default there too).
-        local wt=WEAPON_POOL[weaponIdx]
-        local isMelee=MELEE_WEAPON_TYPES[wt]==true
-        for _,e in ipairs(ItemConfig.WEAPON_EFFECTS) do
-            if not (e.meleeOnly and not isMelee) and not (e.rangedOnly and isMelee) then
-                table.insert(pool,e.id)
+-- "+" stacks the picked substat onto a list instead of replacing it, so one
+-- item can be spawned with several substats pinned at chosen values (crit AND
+-- lifesteal AND execute). The picker above still works on its own: leave the
+-- list empty and the currently-shown substat is forced, exactly as before.
+local ForcedSubs={entries={}} -- entries: { {id=, value=}, ... }; also holds frame/refresh
+do
+    local btnAdd=mkB(itemSec,"+",436,232,34,24,Color3.fromRGB(40,80,40))
+    btnAdd.TextSize=18
+    lbl(itemSec,"FORCED SUBSTATS (blank list = just the one above)",12,262,320,12,11,ACC,true)
+    local btnClear=mkB(itemSec,"Clear",W-84,260,72,20,Color3.fromRGB(90,40,40))
+    btnClear.TextSize=11
+    local listFrame=Instance.new("ScrollingFrame",itemSec)
+    listFrame.Position=UDim2.fromOffset(12,278);listFrame.Size=UDim2.fromOffset(W-24,58)
+    listFrame.BackgroundColor3=Color3.fromRGB(14,10,10);listFrame.BorderSizePixel=0
+    listFrame.ScrollBarThickness=4;listFrame.ScrollBarImageColor3=ACC
+    listFrame.CanvasSize=UDim2.new(0,0,0,0);listFrame.AutomaticCanvasSize=Enum.AutomaticSize.Y
+    listFrame.ZIndex=4
+    Instance.new("UICorner",listFrame).CornerRadius=UDim.new(0,5)
+    Instance.new("UIListLayout",listFrame).Padding=UDim.new(0,2)
+    ForcedSubs.frame=listFrame
+
+    ForcedSubs.refresh=function()
+        for _,c in ipairs(listFrame:GetChildren()) do
+            if c:IsA("Frame") then c:Destroy() end
+        end
+        for index,entry in ipairs(ForcedSubs.entries) do
+            local row=Instance.new("Frame",listFrame)
+            row.Size=UDim2.new(1,-8,0,18);row.BackgroundTransparency=1;row.ZIndex=5
+            row.LayoutOrder=index
+            local t=lbl(row,entry.id.." @ "..tostring(entry.value),6,0,W-80,18,12,Color3.fromRGB(230,220,190),false)
+            t.ZIndex=6
+            local x=mkB(row,"x",0,0,18,16,Color3.fromRGB(100,30,30))
+            x.AnchorPoint=Vector2.new(1,0);x.Position=UDim2.new(1,-4,0,1);x.TextSize=11;x.ZIndex=6
+            x.Activated:Connect(function()
+                table.remove(ForcedSubs.entries,index)
+                ForcedSubs.refresh()
+            end)
+        end
+    end
+
+    btnAdd.Activated:Connect(function()
+        local id=FORCE_SUB_POOL[forceSubIdx]
+        if not id or id=="None" then showStatus("Pick a substat first",true) return end
+        local v=tonumber(boxForceSubValue.Text)
+        if v==nil then showStatus("Enter a VALUE first",true) return end
+        for _,entry in ipairs(ForcedSubs.entries) do
+            if entry.id==id then
+                -- Re-adding the same substat retunes it rather than duplicating:
+                -- the generator only ever grants one slot per id anyway.
+                entry.value=v
+                ForcedSubs.refresh()
+                showStatus("Updated "..id.." @ "..tostring(v))
+                return
             end
         end
+        table.insert(ForcedSubs.entries,{id=id,value=v})
+        ForcedSubs.refresh()
+        showStatus("Added "..id.." @ "..tostring(v).."  ("..#ForcedSubs.entries.." forced)")
+    end)
+    btnClear.Activated:Connect(function()
+        table.clear(ForcedSubs.entries)
+        ForcedSubs.refresh()
+        showStatus("Cleared forced substats")
+    end)
+end
+
+local function refreshForceSubPool()
+    local kind=ITEM_KINDS[itemKindIdx]
+    -- Reflected off ItemConfig.GetSubstatEffects -- the shared "what can sit on
+    -- this kind of item" pool, including the bonus-only stats (block etc.) that
+    -- never roll randomly. Add or remove a substat in ItemConfig and this picker
+    -- follows on its own; it should never need a matching edit here. The
+    -- melee/ranged filtering lives in that helper too, so this no longer keeps
+    -- its own copy of which weapon types are melee.
+    local pool={"None"}
+    for _,e in ipairs(ItemConfig.GetSubstatEffects(kind, WEAPON_POOL[weaponIdx])) do
+        table.insert(pool,e.id)
     end
     FORCE_SUB_POOL=pool
     if forceSubIdx>#FORCE_SUB_POOL then forceSubIdx=1 end
     forceSubDisp.Text=FORCE_SUB_POOL[forceSubIdx]
+    -- Weapon and armor substats are disjoint sets, so a list built for one kind
+    -- is all-invalid for the other (the server would silently drop every entry).
+    -- Drop it on a kind switch rather than leaving a list that looks applied.
+    if ForcedSubs.lastKind ~= nil and ForcedSubs.lastKind ~= kind and #ForcedSubs.entries > 0 then
+        table.clear(ForcedSubs.entries)
+        if ForcedSubs.refresh then ForcedSubs.refresh() end
+        showStatus("Forced substats cleared (item kind changed)")
+    end
+    ForcedSubs.lastKind=kind
 end
 
 local function refreshItemKindUi()
@@ -642,12 +911,21 @@ local function spawnItemAction()
     if boxItemSubstats.Text~="" then
         data.SubstatCount=tonumber(boxItemSubstats.Text)
     end
-    local chosenSub=FORCE_SUB_POOL[forceSubIdx]
-    if chosenSub and chosenSub~="None" then
-        local v=tonumber(boxForceSubValue.Text)
-        if v~=nil then
-            data.ForceSubstatId=chosenSub
-            data.ForceSubstatValue=v
+    if #ForcedSubs.entries>0 then
+        local forced={}
+        for _,entry in ipairs(ForcedSubs.entries) do
+            table.insert(forced,{Id=entry.id,Value=entry.value})
+        end
+        data.ForceSubstats=forced
+    else
+        -- Nothing stacked with "+": fall back to whatever the picker is showing.
+        local chosenSub=FORCE_SUB_POOL[forceSubIdx]
+        if chosenSub and chosenSub~="None" then
+            local v=tonumber(boxForceSubValue.Text)
+            if v~=nil then
+                data.ForceSubstatId=chosenSub
+                data.ForceSubstatValue=v
+            end
         end
     end
     if kind=="Weapon" then
@@ -752,6 +1030,18 @@ for i,id in ipairs(OTHER_ITEM_IDS) do
     end)
 end
 
+-- PROFILE tab (skill levels + HP/energy/hunger refills) lives in its own module, DevProfileTab,
+-- because this script is at Luau's 200-locals limit. It builds its own section into pnl.
+Prof.sec=require(script.Parent:WaitForChild("DevProfileTab")).Build({
+    parent=pnl, y=sectionY, w=W, h=SECTION_H, lbl=lbl, mkB=mkB, mkI=mkI, acc=ACC, gold=GOLD,
+    status=function(msg,isErr) showStatus(msg,isErr) end,
+})
+-- MAP tab (reset your world map), same pattern as PROFILE.
+Prof.mapSec=require(script.Parent:WaitForChild("DevMapTab")).Build({
+    parent=pnl, y=sectionY, w=W, h=SECTION_H, lbl=lbl, mkB=mkB, mkI=mkI, acc=ACC, gold=GOLD,
+    status=function(msg,isErr) showStatus(msg,isErr) end,
+})
+
 -- MYTHIC tab.
 -- Mythic is deliberately absent from ItemConfig.RARITY_ORDER (so it can never roll from
 -- an ordinary kill), which is why it cannot be an option in the ITEM tab's rarity list.
@@ -844,7 +1134,15 @@ div(D)
 local placeBtn=mkB(pnl,"Click to Place",10,D+8,W-20,36,Color3.fromRGB(40,80,40));placeBtn.TextSize=14
 statusLbl=lbl(pnl,"",10,D+48,W-20,18,11,Color3.fromRGB(255,220,120),false,Enum.TextXAlignment.Center)
 statusLbl.Visible=false
-lbl(pnl,"MANAGED SPAWNERS",10,D+70,W-20,16,11,ACC,true)
+lbl(pnl,"MANAGED SPAWNERS",10,D+70,300,16,11,ACC,true).Name="ListTitle"
+-- Your OWN position, right-aligned on the list header's row. The rows below
+-- already carry each spawner's coords and are sorted by distance from you, so
+-- this is the missing half of "where am I relative to these".
+-- Looked up by name rather than held in an upvalue, and driven by the ticker at
+-- the bottom of this file rather than by refreshList -- refreshList round-trips
+-- to the server for the whole list, which is far too heavy to run just to move
+-- a coordinate readout.
+lbl(pnl,"",310,D+70,W-20-300,16,11,Color3.fromRGB(150,160,150),false,Enum.TextXAlignment.Right).Name="ListCoords"
 local lf=Instance.new("ScrollingFrame",pnl);lf.Position=UDim2.fromOffset(8,D+88)
 lf.Size=UDim2.fromOffset(W-16,math.max(80,H-(D+88)-8));lf.BackgroundTransparency=1;lf.BorderSizePixel=0
 lf.ScrollBarThickness=4;lf.ScrollBarImageColor3=ACC
@@ -928,19 +1226,22 @@ local function refreshMode()
     for _,m in ipairs(MODES) do
         modeButtons[m.key].BackgroundColor3 = (mode==m.key) and m.color or m.colorOff
     end
-    mobSec.Visible=mode=="Mob";npcSec.Visible=mode=="NPC";zoneSec.Visible=mode=="Zone";timeSec.Visible=mode=="Time";itemSec.Visible=mode=="Gear";itemsSec.Visible=mode=="Items";mythicSec.Visible=mode=="Mythic"
+    mobSec.Visible=mode=="Mob";npcSec.Visible=mode=="NPC";zoneSec.Visible=mode=="Zone";timeSec.Visible=mode=="Time";itemSec.Visible=mode=="Gear";itemsSec.Visible=mode=="Items";mythicSec.Visible=mode=="Mythic";eliteSec.Visible=mode=="Elite";Prof.sec.Visible=mode=="Profile";Prof.mapSec.Visible=mode=="Map"
     if mode~="Zone" then exploreMode=false end
     if mode=="Zone" then
         zoneSec.CanvasPosition=Vector2.new(0,0)
         updateGhost()
-    elseif mode=="Time" or mode=="Gear" or mode=="Items" or mode=="Mythic" then updateGhost()
+    elseif mode=="Time" or mode=="Gear" or mode=="Items" or mode=="Mythic" or mode=="Elite" or mode=="Profile" or mode=="Map" then updateGhost()
     else updateGhost(tonumber(boxRadius.Text)) end
     -- placeBtn is the panel's one shared "confirm" button; ITEMS deliberately has no use
     -- for it (each icon grants itself), so it's hidden rather than left pointing at Gear's
     -- spawn action -- that mismatch was the original bug (see the note above MODES).
-    placeBtn.Visible = mode~="Items"
+    placeBtn.Visible = mode~="Items" and mode~="Profile" and mode~="Map"
     if mode=="Zone" then
         placeBtn.Text=placingMode and "Drawing... (E or click)" or "Draw Zone"
+    elseif mode=="Elite" then
+        placeBtn.Text="Spawn Named Elite"
+        placeBtn.BackgroundColor3=Color3.fromRGB(110,45,110)
     elseif mode=="Time" then
         placeBtn.Text="Apply Time"
         placeBtn.BackgroundColor3=Color3.fromRGB(40,80,40)
@@ -966,12 +1267,15 @@ showStatus=function(msg,isErr)
 	statusLbl.Text=tostring(msg or "")
 	statusLbl.TextColor3=isErr and Color3.fromRGB(255,120,120) or Color3.fromRGB(255,220,120)
 	statusLbl.Visible=msg~=nil and msg~=""
+	if DrawHud.refresh then DrawHud.refresh() end
 end
 devVisualsActive=function()
-	return panelOpen or exploreMode or (placingMode and mode=="Zone")
+	return panelOpen or exploreMode or (placingMode and mode=="Zone") or flyEnabled
 end
 refreshPanelMouse=function()
-	local wantLook=panelOpen and not exploreMode and (rmbLookActive or UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2))
+	-- rmbLookActive only (not the raw button state): it is only set by a right-click on the
+	-- WORLD, see the InputBegan handler below.
+	local wantLook=panelOpen and not exploreMode and rmbLookActive
 	local wantFree=panelOpen and not exploreMode and not wantLook
 	if wantLook then
 		if panelMouseFree then
@@ -994,14 +1298,14 @@ refreshPanelMouse=function()
 	end
 end
 RunService:BindToRenderStep(RMB_LOOK_BIND, Enum.RenderPriority.Last.Value + 1, function()
-	if not (panelOpen and not exploreMode and UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)) then
+	if not (panelOpen and not exploreMode and rmbLookActive) then
 		return
 	end
 	UIS.MouseBehavior=Enum.MouseBehavior.LockCenter
 	UIS.MouseIconEnabled=false
 end)
 setExploreMode=function(v)
-	if mode~="Zone" or not placingMode then
+	if not ((mode=="Zone" and placingMode) or flyEnabled) then
 		exploreMode=false
 		sg.Enabled=panelOpen
 		refreshPanelMouse()
@@ -1014,13 +1318,13 @@ setExploreMode=function(v)
 	player:SetAttribute("DevPlacerOpen", devVisualsActive())
 	refreshPanelMouse()
 	if exploreMode then
-		showStatus("Fly mode: WASD+Space/Ctrl, E=corner, Enter=finish, F8=panel")
+		showStatus("Panel hidden. F8 brings it back")
 	else
-		showStatus("Panel open — Hide & Fly to move around")
+		showStatus("Panel open")
 	end
 end
 setPlacing=function(v)
-    if mode=="Time" or mode=="Gear" or mode=="Items" then placingMode=false; return end
+    if mode=="Time" or mode=="Gear" or mode=="Items" or mode=="Elite" or mode=="Profile" or mode=="Map" then placingMode=false; return end
     placingMode=v
     zonePreview.Parent=(v and mode=="Zone" and devVisualsActive()) and workspace or nil
     if not v then
@@ -1035,8 +1339,9 @@ setPlacing=function(v)
     placeBtn.BackgroundColor3=v and Color3.fromRGB(140,110,20) or Color3.fromRGB(40,80,40)
 	player:SetAttribute("DevPlacerOpen", devVisualsActive())
 	refreshPanelMouse()
+	DrawHud.refresh()
 end
-local function setPanelOpen(v)
+setPanelOpen=function(v)
     panelOpen=v
 	sg.Enabled=v and not exploreMode
     player:SetAttribute("DevPlacerOpen", devVisualsActive())
@@ -1049,10 +1354,12 @@ local function setPanelOpen(v)
 			setPlacing(false)
 			clearZoneDraw()
 			zonePreview.Parent=nil
+			-- Closing the panel outside a draw exits the tool, fly included.
+			if flyEnabled then Fly.setEnabled(false) end
 			showStatus("")
 		else
 			zonePreview.Parent=workspace
-			showStatus("Panel hidden — F8 to reopen, Enter to finish zone")
+			showStatus("Panel hidden. F8 to reopen, Enter to finish zone")
 		end
 		refreshPanelMouse()
 	end
@@ -1060,8 +1367,19 @@ end
 refreshList=function()
     for _,c in ipairs(lf:GetChildren()) do if c:IsA("Frame") then c:Destroy() end end
     if not rfList then return end
+    -- The list only shows what the active tab manages (ZONE -> zones, MOB -> mob camps,
+    -- NPC -> NPC markers). Tabs that place nothing (TIME/GEAR/ITEMS/MYTHIC) hide it.
+    local LIST_TYPE_BY_MODE={Zone={"Zone","MANAGED ZONES"},Mob={"Mob","MANAGED MOB SPAWNERS"},NPC={"NPC","MANAGED NPC MARKERS"}}
+    local listType=LIST_TYPE_BY_MODE[mode]
+    local listTitle=pnl:FindFirstChild("ListTitle")
+    if listTitle then listTitle.Visible=listType~=nil; listTitle.Text=listType and listType[2] or "" end
+    lf.Visible=listType~=nil
+    if not listType then return end
     local ok,entries=pcall(function() return rfList:InvokeServer() end)
     if not ok or type(entries)~="table" then return end
+    for i=#entries,1,-1 do
+        if entries[i].SpawnerType~=listType[1] then table.remove(entries,i) end
+    end
     local hrp=player.Character and player.Character:FindFirstChild("HumanoidRootPart")
     table.sort(entries,function(a,b)
         if not hrp then return tostring(a.Label)<tostring(b.Label) end
@@ -1089,7 +1407,7 @@ refreshList=function()
         rl.Text=prefix..tostring(entry.Label)..coord;rl.ZIndex=5
         local db=Instance.new("TextButton",row)
         db.Size=UDim2.fromOffset(22,20);db.AnchorPoint=Vector2.new(1,.5)
-        db.Position=UDim2.new(1,-4,.5,0);db.BackgroundColor3=Color3.fromRGB(100,30,30)
+        db.Position=UDim2.new(1,-4,0,14);db.BackgroundColor3=Color3.fromRGB(100,30,30)
         db.Font=Enum.Font.GothamBold;db.TextSize=11
         db.TextColor3=Color3.new(1,1,1);db.Text="x";db.ZIndex=6
         Instance.new("UICorner",db).CornerRadius=UDim.new(0,4)
@@ -1108,8 +1426,61 @@ refreshList=function()
             task.delay(.4,refreshList)
         end)
         if isZ then
+            local nameBox=Instance.new("TextBox",row)
+            nameBox.Position=UDim2.fromOffset(8,29);nameBox.Size=UDim2.fromOffset(190,20)
+            nameBox.BackgroundColor3=Color3.fromRGB(14,10,10);nameBox.BorderSizePixel=0
+            nameBox.Font=Enum.Font.GothamMedium;nameBox.TextSize=11;nameBox.TextColor3=Color3.new(1,1,1)
+            nameBox.PlaceholderText="zone name";nameBox.PlaceholderColor3=Color3.fromRGB(100,85,85)
+            nameBox.ClearTextOnFocus=false;nameBox.Text=tostring(entry.ZoneName or "");nameBox.ZIndex=5
+            nameBox.TextXAlignment=Enum.TextXAlignment.Left
+            Instance.new("UICorner",nameBox).CornerRadius=UDim.new(0,4)
+            local nameStroke=Instance.new("UIStroke",nameBox);nameStroke.Thickness=1;nameStroke.Color=ACC
+            local renameBtn=Instance.new("TextButton",row)
+            renameBtn.Position=UDim2.fromOffset(202,29);renameBtn.Size=UDim2.fromOffset(62,20)
+            renameBtn.BackgroundColor3=Color3.fromRGB(55,40,40);renameBtn.BorderSizePixel=0
+            renameBtn.Font=Enum.Font.GothamBold;renameBtn.TextSize=11;renameBtn.TextColor3=Color3.new(1,1,1)
+            renameBtn.Text="Rename";renameBtn.ZIndex=5
+            Instance.new("UICorner",renameBtn).CornerRadius=UDim.new(0,4)
+            -- One helper for every per-row zone edit; they all go through DevUpdateZone.
+            local function updateZone(fields,okMsg)
+                if not rfUpdateZone or type(zoneId)~="string" or zoneId=="" then return end
+                fields.ZoneId=zoneId
+                local ok,result=pcall(function() return rfUpdateZone:InvokeServer(fields) end)
+                if ok and type(result)=="table" and result.ok then
+                    showStatus(okMsg(result.zone))
+                    task.delay(.2,refreshList)
+                else
+                    local err=(ok and type(result)=="table" and result.error) or tostring(result)
+                    showStatus("Zone update failed: "..tostring(err),true)
+                end
+            end
+            renameBtn.Activated:Connect(function()
+                updateZone({Name=nameBox.Text},function(z) return "Zone renamed: "..((z and z.name) or nameBox.Text) end)
+            end)
+            local alignBtn=Instance.new("TextButton",row)
+            alignBtn.Position=UDim2.fromOffset(272,29);alignBtn.Size=UDim2.fromOffset(96,20)
+            alignBtn.BorderSizePixel=0;alignBtn.Font=Enum.Font.GothamBold;alignBtn.TextSize=11
+            alignBtn.ZIndex=5
+            Instance.new("UICorner",alignBtn).CornerRadius=UDim.new(0,4)
+            local rowAlignment=tostring(entry.Alignment or "Lawful")
+            local function paintAlign()
+                alignBtn.Text=ZoneConfig.DisplayAlignment(rowAlignment):upper()
+                alignBtn.BackgroundColor3=ZoneConfig.ALIGNMENT_COLORS[rowAlignment] or Color3.fromRGB(55,40,40)
+                alignBtn.TextColor3=Color3.new(0,0,0)
+            end
+            paintAlign()
+            alignBtn.Activated:Connect(function()
+                -- Cycles Lawful -> Wilderness(Neutral) -> Chaotic and saves immediately.
+                local order=ZoneConfig.ALIGNMENTS_ORDERED
+                local idx=table.find(order,rowAlignment) or 1
+                rowAlignment=order[(idx%#order)+1]
+                paintAlign()
+                updateZone({Alignment=rowAlignment},function(z)
+                    return "Zone alignment: "..ZoneConfig.DisplayAlignment((z and z.alignment) or rowAlignment)
+                end)
+            end)
             local musicBox=Instance.new("TextBox",row)
-            musicBox.Position=UDim2.fromOffset(8,29);musicBox.Size=UDim2.fromOffset(row.AbsoluteSize.X>0 and (row.AbsoluteSize.X-70) or (W-86),20)
+            musicBox.Position=UDim2.fromOffset(376,29);musicBox.Size=UDim2.new(1,-436,0,20)
             musicBox.BackgroundColor3=Color3.fromRGB(14,10,10);musicBox.BorderSizePixel=0
             musicBox.Font=Enum.Font.GothamMedium;musicBox.TextSize=11;musicBox.TextColor3=Color3.new(1,1,1)
             musicBox.PlaceholderText="music id (blank = none)";musicBox.PlaceholderColor3=Color3.fromRGB(100,85,85)
@@ -1124,23 +1495,37 @@ refreshList=function()
             saveBtn.TextColor3=Color3.new(1,1,1);saveBtn.Text="Save";saveBtn.ZIndex=5
             Instance.new("UICorner",saveBtn).CornerRadius=UDim.new(0,4)
             saveBtn.Activated:Connect(function()
-                if not rfSetZoneMusic or type(zoneId)~="string" or zoneId=="" then return end
-                local ok,result=pcall(function()
-                    return rfSetZoneMusic:InvokeServer({ZoneId=zoneId,MusicId=musicBox.Text})
-                end)
-                if ok and type(result)=="table" and result.ok then
-                    showStatus("Zone music updated: "..(result.zone and result.zone.name or zoneId))
-                else
-                    local err=(ok and type(result)=="table" and result.error) or tostring(result)
-                    showStatus("Set music failed: "..tostring(err),true)
-                end
+                updateZone({MusicId=musicBox.Text},function(z) return "Zone music updated: "..((z and z.name) or zoneId) end)
             end)
         end
     end
 end
-btnFinishZone.Activated:Connect(finishZoneDraw)
+btnFinishZone.Activated:Connect(function() finishZoneDraw() end)
 btnClearZone.Activated:Connect(function() clearZoneDraw(); refreshZoneDrawPreview(); showStatus("Cleared corners") end)
-btnHideFly.Activated:Connect(function() setExploreMode(not exploreMode) end)
+Fly.setEnabled=function(v)
+    flyEnabled=v==true
+    if not flyEnabled then
+        Fly.stop()
+        if exploreMode and not (placingMode and mode=="Zone") then setExploreMode(false) end
+    end
+    btnFly.Text=flyEnabled and "Fly: ON" or "Fly: OFF"
+    btnFly.BackgroundColor3=flyEnabled and Color3.fromRGB(40,90,40) or Color3.fromRGB(55,40,40)
+    player:SetAttribute("DevPlacerOpen", devVisualsActive())
+    showStatus(flyEnabled and "Fly ON: WASD, Space up, Ctrl/C down" or "Fly OFF")
+end
+btnFly.Activated:Connect(function() Fly.setEnabled(not flyEnabled) end)
+btnHidePanel.Activated:Connect(function()
+    if not ((mode=="Zone" and placingMode) or flyEnabled) then
+        showStatus("Start drawing or turn on Fly first", true)
+        return
+    end
+    setExploreMode(not exploreMode)
+end)
+player.CharacterAdded:Connect(function()
+    -- The old mover died with the old character; drop fly so a respawn starts grounded.
+    Fly.attachment,Fly.mover=nil,nil
+    if flyEnabled then Fly.setEnabled(false) end
+end)
 closeX.Activated:Connect(function() setPanelOpen(false) end)
 for _,m in ipairs(MODES) do
     local key,immediate=m.key,m.immediate
@@ -1148,13 +1533,14 @@ for _,m in ipairs(MODES) do
         mode=key
         if immediate then setPlacing(false) end
         refreshMode()
+        refreshList() -- list is filtered per tab
     end)
 end
-btnTimeDawn.Activated:Connect(function() applyDevTime(6, 0) end)
-btnTimeNoon.Activated:Connect(function() applyDevTime(12, 0) end)
-btnTimeDusk.Activated:Connect(function() applyDevTime(18, 0) end)
-btnTimeMid.Activated:Connect(function() applyDevTime(0, 0) end)
-btnResumeCycle.Activated:Connect(resumeDevCycle)
+timeBtns.Dawn.Activated:Connect(function() applyDevTime(6, 0) end)
+timeBtns.Noon.Activated:Connect(function() applyDevTime(12, 0) end)
+timeBtns.Dusk.Activated:Connect(function() applyDevTime(18, 0) end)
+timeBtns.Mid.Activated:Connect(function() applyDevTime(0, 0) end)
+timeBtns.Resume.Activated:Connect(resumeDevCycle)
 boxTimeHour.FocusLost:Connect(function() refreshTimeStatus() end)
 boxTimeMin.FocusLost:Connect(function() refreshTimeStatus() end)
 do
@@ -1170,14 +1556,29 @@ do
 end
 mobPrev.Activated:Connect(function() mobIdx=((mobIdx-2)%#MOB_IDS)+1;mobDisp.Text=MOB_IDS[mobIdx] end)
 mobNext.Activated:Connect(function() mobIdx=(mobIdx%#MOB_IDS)+1;mobDisp.Text=MOB_IDS[mobIdx] end)
-btnForceElite.Activated:Connect(function()
+local function spawnNamedEliteAction()
     if not evPlace then warn("[DevClient] evPlace missing");return end
-    local mid=MOB_IDS[mobIdx];if not mid then return end
+    local mid=NAMED_ELITE_IDS[eliteIdx]
+    if not mid then showStatus("No named elites authored in MobData",true);return end
+    -- A dungeon boss is not a named elite: no boss bar, no one-at-a-time elite
+    -- slot, no rise intro. It goes through ForceSpawnBoss instead, which drops
+    -- it ~45 studs out with its real stats and class and no dungeon run.
+    local stats=MobData.FindMobById(mid)
+    if stats and stats.IsBoss then
+        evPlace:FireServer({SpawnerType="Boss",MobId=mid})
+        showStatus("Spawning dungeon boss: "..mid.." (45 studs ahead)")
+        return
+    end
     evPlace:FireServer({SpawnerType="NamedElite",MobId=mid,Position=mouse.Hit.Position})
-end)
+    showStatus("Spawning named elite: "..mid)
+end
 npcPrev.Activated:Connect(function() npcIdx=((npcIdx-2)%#NPC_TYPES)+1;npcDisp.Text=NPC_TYPES[npcIdx] end)
 npcNext.Activated:Connect(function() npcIdx=(npcIdx%#NPC_TYPES)+1;npcDisp.Text=NPC_TYPES[npcIdx] end)
 placeBtn.Activated:Connect(function()
+    if mode=="Elite" then
+        spawnNamedEliteAction()
+        return
+    end
     if mode=="Time" then
         applyDevTime(boxTimeHour.Text, boxTimeMin.Text)
         return
@@ -1195,7 +1596,10 @@ placeBtn.Activated:Connect(function()
     setPlacing(not placingMode)
 end)
 UIS.InputBegan:Connect(function(inp,gp)
-    if inp.UserInputType==Enum.UserInputType.MouseButton2 and panelOpen and not exploreMode then
+    -- Right-drag to look around, but only when the right-click lands on the world. A right-click
+    -- on UI (gp -- e.g. an inventory slot's context menu) used to start look mode too, and its
+    -- LockCenter snapped the cursor to the middle of the screen on every right-click.
+    if inp.UserInputType==Enum.UserInputType.MouseButton2 and panelOpen and not exploreMode and not gp then
         rmbLookActive=true
         refreshPanelMouse()
     end
@@ -1205,6 +1609,12 @@ UIS.InputBegan:Connect(function(inp,gp)
         if panelOpen then setPanelOpen(false);return end
     end
     if inp.KeyCode==Keys.DevPlacer and not gp then
+        if exploreMode then
+            -- Panel was hidden via Hide Panel (still logically open): bring it back.
+            setExploreMode(false)
+            refreshList(); refreshMode()
+            return
+        end
         if placingMode and mode=="Zone" and not panelOpen then
             setPanelOpen(true)
             refreshList(); refreshMode()
@@ -1214,27 +1624,41 @@ UIS.InputBegan:Connect(function(inp,gp)
         if panelOpen then refreshList();refreshMode() end
         return
     end
-    if placingMode and mode=="Zone" then
-        if inp.KeyCode==Keys.DevPlaceCorner and not gp then
+    -- Dev keys ignore gameProcessed and only back off while a TextBox has focus: other
+    -- systems (ProximityPrompts on E, first-person GUI) mark these keys as processed, which
+    -- used to swallow corner/finish presses with no feedback.
+    local typing=UIS:GetFocusedTextBox()~=nil
+    if inp.KeyCode==Keys.DevToggleFly and not typing and (panelOpen or flyEnabled or (placingMode and mode=="Zone")) then
+        Fly.setEnabled(not flyEnabled)
+        return
+    end
+    if placingMode and mode=="Zone" and not typing then
+        if inp.KeyCode==Keys.DevPlaceCorner then
             addZoneCorner()
             return
         end
-        if inp.KeyCode==Keys.DevPlaceConfirm and not gp then
+        if inp.KeyCode==Keys.DevPlaceConfirm then
             finishZoneDraw()
             return
         end
-        if inp.KeyCode==Keys.DevPlaceDelete and not gp then
+        if inp.KeyCode==Keys.DevPlaceDelete then
             undoZoneCorner()
             return
         end
     end
     if not placingMode then return end
     if inp.UserInputType~=Enum.UserInputType.MouseButton1 then return end
-    if gp then return end
     if mode=="Zone" then
+        -- Hit-test the panel instead of trusting gp, for the same reason as the keys above.
+        if sg.Enabled then
+            local m=UIS:GetMouseLocation()
+            local pp,ps=pnl.AbsolutePosition,pnl.AbsoluteSize
+            if m.X>=pp.X and m.X<=pp.X+ps.X and m.Y>=pp.Y and m.Y<=pp.Y+ps.Y then return end
+        end
         addZoneCorner()
         return
     end
+    if gp then return end
     if not evPlace then warn("[DevClient] evPlace missing");setPlacing(false);return end
     if mode=="Mob" then
         local mid=MOB_IDS[mobIdx];if not mid then return end
@@ -1259,4 +1683,27 @@ UIS.InputEnded:Connect(function(inp)
     end
 end)
 refreshMode()
-print("[DevClient] ready -- F8 DevPlacer | zone draw: E=corner Enter=finish Hide&Fly to explore")
+
+-- Live readout of your own position on the list header (see ListCoords above).
+-- 4Hz on purpose: it only has to answer "roughly where am I" while you place
+-- spawners, and this stays off the render path entirely. Does nothing at all
+-- while the panel is shut, and hides itself on the tabs that show no list
+-- (TIME/GEAR/ITEMS/MYTHIC) by mirroring ListTitle's own visibility.
+task.spawn(function()
+    while true do
+        task.wait(0.25)
+        local coords = panelOpen and pnl:FindFirstChild("ListCoords") or nil
+        if coords then
+            local title = pnl:FindFirstChild("ListTitle")
+            local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            coords.Visible = hrp ~= nil and title ~= nil and title.Visible
+            if hrp then
+                -- %.0f, not %d: Luau's %d errors outright on a non-integral
+                -- number, and a live character position is never integral.
+                coords.Text = string.format("YOU  %.0f, %.0f, %.0f", hrp.Position.X, hrp.Position.Y, hrp.Position.Z)
+            end
+        end
+    end
+end)
+
+print("[DevClient] ready -- F8 DevPlacer | zone draw: E=corner, corner-on-corner or Enter=finish, F=fly")

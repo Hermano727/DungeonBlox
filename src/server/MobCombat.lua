@@ -7,6 +7,10 @@ local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"
 local EnergyConfig = require(ReplicatedStorage:WaitForChild("EnergyConfig"))
 local CombatAnimConfig = require(ReplicatedStorage:WaitForChild("CombatAnimConfig"))
 local DamageService = require(ServerScriptService:WaitForChild("DamageService"))
+local EnchantHitFeedback = require(ServerScriptService:WaitForChild("EnchantHitFeedback"))
+local EnchantStatus = require(ServerScriptService:WaitForChild("CombatEnchantStatus"))
+local EnchantConfig = require(ReplicatedStorage:WaitForChild("CombatEnchantConfig"))
+local DamageNumberStyles = require(ReplicatedStorage:WaitForChild("DamageNumberStyles"))
 
 -- Server-side counterpart to CombatClient's rayDistanceIntoModelBounds: is
 -- `position` (the client's claimed hitPosition) actually inside `model`'s
@@ -284,7 +288,8 @@ local function getPlayerRoot(player)
     return character:FindFirstChild("HumanoidRootPart")
 end
 
-local function applyDamage(player, mob, baseDamage, weaponId, weapSubs, swingMult)
+local function applyDamage(player, mob, baseDamage, weaponId, weapSubs, swingMult, hitPosition)
+    if not EnchantStatus.CanHit(player.Character) then return false end
     local hpFrac = (mob.MaxHealth and mob.MaxHealth > 0)
         and (mob.CurrentHealth / mob.MaxHealth) or 1
     local weaponFinal, hitInfo = DamageService.ComputeWeaponFinal(baseDamage, weapSubs, hpFrac, "Mob")
@@ -308,11 +313,75 @@ local function applyDamage(player, mob, baseDamage, weaponId, weapSubs, swingMul
     local beforeDmg = mob.DamageTracker[player.UserId] or 0
     local mobModel = mob.Model
     local mobMaxHealth = mob.MaxHealth
-    local died = mob:TakeDamage(player, finalDamage)
+    local beforeHealth = mob.CurrentHealth
+    local feedback = EnchantHitFeedback.Snapshot(mobModel, getPlayerRoot(player), hitPosition)
+    local died, armorHit = mob:TakeDamage(player, finalDamage, weapSubs)
     local actualDamage = (mob.DamageTracker[player.UserId] or 0) - beforeDmg
 
+    local extras = {}
+    if actualDamage > 0 then
+        weapSubs = weapSubs or {}
+        if mob:IsAlive() then
+            extras = EnchantStatus.Apply(mobModel, weapSubs, function(rawTick)
+                if not player.Parent or not mob:IsAlive() or mob.Model ~= mobModel then return false end
+                local oldDamage = mob.DamageTracker[player.UserId] or 0
+                local tickFeedback = EnchantHitFeedback.Snapshot(mobModel, getPlayerRoot(player))
+                local killed = mob:TakeDamage(player, rawTick)
+                local dealt = (mob.DamageTracker[player.UserId] or 0) - oldDamage
+                if dealt > 0 and damageNumberEvent then
+                    if tickFeedback then tickFeedback.effects = { Bleeding = true } end
+                    -- Bleed ticks are the only damage the player didn't just
+                    -- swing for, so they get their own colour. The main hit that
+                    -- APPLIED this bleed also carries effects.Bleeding, which is
+                    -- why the source can't be inferred client-side.
+                    damageNumberEvent:FireClient(player, dealt, mobModel, mobMaxHealth, false, tickFeedback, DamageNumberStyles.Sources.Bleed)
+                end
+                if killed and processMobDeath then processMobDeath(mob, player) end
+                return not killed
+            -- Elemental damage chills: its own flat slow chance, same status.
+            end, { elementalHit = (hitInfo.elementalDamage or 0) > 0, hitDamage = actualDamage })
+        end
+        extras.Glowing = (tonumber(weapSubs.glowing) or 0) > 0
+        if feedback then feedback.lifeSteal = DamageService.ApplyLifeSteal(player, math.min(actualDamage, beforeHealth), weapSubs.lifesteal) end
+        if EnchantStatus.Roll(weapSubs.cleave) then
+            local origin = feedback and feedback.position or mobModel:GetPivot().Position
+            local candidates = {}
+            for _, other in pairs(activeMobs) do
+                local position = other ~= mob and other:IsAlive() and other:GetPosition()
+                if position and (position - origin).Magnitude <= EnchantConfig.CleaveRadius then
+                    table.insert(candidates, { mob = other, distance = (position - origin).Magnitude })
+                end
+            end
+            table.sort(candidates, function(a, b) return a.distance < b.distance end)
+            local count = 0
+            for _, entry in ipairs(candidates) do
+                if count >= EnchantConfig.CleaveMaxTargets then break end
+                local other = entry.mob
+                local model = other.Model
+                local filter = RaycastParams.new()
+                filter.FilterType = Enum.RaycastFilterType.Exclude
+                filter.FilterDescendantsInstances = { player.Character, mobModel }
+                filter.RespectCanCollide = true
+                local obstruction = workspace:Raycast(origin, other:GetPosition() - origin, filter)
+                if obstruction and not obstruction.Instance:IsDescendantOf(model) then continue end
+                local oldDamage = other.DamageTracker[player.UserId] or 0
+                local splash = EnchantHitFeedback.Snapshot(model, getPlayerRoot(player))
+                local killed = other:TakeDamage(player, calculateDamage(player, other, weaponFinal * EnchantConfig.CleaveDamageFraction))
+                local dealt = (other.DamageTracker[player.UserId] or 0) - oldDamage
+                if dealt > 0 then
+                    count += 1
+                    if splash then splash.effects = { Cleave = true } end
+                    if damageNumberEvent then damageNumberEvent:FireClient(player, dealt, model, other.MaxHealth, false, splash) end
+                end
+                if killed and processMobDeath then processMobDeath(other, player) end
+            end
+            extras.Cleave = count > 0
+        end
+    end
+
     if actualDamage > 0 and damageNumberEvent and mobModel then
-        damageNumberEvent:FireClient(player, actualDamage, mobModel, mobMaxHealth, isCrit)
+        if feedback then feedback.effects = EnchantHitFeedback.Select(hitInfo, armorHit, extras) end
+        damageNumberEvent:FireClient(player, actualDamage, mobModel, mobMaxHealth, isCrit, feedback)
     end
 
     -- Hit-flash: fires the instant a real hit is confirmed (same gate as the
@@ -417,7 +486,7 @@ function MobCombat.ApplyWeaponDamage(player, mobUID, weaponId, hitPosition)
     if base == nil then
         base = stats.Damage
     end
-    local hit = applyDamage(player, mob, base, weaponId, weapSubs or {}, swingMult or 1)
+    local hit = applyDamage(player, mob, base, weaponId, weapSubs or {}, swingMult or 1, hitPosition)
     if hit and mob:IsAlive() then
         mob:ApplyKnockback(playerRoot.Position)
     end
@@ -512,10 +581,69 @@ function MobCombat.ApplyPvPDamage(attacker, target, weaponId, hitPosition)
 	local specialHitSoundOccurred = isCrit
 	if weaponFinal <= 0 then return false end
 
-	local applied = DamageService.ApplyToPlayer(target, weaponFinal, attacker)
+	local feedback = EnchantHitFeedback.Snapshot(tgtChar, attRoot, hitPosition)
+	local beforeHealth = tgtHum.Health
+	local applied, armorHit = DamageService.ApplyToPlayer(target, weaponFinal, attacker, weapSubs)
 	if applied and applied > 0 then
+		weapSubs = weapSubs or {}
+		local extras = {}
+		if tgtHum.Health > 0 then
+			extras = EnchantStatus.Apply(tgtChar, weapSubs, function(rawTick)
+				if not attacker.Parent or not target.Parent or target.Character ~= tgtChar or tgtHum.Health <= 0 then return false end
+				if not getDPSForPvP().CanPvP(attacker, target) then return false end
+				local zones = getZoneSvc()
+				if zones and (zones.IsAnyZoneLawfulAtPlayer(attacker) or zones.IsAnyZoneLawfulAtPlayer(target)) then return false end
+				local tickFeedback = EnchantHitFeedback.Snapshot(tgtChar, getPlayerRoot(attacker))
+				local dealt = DamageService.ApplyToPlayer(target, rawTick, attacker, nil, true)
+				if dealt > 0 and damageNumberEvent then
+					if tickFeedback then tickFeedback.effects = { Bleeding = true } end
+					-- Same as the PvE tick above: colour comes from the server.
+					damageNumberEvent:FireClient(attacker, dealt, tgtChar, maxHP, false, tickFeedback, DamageNumberStyles.Sources.Bleed)
+				end
+				return tgtHum.Health > 0
+			-- Elemental damage chills: its own flat slow chance, same status.
+			end, { elementalHit = (hitInfo.elementalDamage or 0) > 0, hitDamage = applied })
+		end
+		extras.Glowing = (tonumber(weapSubs.glowing) or 0) > 0
+		if feedback then feedback.lifeSteal = DamageService.ApplyLifeSteal(attacker, math.min(applied, beforeHealth), weapSubs.lifesteal) end
+		if EnchantStatus.Roll(weapSubs.cleave) then
+			local candidates = {}
+			local origin = feedback and feedback.position or tgtRoot.Position
+			for _, other in ipairs(game:GetService("Players"):GetPlayers()) do
+				local root = other ~= attacker and other ~= target and getPlayerRoot(other)
+				if root and (root.Position - origin).Magnitude <= EnchantConfig.CleaveRadius then
+					table.insert(candidates, { player = other, root = root, distance = (root.Position - origin).Magnitude })
+				end
+			end
+			table.sort(candidates, function(a,b) return a.distance < b.distance end)
+			local count = 0
+			for _, entry in ipairs(candidates) do
+				if count >= EnchantConfig.CleaveMaxTargets then break end
+				local other, root = entry.player, entry.root
+				local char = other.Character
+				local hum = char and char:FindFirstChildOfClass("Humanoid")
+				if not hum or hum.Health <= 0 or not getDPSForPvP().CanPvP(attacker, other) then continue end
+				local zones = getZoneSvc()
+				if zones and (zones.IsAnyZoneLawfulAtPlayer(attacker) or zones.IsAnyZoneLawfulAtPlayer(other)) then continue end
+				local filter = RaycastParams.new()
+				filter.FilterType = Enum.RaycastFilterType.Exclude
+				filter.FilterDescendantsInstances = { attChar, tgtChar }
+				filter.RespectCanCollide = true
+				local obstruction = workspace:Raycast(origin, root.Position - origin, filter)
+				if obstruction and not obstruction.Instance:IsDescendantOf(char) then continue end
+				local splash = EnchantHitFeedback.Snapshot(char, attRoot)
+				local dealt = DamageService.ApplyToPlayer(other, weaponFinal * EnchantConfig.CleaveDamageFraction, attacker, nil, true)
+				if dealt > 0 then
+					count += 1
+					if splash then splash.effects = { Cleave = true } end
+					if damageNumberEvent then damageNumberEvent:FireClient(attacker, dealt, char, hum.MaxHealth, false, splash) end
+				end
+			end
+			extras.Cleave = count > 0
+		end
 		if damageNumberEvent then
-			damageNumberEvent:FireClient(attacker, applied, tgtChar, maxHP, isCrit)
+			if feedback then feedback.effects = EnchantHitFeedback.Select(hitInfo, armorHit, extras) end
+			damageNumberEvent:FireClient(attacker, applied, tgtChar, maxHP, isCrit, feedback)
 		end
 
 		-- Confirmed-hit energy + weapon durability tick, same as PvE.

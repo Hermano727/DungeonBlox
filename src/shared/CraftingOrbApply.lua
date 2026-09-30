@@ -16,6 +16,15 @@
 	  Slots 1-2: each is 50/50 stat-pool vs bonus-pool.
 	  Slots 3+: completely random from all remaining substats (respecting cap).
 	  Base stats (dmgMin/dmgMax/hp/etc.) are never touched.
+
+	Chaos / Nullification / Transmutation / Reforging / Divinity: defined as items but have
+	NO effect yet. ApplyFromAct refuses them ("orb_not_implemented") BEFORE consuming, so an
+	orb is never eaten for nothing. Add a kind to IMPLEMENTED once its rules exist.
+
+	Public (pure, usable client-side for previews):
+	  CraftingOrbApply.IsImplemented(orbKind)          -> bool
+	  CraftingOrbApply.PreviewWisdom(item)             -> newLevel, previewSubStats | nil, reason
+	  CraftingOrbApply.WISDOM_LEVEL_CAP_PER_TIER       (cap = tier * this)
 ]]
 
 local ReplicatedStorage  = game:GetService("ReplicatedStorage")
@@ -41,6 +50,12 @@ local ELEMENTAL_CHANCE    = 0.75
 local WEAPON_BASE_KEYS    = {dmgMin=true,dmgMax=true,_rawDmgMin=true,_rawDmgMax=true}
 local ARMOR_BASE_KEYS     = {hp=true,hps=true,armor=true,energy=true,_rawHp=true,dmgRed=true}
 local ARMOR_MAX_STAT_SUBS = 2   -- max VIT/STR/DEX/INT per item via orb
+local WISDOM_LEVEL_CAP_PER_TIER = 20
+
+-- Orb kinds that actually do something. Every other OrbKind is refused before consuming.
+local IMPLEMENTED = { Wisdom = true, Alteration = true }
+
+local rescaleForLevel -- defined below the Alteration helpers
 
 -- Quick lookup: is an armor substat id one of the weapon-damage stats?
 local ARMOR_STAT_IDS = {}
@@ -256,10 +271,68 @@ local function rollAlterationSubstats(targetItem, tier)
 end
 
 ------------------------------------------------------------------------
+-- Wisdom: rescale base stats from oldLevel to newLevel (writes into `subs`)
+------------------------------------------------------------------------
+
+rescaleForLevel = function(targetItem, subs, oldLevel, newLevel)
+	local tTier = math.floor(tonumber(targetItem.tier) or 1)
+	local median = TIER_MEDIANS[tTier] or 10
+	local newFactor = 1 + (newLevel - median) * 0.01
+	local oldFactor = 1 + (oldLevel - median) * 0.01
+	if targetItem.type == "Weapon" then
+		local mult = 1.0
+		if type(targetItem.tags) == "table" then
+			for _, tag in ipairs(targetItem.tags) do
+				if WEAPON_MULTIPLIERS[tag] then mult = WEAPON_MULTIPLIERS[tag]; break end
+			end
+		end
+		local rawMin = tonumber(subs._rawDmgMin)
+		local rawMax = tonumber(subs._rawDmgMax)
+		local oldMin = math.floor(tonumber(subs.dmgMin) or 0)
+		local oldMax = math.floor(tonumber(subs.dmgMax) or 0)
+		if rawMin and rawMax then
+			subs.dmgMin = math.floor(rawMin * mult * newFactor)
+			subs.dmgMax = math.floor(rawMax * mult * newFactor)
+		else
+			local ratio = newFactor / oldFactor
+			if oldMin > 0 then subs.dmgMin = math.floor(oldMin * ratio) end
+			if oldMax > 0 then subs.dmgMax = math.floor(oldMax * ratio) end
+		end
+	elseif targetItem.type == "Armor" then
+		local rawHp = tonumber(subs._rawHp)
+		local oldHp = math.floor(tonumber(subs.hp) or 0)
+		local newHp = rawHp and math.floor(rawHp * newFactor) or math.floor(oldHp * (newFactor / oldFactor))
+		if newHp and newHp > 0 then
+			subs.hp  = newHp
+			subs.hps = math.floor(newHp * 0.5)
+		end
+	end
+end
+
+------------------------------------------------------------------------
 -- Public API
 ------------------------------------------------------------------------
 
 local CraftingOrbApply = {}
+
+CraftingOrbApply.WISDOM_LEVEL_CAP_PER_TIER = WISDOM_LEVEL_CAP_PER_TIER
+
+function CraftingOrbApply.IsImplemented(orbKind)
+	return IMPLEMENTED[orbKind] == true
+end
+
+-- What a Wisdom Orb would do to `item` (pure; nothing is changed). Returns the new level and
+-- a copy of subStats at that level, or nil + a reason ("level_capped").
+function CraftingOrbApply.PreviewWisdom(item)
+	if type(item) ~= "table" then return nil, "bad_target_item" end
+	local tier = math.floor(tonumber(item.tier) or 1)
+	local level = math.floor(tonumber(item.level) or 1)
+	if level >= tier * WISDOM_LEVEL_CAP_PER_TIER then return nil, "level_capped" end
+	local subs = {}
+	for k, v in pairs(type(item.subStats) == "table" and item.subStats or {}) do subs[k] = v end
+	rescaleForLevel(item, subs, level, level + 1)
+	return level + 1, subs
+end
 
 function CraftingOrbApply.ApplyFromAct(profile, act, _rng)
 	if type(profile) ~= "table" then return false, "bad_profile", nil end
@@ -288,11 +361,12 @@ function CraftingOrbApply.ApplyFromAct(profile, act, _rng)
 	if sTier ~= tTier then return false, "tier_mismatch", nil end
 
 	local orbKind = orbDef.OrbKind
+	if not IMPLEMENTED[orbKind] then return false, "orb_not_implemented", nil end
 
 	local wisdomOldLevel, wisdomNewLevel
 	if orbKind == "Wisdom" then
 		wisdomOldLevel = math.floor(tonumber(targetItem.level) or 1)
-		if wisdomOldLevel >= tTier * 20 then return false, "level_capped", nil end
+		if wisdomOldLevel >= tTier * WISDOM_LEVEL_CAP_PER_TIER then return false, "level_capped", nil end
 		wisdomNewLevel = wisdomOldLevel + 1
 	end
 
@@ -302,40 +376,9 @@ function CraftingOrbApply.ApplyFromAct(profile, act, _rng)
 
 	-- Wisdom Orb
 	if orbKind == "Wisdom" then
-		targetItem.level    = wisdomNewLevel
-		local median        = TIER_MEDIANS[tTier] or 10
-		local newFactor     = 1 + (wisdomNewLevel - median) * 0.01
-		local subs          = targetItem.subStats
-		if type(subs) == "table" then
-			if targetItem.type == "Weapon" then
-				local mult = 1.0
-				if type(targetItem.tags) == "table" then
-					for _, tag in ipairs(targetItem.tags) do
-						if WEAPON_MULTIPLIERS[tag] then mult = WEAPON_MULTIPLIERS[tag]; break end
-					end
-				end
-				local rawMin = tonumber(subs._rawDmgMin)
-				local rawMax = tonumber(subs._rawDmgMax)
-				local oldMin = math.floor(tonumber(subs.dmgMin) or 0)
-				local oldMax = math.floor(tonumber(subs.dmgMax) or 0)
-				if rawMin and rawMax then
-					subs.dmgMin = math.floor(rawMin * mult * newFactor)
-					subs.dmgMax = math.floor(rawMax * mult * newFactor)
-				else
-					local ratio = newFactor / (1 + (wisdomOldLevel - median) * 0.01)
-					if oldMin > 0 then subs.dmgMin = math.floor(oldMin * ratio) end
-					if oldMax > 0 then subs.dmgMax = math.floor(oldMax * ratio) end
-				end
-			elseif targetItem.type == "Armor" then
-				local rawHp = tonumber(subs._rawHp)
-				local oldHp = math.floor(tonumber(subs.hp) or 0)
-				local newHp = rawHp and math.floor(rawHp * newFactor)
-					or math.floor(oldHp * (newFactor / (1 + (wisdomOldLevel - median) * 0.01)))
-				if newHp and newHp > 0 then
-					subs.hp  = newHp
-					subs.hps = math.floor(newHp * 0.5)
-				end
-			end
+		targetItem.level = wisdomNewLevel
+		if type(targetItem.subStats) == "table" then
+			rescaleForLevel(targetItem, targetItem.subStats, wisdomOldLevel, wisdomNewLevel)
 		end
 	end
 

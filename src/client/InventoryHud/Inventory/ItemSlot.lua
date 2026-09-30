@@ -8,6 +8,7 @@ local React = require(ReplicatedStorage.Packages.React)
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
 local RarityBorder = require(script.Parent:WaitForChild("RarityBorder"))
 local LegendaryGlow = require(script.Parent:WaitForChild("LegendaryGlow"))
+local EnchantBadge = require(script.Parent:WaitForChild("EnchantBadge"))
 local e = React.createElement
 
 local EMPTY_BORDER_COLOR = Color3.fromRGB(90, 76, 58)
@@ -24,6 +25,9 @@ export type ItemSlotProps = {
 	-- Fires on MouseButton1 InputBegan, in ADDITION to (never instead of) Activated below --
 	-- see InventoryMain's press/drag effect for how it turns this into hold-drag-and-drop.
 	onPressStart: ((x: number, y: number) -> ())?,
+	-- true where the caller draws its own "+N" chip (the Enchanting Station, whose preview
+	-- slot shows the NEXT level), so the two don't stack.
+	hideEnchant: boolean?,
 }
 
 local function ItemSlot(props: ItemSlotProps)
@@ -84,6 +88,10 @@ local function ItemSlot(props: ItemSlotProps)
 				TextColor3 = Color3.new(1, 1, 1),
 				ZIndex = 4,
 			})
+		end
+
+		if not props.hideEnchant then
+			children.EnchantBadge = EnchantBadge.ForItem(item)
 		end
 
 		local count = math.floor(tonumber(item.count) or 1)

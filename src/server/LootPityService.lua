@@ -106,14 +106,20 @@ function LootPityService.GenerateItems(wonRarities, tier, level)
     return items
 end
 
+-- Returns items, plus the score this kill actually generated (0 when the
+-- contribution gate rejects it). The score is a second return value rather
+-- than something recorded here because this service persists to the LEGACY
+-- PlayerDataManager profile -- the lifetime totals live on the modern
+-- ProfileService profile, so LootService records them at the one call site
+-- that sees both the overworld and dungeon paths.
 function LootPityService.OnKill(player, mob, contribution)
-    if not player or not mob then return {} end
+    if not player or not mob then return {}, 0 end
     local share = tonumber(contribution) or 1
-    if share < 0.5 and math.random() > share then return {} end
+    if share < 0.5 and math.random() > share then return {}, 0 end
     local tier  = math.clamp(mob.Tier or 1, 1, 5)
     local score = PityConfig.RollScore(LootPityService.GetLootBuff(player))
     local won   = LootPityService.ResolveScore(player, tier, score)
-    return LootPityService.GenerateItems(won, tier, mob.Stats and mob.Stats.Level)
+    return LootPityService.GenerateItems(won, tier, mob.Stats and mob.Stats.Level), score
 end
 
 function LootPityService.DebugDump(player, tier)

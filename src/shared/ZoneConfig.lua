@@ -12,6 +12,10 @@
 	  alignment       "Lawful" | "Neutral" | "Chaotic". Lawful zones block ALL
 	                  PvP regardless of player alignment. The rest (Neutral,
 	                  Chaotic) don't gate PvP themselves — player alignment does.
+	                  A "Neutral" ZONE is shown to humans as "Wilderness"
+	                  (ZoneConfig.DisplayAlignment) -- "Neutral" is reserved for
+	                  the player-facing PvP toggle that is coming later. The
+	                  stored/wire value stays "Neutral"; only the label changes.
 	  bannedAlignments  Set keyed by alignment name. Players whose alignment
 	                  is in this set get an on-screen flash when they enter.
 	                  Entry is NOT actually prevented yet (per scope decision).
@@ -25,6 +29,19 @@ local ZoneConfig = {}
 
 ZoneConfig.VALID_ALIGNMENTS = { Lawful = true, Neutral = true, Chaotic = true }
 ZoneConfig.ALIGNMENTS_ORDERED = { "Lawful", "Neutral", "Chaotic" }
+
+-- Display-only labels for a ZONE's own alignment. Never persisted and never sent
+-- on the wire -- the value stays "Neutral". Player alignment keeps the name
+-- "Neutral" everywhere (party tags, banned-alignment sets); this is about zones.
+ZoneConfig.ALIGNMENT_DISPLAY_NAMES = {
+	Lawful  = "Lawful",
+	Neutral = "Wilderness",
+	Chaotic = "Chaotic",
+}
+
+function ZoneConfig.DisplayAlignment(alignment)
+	return ZoneConfig.ALIGNMENT_DISPLAY_NAMES[alignment] or tostring(alignment or "")
+end
 
 -- Colors used for both the dev visualization cylinder and the entry-flash UI tint.
 ZoneConfig.ALIGNMENT_COLORS = {

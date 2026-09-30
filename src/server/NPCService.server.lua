@@ -16,6 +16,7 @@ local Players             = game:GetService("Players")
 
 local NPCRegistry      = require(ReplicatedStorage:WaitForChild("NPCRegistry"))
 local DungeonProfile   = require(ServerScriptService:WaitForChild("ProfileService"))
+local ItemIdentity = require(game:GetService("ReplicatedStorage"):WaitForChild("ItemIdentity"))
 local InventoryService = require(ServerScriptService:WaitForChild("InventoryService"))
 local PlayerData       = require(ServerScriptService:WaitForChild("PlayerDataManager"))
 local ItemDefinitions  = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
@@ -194,7 +195,9 @@ local function handleBuyItem(player, _npcId, npcType, params)
 
     -- Grant item into authoritative dungeon inventory first; payment is deducted after grant.
     local grantQty = (entry.Qty or 1) * qty
-    local okGrant, errGrant = DungeonProfile.GrantItemId(player, itemId, grantQty)
+    local okGrant, errGrant = DungeonProfile.GrantItemId(player, itemId, grantQty, {
+        by = player, kind = ItemIdentity.SOURCE.SHOP_PURCHASE, src = itemId,
+    })
     if not okGrant then
         return { ok = false, err = errGrant or "grant_failed", wallet = dProfile.currencies.Coins or 0 }
     end
@@ -602,7 +605,9 @@ local function ensureGatherToolForQuest(cfg, player, dProfile)
     if raidWas then
         dProfile.flags.inRaid = false
     end
-    local okRecv, errRecv = DungeonProfile.GrantItemId(player, cfg.toolItemId, 1)
+    local okRecv, errRecv = DungeonProfile.GrantItemId(player, cfg.toolItemId, 1, {
+        by = player, kind = ItemIdentity.SOURCE.QUEST, src = cfg.logLabel,
+    })
     if raidWas then
         dProfile.flags.inRaid = true
     end

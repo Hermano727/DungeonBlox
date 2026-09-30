@@ -38,4 +38,12 @@ if type(saved) == "table" then
 	end
 end
 
+-- Fixed output gain between the sliders and the engine (NOT a setting, never saved):
+-- every volume this game drives is slider value x OUTPUT_GAIN. 2026-09-26: at 1.0 the game
+-- was so loud that bearable meant Master at ~3%, which squeezed the whole usable range of
+-- every slider into 1-5%. At 0.2, 100% on a slider is what 20% used to be, so the
+-- percentages mean something again. Consumers: SettingsClient (Main SoundGroup + music),
+-- ZoneClient (music), and everything else routed under SoundService.Main (see SoundRouter).
+defaults.OUTPUT_GAIN = 0.2
+
 return defaults

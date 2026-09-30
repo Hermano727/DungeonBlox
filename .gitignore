@@ -1,5 +1,6 @@
 # Project place file
 /DungeonBlox.rbxlx
+.env
 
 # Roblox Studio lock files
 /*.rbxlx.lock

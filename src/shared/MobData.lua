@@ -71,24 +71,95 @@ MobData[1] = {
     },
     ["MiasmaBoss"] = {
         Name = "Miasma",
+        Title = "the Scourge",       -- epithet, shown after the name on the boss bar ("MIASMA THE SCOURGE");
+                                     -- Name stays bare for loot banners, kill credit, etc.
         Level = 21,
-        BaseHP = 5000,
-        BaseDamage = 5,
+        -- 1500 HP solo (2026-09-29, direct request; was ~5000). HP only is fixed, not
+        -- level-scaled (HPScaleWithLevel), so the dungeon's run level can't inflate it; damage
+        -- still scales with level as before. The run's party scaling (DungeonRunConfig HPMult:
+        -- 0.8 solo .. 2.9 for 8) still applies on top, so BaseHP = 1500 / 0.8 = 1875 lands a
+        -- solo run on exactly 1500.
+        BaseHP = 1875,
+        HPScaleWithLevel = false,
+        BaseDamage = 26,             -- its ordinary swing; was 5 (hugging it cost nothing)
         BaseScore = 500,
         LootPool = "CommonDrop",     -- trash loot; the Mythic is rolled separately
         MobID = "MiasmaBoss",
+        Telegraph = "MiasmaMaul",    -- purple ring during the windup (MobTelegraphConfig)
+        PlayerKnockbackMultiplier = 11, -- x MobClass's base shove (4 studs/s for 0.15s): a real knock back
         Armor = 20,
         AggroRange = 90,             -- big room, big boss
         ReturnDistance = 250,        -- must not leash out of the arena
-        AttackRange = 6,             -- effective reach = this + GetHitRadius (~26),
-                                     -- so ~32 studs: just past the model's own edge
+        AttackRange = 6,             -- effective reach = this + GetHitRadius (~16 at ModelScale 0.45),
+                                     -- so ~22 studs: just past the model's own edge
         AttackCooldown = 2.0,
-        MoveSpeed = 8,
+        MoveSpeed = 8 * 1.33,        -- +33% (2026-09-29): was 8
         JumpHeight = 0,              -- MUST stay 0 or MobClassRegistry sends it to HoppingMobClass
         MovementClass = "DungeonBoss",
         KnockbackMultiplier = 0,     -- immovable
         IsBoss = true,
-        ModelName = "MiasmaBoss",
+        NeverDeaggro = true,         -- no leash, however far players run (encounter + dev spawns)
+        -- 2026-09-27: the eye-weighted rig (same bone names + 157 eye bones, so every existing
+        -- clip still drives it). The previous rig stays in MobModels as "MiasmaBoss" (fallback).
+        ModelName = "MiasmaBossEyeRig",
+        ModelScale = 0.45, -- 0.67 x 0.67 (two 33% cuts) of the authored model; also scales the latch + defeat models
+        CeilingLatchModelName = "MiasmaCeilingLatch", -- separate model for the spawn-intro ceiling hang
+        DefeatFlatModelName = "MiasmaCeilingLatch",   -- flat puddle rig the defeat sequence swaps to
+        InterruptAttackOnHit = false,
+    },
+    ["MiasmaSlime"] = {
+        Name = "Miasma Slime",
+        Level = 3,
+        BaseHP = 150,
+        BaseDamage = 24,
+        BaseScore = 18,
+        LootPool = "CommonDrop",
+        MobID = "MiasmaSlime",
+        ModelName = "PlainsSlime",
+        Armor = 5,
+        AggroRange = 90,
+        ReturnDistance = 180,
+        AttackRange = 7,
+        AttackCooldown = 1.1,
+        MoveSpeed = 5,
+        JumpHeight = 3,
+        MovementClass = "Slime",
+    },
+    ["MiasmaClog"] = {
+        Name = "Slime Growth",
+        Level = 3,
+        BaseHP = 90,
+        BaseDamage = 0,
+        BaseScore = 0,
+        LootPool = "",
+        MobID = "MiasmaClog",
+        ModelName = "PlainsSlime",
+        Armor = 0,
+        AggroRange = 0,
+        ReturnDistance = 0,
+        AttackRange = 0,
+        AttackCooldown = 99,
+        MoveSpeed = 0,
+        JumpHeight = 0,
+        ScaleWithLevel = false,
+    },
+    ["MiasmaSack"] = {
+        Name = "Floating Poison Sack",
+        Level = 3,
+        BaseHP = 180,
+        BaseDamage = 0,
+        BaseScore = 0,
+        LootPool = "",
+        MobID = "MiasmaSack",
+        ModelName = "PlainsSlime",
+        Armor = 0,
+        AggroRange = 0,
+        ReturnDistance = 0,
+        AttackRange = 0,
+        AttackCooldown = 99,
+        MoveSpeed = 0,
+        JumpHeight = 0,
+        ScaleWithLevel = false,
     }
 }
 
@@ -286,7 +357,7 @@ MobData[1]["PlainsSlimeElite"] = {
 -- dev tool's Elite Mob Zone picker) or on demand via the F8 dev tool's
 -- "Force Spawn Elite" button. Stats are a first-pass placeholder tuned to
 -- roughly slot between the existing T1 named elites and MiasmaBoss (T1
--- dungeon boss, Level 21 / 5000 HP) -- adjust once playtested.
+-- dungeon boss, 1500 HP solo) -- adjust once playtested.
 -- Deliberately NOT IsBoss=true: that flag ends the current DUNGEON RUN on
 -- death (see LootService.lua), which is wrong for an open-world elite.
 --
@@ -309,17 +380,55 @@ MobData[1]["PlainsSlimeElite"] = {
 MobData[1]["Kane"] = {
     Name = "Kane the Enraged",
     Level = 21,
-    BaseHP = 3000,
-    BaseDamage = 25,
+    BaseHP = 500,
+    BaseDamage = 50, -- ordinary swing (MobAnimConfig.Kane.Attack), before player armor
+    ScaleWithLevel = false, -- these are final stats, not multiplied by level 21
+    CombatClass = "Moveset",
+    InterruptAttackOnHit = false, -- ordinary hits still damage/push Kane during his combo
+    -- Authored specials layered over the ordinary attack state machine -- see
+    -- MobMovesetBehaviour. Between combos Kane swings like any other mob
+    -- (BaseDamage above), which is what replaced his old proximity/"thorns"
+    -- damage: no more taking a hit just for standing next to him.
+    Moveset = {
+        {
+            Id = "AxeCombo3Hit", -- MobAnimConfig.Kane.Moveset key
+            Damage = 100, -- per connecting swing, before player armor
+            SourceDuration = 4, -- approved frames 1-97 at 24 FPS
+            HitTimes = { 17 / 24, 39 / 24, 66 / 24 }, -- impacts at frames 18, 40, 67
+            -- Gap between combos, measured from the end of the clip. This is
+            -- what leaves room for ordinary swings: at AttackCooldown = 1.2
+            -- below, a 5s gap is about three normal swings between combos.
+            -- Set it to AttackCooldown or lower and he chains combos forever
+            -- and never swings normally.
+            Cooldown = 5,
+            RangeMultiplier = 1.25, -- 6.25 studs against Kane's 5-stud AttackRange
+            HalfAngleDegrees = 70, -- simple 140-degree frontal sweep
+            HitWindow = 0.2, -- skip stale strikes after a long server stall
+            Speed = 2, -- playback rate: the 4s combo now runs in 2s
+            -- Ground telegraph style (RS/MobTelegraphConfig). Drawn as this
+            -- entry's REAL hitbox -- RangeMultiplier and HalfAngleDegrees above
+            -- are what the client renders -- so the 140-degree cone visibly
+            -- teaches that you can step behind him during the combo.
+            Telegraph = "KaneCombo",
+        },
+    },
     BaseScore = 500,
     LootPool = "EliteDrop",
     MobID = "Kane",
     Armor = 20,
     AggroRange = 60,
     ReturnDistance = 90,
-    AttackRange = 8,
+    -- Was 8, which read as an oversized "thorns" bubble next to the 5 every
+    -- ordinary T1 mob uses (the test is root-to-root, so 8 left ~5 studs of
+    -- air between bodies). Matched to the Plains Slime 2026-09-17.
+    AttackRange = 5,
     AttackCooldown = 1.2,
-    MoveSpeed = 8,
+    -- Ground telegraph for the ORDINARY swing (RS/MobTelegraphConfig). Its
+    -- length is the windup itself -- AttackHitDelay 19/24 over AttackSpeed 2,
+    -- so about 0.40s of warning. No cone: IsTargetWithinMeleeReach applies none
+    -- to the base attack, so this correctly draws a full ring.
+    Telegraph = "KaneSlash",
+    MoveSpeed = 10.4, -- was 8; +30% 2026-09-17 so he can actually close distance
     JumpHeight = 0,
     -- Was 0 ("immovable", copied from the MiasmaBoss pattern) -- but Kane is
     -- an open-world named elite, not a dungeon boss, and per direct request
@@ -332,6 +441,14 @@ MobData[1]["Kane"] = {
     -- ticks -- it never touches the Animator/AnimationTrack, so this can't
     -- interrupt Kane's walk animation.
     KnockbackMultiplier = 0.5,
+    -- How hard KANE SHOVES YOU -- the opposite direction from
+    -- KnockbackMultiplier above, which is how hard he is shoved. Scales
+    -- MobClass's baseline player hitstun impulse (4 studs/s out, 8 up), so a
+    -- hit from him throws you about three times as far as an ordinary mob's.
+    -- Applies to his ordinary swing AND to every impact of the axe combo --
+    -- both land through ApplyPlayerHitstun, and the Moveset entry sets no
+    -- override of its own.
+    PlayerKnockbackMultiplier = 3,
     -- Marks this as a distinct named-elite CHARACTER (own model/lore), not a
     -- stat-reskin like PlainsSlimeElite. Read by MobClass.lua to (a) skip
     -- the normal floating nameplate/HP-bar billboard (MobHPBarUI) in favor

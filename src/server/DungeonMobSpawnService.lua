@@ -13,7 +13,7 @@
     definition resolves correctly inside every clone regardless of offset.
 
     Lifecycle (driven by DungeonInstanceService):
-        launchDungeon        -> RegisterForRealm(clone, tier)  -> handle
+        launchDungeon        -> RegisterForRealm(clone, tier, encounterId, runLevel) -> handle
         destroyInstanceRealm -> UnregisterForRealm(handle)
 ]]
 local ServerScriptService = game:GetService("ServerScriptService")
@@ -30,26 +30,24 @@ local DungeonMobSpawnService = {}
 DungeonMobSpawnService.Definitions = {
     {
         Name        = "T1 Miasma Boss",
+		Tier        = "T1",
+		EncounterId = "Miasma",
         Kind        = "Boss",
         MobID       = "MiasmaBoss",
         Path        = 'T1 BOSS ROOM/miasma/T1DungeonTemplate',
-        CeilingPath = 'T1 BOSS ROOM/miasma/Miasma Ceiling',
+        -- Ceiling hang point, resolved through MiasmaArenaResolver (code-owned anchor data,
+        -- ANCHOR_Miasma_CeilingLatch). This used to be a hand-placed Studio instance,
+        -- 'T1 BOSS ROOM/miasma/Miasma Ceiling', which no longer exists in the room -- the lookup
+        -- came back nil, the boss never latched, and it stood at the floor anchor through phase 1.
+        CeilingAnchor = "ANCHOR_Miasma_CeilingLatch",
         Radius      = 175,
         RespawnDelay = 30,
         ZoneName    = "T1Dungeon",
-        Level       = 21,
-    },
-    -- Trash pack. Dungeon spawns are FLAT: one-shot, no respawn.
-    {
-        Name     = "T1 Boss Room Slimes",
-        Kind     = "Trash",
-        MobID    = "PlainsSlime",
-        Path     = 'T1 BOSS ROOM/miasma/T1DungeonTemplate',
-        Offset   = Vector3.new(0, 0, 120),
-        Count    = 10,
-        Radius   = 175,
-        ZoneName = "T1Dungeon",
-        Level    = 3,
+        -- No Level here on purpose. Every mob in a run takes the RUN's level
+        -- (RS/DungeonLevels -- tier cap minus 6, plus any modifiers), passed in
+        -- by RegisterForRealm. A definition may set LevelOffset to sit above or
+        -- below that (e.g. LevelOffset = 2 for a boss meant to out-level its trash).
+        EncounterControlled = true,
     },
 }
 
@@ -84,8 +82,14 @@ end
 local nextHandleId = 0
 local handles = {}   -- [handleId] = { spawners = {...}, realm = Model }
 
-function DungeonMobSpawnService.RegisterForRealm(realmRoot, tier)
+-- `runLevel` is the resolved level for this run (RS/DungeonLevels.Resolve).
+-- Required in practice -- without it spawned mobs fall back to MobData's own
+-- per-mob Level, which is exactly the per-mob drift DungeonLevels replaced.
+function DungeonMobSpawnService.RegisterForRealm(realmRoot, tier, encounterId, runLevel)
     if not realmRoot then return nil end
+    if not runLevel then
+        warn("[DungeonMobSpawnService] RegisterForRealm called without a runLevel -- mobs will use MobData levels")
+    end
     if not _G.MobSystem then
         warn("[DungeonMobSpawnService] _G.MobSystem not ready")
         return nil
@@ -96,6 +100,12 @@ function DungeonMobSpawnService.RegisterForRealm(realmRoot, tier)
     local created = {}
 
     for _, def in ipairs(DungeonMobSpawnService.Definitions) do
+		if def.Tier ~= nil and def.Tier ~= tier then
+			continue
+		end
+		if def.EncounterId ~= nil and def.EncounterId ~= encounterId then
+			continue
+		end
         local anchor = resolveFrom(realmRoot, def.Path)
         local pos = anchorPosition(anchor)
         if pos and def.Offset then pos = pos + def.Offset end
@@ -104,24 +114,33 @@ function DungeonMobSpawnService.RegisterForRealm(realmRoot, tier)
             warn(("[DungeonMobSpawnService] '%s': unresolved Path '%s' in realm %s")
                 :format(def.Name, def.Path, realmRoot.Name))
         else
+            local level = runLevel and math.max(1, runLevel + (tonumber(def.LevelOffset) or 0)) or nil
             local spawner
             if def.Kind == "Boss" then
                 local ceilingPos
                 if def.CeilingPath then
                     ceilingPos = anchorPosition(resolveFrom(realmRoot, def.CeilingPath))
                 end
+                if not ceilingPos and def.CeilingAnchor then
+                    local Resolver = require(ServerScriptService:WaitForChild("MiasmaArenaResolver"))
+                    ceilingPos = Resolver.new(realmRoot):Position(def.CeilingAnchor)
+                end
+                if not ceilingPos then
+                    warn(("[DungeonMobSpawnService] '%s': no ceiling anchor resolved -- boss will not latch"):format(def.Name))
+                end
                 spawner = DungeonBossSpawner.new(pos, def.MobID, {
                     ceilingPosition  = ceilingPos,
                     activationRadius = def.Radius or 175,
                     respawnDelay     = def.RespawnDelay or 30,
                     zoneName         = def.ZoneName,
-                    level            = def.Level,
+                    level            = level,
+                    encounterControlled = def.EncounterControlled == true,
                 })
             else
                 spawner = DungeonTrashSpawner.new(pos, def.MobID, def.Count or 3, {
                     activationRadius = def.Radius or 175,
                     zoneName         = def.ZoneName,
-                    level            = def.Level,
+                    level            = level,
                 })
             end
 
@@ -134,6 +153,34 @@ function DungeonMobSpawnService.RegisterForRealm(realmRoot, tier)
     print(("[DungeonMobSpawnService] realm '%s': registered %d spawner(s) [handle %d]")
         :format(realmRoot.Name, #created, id))
     return id
+end
+
+function DungeonMobSpawnService.GetHandle(handleId)
+    return handles[handleId]
+end
+
+function DungeonMobSpawnService.GetBoss(handleId)
+    local h = handles[handleId]
+    if not h then return nil end
+    for _, spawner in ipairs(h.spawners) do
+        if spawner.IsBossSpawner then
+            for _, mob in ipairs(spawner.SpawnedMobs or {}) do
+                if mob and mob.IsAlive and mob:IsAlive() then
+                    return mob
+                end
+            end
+        end
+    end
+    return nil
+end
+
+function DungeonMobSpawnService.GetBossSpawner(handleId)
+    local h = handles[handleId]
+    if not h then return nil end
+    for _, spawner in ipairs(h.spawners) do
+        if spawner.IsBossSpawner then return spawner end
+    end
+    return nil
 end
 
 function DungeonMobSpawnService.UnregisterForRealm(handleId)

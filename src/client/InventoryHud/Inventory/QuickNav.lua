@@ -11,13 +11,19 @@
 --  direction the selection moved, for Inventory/init.lua's slide-in/out transition)
 --  up via onSelect.
 --
---  Carousel mechanics: all 5 destinations always exist in the tree, each with a
---  signed offset from the selected one in the range [-2, 2] (5 items, an odd count,
---  so every offset is unique -- see computeOffset, no tie at the antipode the way an
---  even count would have). Offset drives position (tweened, so changing the
---  selection slides everything) -- all 5 stay visible now (2026-09-13 rework: "make
---  it so there is 1 more icon visible on each side... 5 total"), with only the two
---  |offset| == 2 edge icons dimmed to 50% opacity rather than clipped out of view.
+--  Carousel mechanics: every destination always exists in the tree, each with a
+--  signed offset from the selected one (see computeOffset). Offset drives position
+--  (tweened, so changing the selection slides everything). VISIBLE_SPAN slots are
+--  shown at once -- 5, per the 2026-09-13 rework ("make it so there is 1 more icon
+--  visible on each side... 5 total") -- with the two |offset| == 2 edge icons dimmed
+--  to 50% opacity rather than clipped out of view.
+--
+--  2026-09-17: the destination count outgrew the visible row (a 6th, "journal", was
+--  added), so offsets beyond VISIBLE_SPAN are no longer guaranteed. Icons outside
+--  that range render Visible = false and SNAP rather than tween -- without the snap,
+--  the icon wrapping from one end of the ring to the other would visibly fly across
+--  the whole carousel. This generalizes to any number of destinations, so adding
+--  more later needs no further changes here.
 --
 --  Backing art: the two reference-image assets (nonselected/selected) sit at
 --  ZIndex 1, BEHIND the icon glyph (ZIndex 2, unchanged size/position) -- replacing
@@ -68,9 +74,12 @@ local BACKING_HOVER_SCALE = 1.08 -- subtler than the icon's own pop -- it's a bi
 local TWEEN_IN = TweenInfo.new(0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 local TWEEN_OUT = TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 
--- Edge icons (|offset| == 2) render dimmed instead of clipped out now that all 5 are always
--- visible -- both the icon glyph and its backing image share this transparency.
+-- Edge icons (|offset| == MAX_VISIBLE_OFFSET) render dimmed instead of clipped out -- both the
+-- icon glyph and its backing image share this transparency. Anything beyond that isn't drawn
+-- at all (see NavIcon's `hidden`).
 local EDGE_TRANSPARENCY = 0.5
+local VISIBLE_SPAN = 5 -- slots shown at once; must stay odd so the selection sits dead center
+local MAX_VISIBLE_OFFSET = (VISIBLE_SPAN - 1) / 2
 
 -- Carousel slide tween -- a touch slower/softer than the hover pop since it's moving a whole
 -- icon across the row, not just nudging its own scale.
@@ -85,7 +94,7 @@ local ARROW_SIZE = UNIFORM_SIZE * 0.5
 local ARROW_ZONE = ARROW_SIZE + 400
 local ARROW_HOVER_SCALE = 1.15
 
-local DESIGN_W = SLOT_SPACING * 5 + ARROW_ZONE * 2 -- all 5 slots plus both arrow zones
+local DESIGN_W = SLOT_SPACING * VISIBLE_SPAN + ARROW_ZONE * 2 -- the visible slots plus both arrow zones
 local DESIGN_H = UNIFORM_SIZE + VISIBLE_PAD * 2
 
 local TOOLTIP_OFFSET = 16
@@ -97,17 +106,24 @@ local TOOLTIP_TEXT = Color3.fromRGB(255, 255, 255)
 -- several InputChanged events in a row and skip more than one slot.
 local SCROLL_COOLDOWN = 0.18
 
+-- PLACEHOLDER (2026-09-17): the Journal tab has no art of its own yet and is reusing
+-- the Stats glyph, so two carousel slots currently show the same image. Swap this one
+-- string once a real icon exists.
+local JOURNAL_ICON_PLACEHOLDER = "rbxassetid://113519481797233"
+
 local ICONS = {
 	{ id = "inventory",   image = "rbxassetid://124308421822604", label = "Inventory" },
 	{ id = "skills",      image = "rbxassetid://73632421462187",  label = "Skills" },
 	{ id = "stats",       image = "rbxassetid://113519481797233", label = "Stats" },
+	{ id = "journal",     image = JOURNAL_ICON_PLACEHOLDER,       label = "Journal" },
 	{ id = "hearthstone", image = "rbxassetid://92412859018068",  label = "Hearthstone" },
 	{ id = "party",       image = "rbxassetid://80729608864109",  label = "Party" },
 }
 local ICON_COUNT = #ICONS
 
 -- Shortest signed distance (in slot units) from `fromIndex` to `toIndex`, wrapped around the
--- ring -- range is [-2, 2] for 5 icons, and every icon gets a distinct offset since 5 is odd.
+-- ring. With an even icon count the exact antipode has no shorter side and resolves positive,
+-- which is fine -- it's outside the visible span either way and renders hidden.
 -- Doubles as the left/right "which way did the selection move" signal (see prevIndexRef in
 -- QuickNav below) -- a positive result means `toIndex` sits to the right of `fromIndex`.
 local function computeOffset(toIndex: number, fromIndex: number): number
@@ -142,7 +158,9 @@ local function NavIcon(props: {
 	local posRef = React.useRef(nil :: Frame?)
 
 	local selected = props.offset == 0
-	local isEdge = math.abs(props.offset) == 2
+	local distance = math.abs(props.offset)
+	local hidden = distance > MAX_VISIBLE_OFFSET
+	local isEdge = distance == MAX_VISIBLE_OFFSET
 	local transparency = isEdge and EDGE_TRANSPARENCY or 0
 
 	-- Hover-pop tweens -- same shape QuickNav has always used. All 5 icons are clickable now
@@ -174,10 +192,14 @@ local function NavIcon(props: {
 		if not inst then
 			return
 		end
-		local targetX = props.offset * SLOT_SPACING
-		TweenService:Create(inst, SLIDE_TWEEN, {
-			Position = UDim2.new(0.5, targetX, 0.5, 0),
-		}):Play()
+		local target = UDim2.new(0.5, props.offset * SLOT_SPACING, 0.5, 0)
+		if hidden then
+			-- Nothing to watch, and tweening here is actively wrong: an icon wrapping from
+			-- one end of the ring to the other would slide across the entire carousel.
+			inst.Position = target
+		else
+			TweenService:Create(inst, SLIDE_TWEEN, { Position = target }):Play()
+		end
 	end, { props.offset })
 
 	return e("Frame", {
@@ -189,6 +211,8 @@ local function NavIcon(props: {
 		Position = UDim2.new(0.5, props.offset * SLOT_SPACING, 0.5, 0),
 		Size = UDim2.fromOffset(UNIFORM_SIZE, UNIFORM_SIZE),
 		BackgroundTransparency = 1,
+		-- Also kills hit-testing, so an off-row icon can't be clicked or hovered.
+		Visible = not hidden,
 		Active = true,
 		[React.Event.MouseEnter] = function(_, x, y)
 			setHovered(true)

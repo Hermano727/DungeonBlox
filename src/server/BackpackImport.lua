@@ -7,6 +7,7 @@
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local DungeonProfile = require(ServerScriptService:WaitForChild("ProfileService"))
+local ItemIdentity = require(game:GetService("ReplicatedStorage"):WaitForChild("ItemIdentity"))
 local EquippedHotbar = require(ServerScriptService:WaitForChild("EquippedHotbar"))
 
 local COAL_TOOL_NAME = "Coal"
@@ -178,7 +179,9 @@ function BackpackImport.ImportPlayerBackpack(player)
 				saved.Parent = archive
 				template.toolPrefabName = keyName
 
-				local grantOk = select(1, DungeonProfile.GrantItem(player, template, 1))
+				local grantOk = select(1, DungeonProfile.GrantItem(player, template, 1, {
+					by = player, kind = ItemIdentity.SOURCE.IMPORT, src = template.itemId,
+				}))
 				if grantOk then
 					child:Destroy()
 				end

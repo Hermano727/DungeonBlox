@@ -19,6 +19,9 @@ local SoundService      = game:GetService("SoundService")
 
 local ZoneConfig      = require(ReplicatedStorage:WaitForChild("ZoneConfig"))
 local VolumeSettings  = require(ReplicatedStorage:WaitForChild("VolumeSettings"))
+local MusicPlayback   = require(
+	ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Sounds"):WaitForChild("MusicPlayback")
+)
 local GameEvents = ReplicatedStorage:WaitForChild("GameEvents")
 local ZoneEntryFlash  = GameEvents:WaitForChild("ZoneEntryFlash")
 local ZoneEntryNotify = GameEvents:WaitForChild("ZoneEntryNotify")
@@ -169,27 +172,46 @@ entryAlignLabel.Text                   = ""
 entryAlignLabel.TextXAlignment         = Enum.TextXAlignment.Center
 entryAlignLabel.Parent                 = entryPanel
 
+-- First entry into a zone (the world map, SSS/MinimapService): a header line above the name.
+local entryHeader = Instance.new("TextLabel")
+entryHeader.Name                   = "DiscoveredHeader"
+entryHeader.BackgroundTransparency = 1
+entryHeader.Position               = UDim2.fromOffset(0, -26)
+entryHeader.Size                   = UDim2.new(1, 0, 0, 22)
+entryHeader.Font                   = Enum.Font.GothamBold
+entryHeader.TextSize               = 16
+entryHeader.TextColor3             = Color3.fromRGB(226, 206, 150)
+entryHeader.TextStrokeTransparency = 0.5
+entryHeader.TextTransparency       = 1
+entryHeader.Text                   = "REGION DISCOVERED"
+entryHeader.TextXAlignment         = Enum.TextXAlignment.Center
+entryHeader.Parent                 = entryPanel
+
 local entryToken = 0
 
-local function showEntryBanner(zoneName, zoneAlignment)
+local function showEntryBanner(zoneName, zoneAlignment, discovered)
 	entryToken = entryToken + 1
 	local myToken = entryToken
 
 	local accentColor = ZoneConfig.ALIGNMENT_COLORS[zoneAlignment] or Color3.fromRGB(200, 190, 170)
 	entryZoneName.Text      = tostring(zoneName or ""):upper()
-	entryAlignLabel.Text    = tostring(zoneAlignment or ""):upper() .. " ZONE"
+	-- Discovery shows the alignment on its own line ("WILDERNESS"); plain entry keeps "... ZONE".
+	entryAlignLabel.Text    = ZoneConfig.DisplayAlignment(zoneAlignment):upper() .. (discovered and "" or " ZONE")
 	entryAlignLabel.TextColor3 = accentColor
 
 	entryPanel.Visible = true
 	local inTween = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 	TweenService:Create(entryZoneName,   inTween, { TextTransparency = 0 }):Play()
 	TweenService:Create(entryAlignLabel, inTween, { TextTransparency = 0 }):Play()
+	entryHeader.TextTransparency = 1
+	if discovered then TweenService:Create(entryHeader, inTween, { TextTransparency = 0 }):Play() end
 
-	task.delay(2.5, function()
+	task.delay(discovered and 4 or 2.5, function()
 		if myToken ~= entryToken then return end
 		local outTween = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 		TweenService:Create(entryZoneName,   outTween, { TextTransparency = 1 }):Play()
 		TweenService:Create(entryAlignLabel, outTween, { TextTransparency = 1 }):Play()
+		TweenService:Create(entryHeader,     outTween, { TextTransparency = 1 }):Play()
 		task.delay(0.45, function()
 			if myToken == entryToken then
 				entryPanel.Visible = false
@@ -200,7 +222,7 @@ end
 
 ZoneEntryNotify.OnClientEvent:Connect(function(payload)
 	if type(payload) ~= "table" then return end
-	showEntryBanner(payload.zoneName, payload.zoneAlignment)
+	showEntryBanner(payload.zoneName, payload.zoneAlignment, payload.discovered == true)
 end)
 
 ----------------------------------------------------------------------
@@ -224,9 +246,28 @@ local musicFadeToken = 0
 -- Master multiplier via SoundGroup nesting the way Movement/Effects do.
 -- Bake VolumeSettings.master into the target volume by hand instead;
 -- SettingsClient's Master slider re-applies this live via the same formula.
+--
+-- The current track's VolumeScale (MusicPlayback) rides on the Sound itself as
+-- an attribute rather than in a local here, because SettingsClient writes this
+-- same Volume directly when a slider moves -- it reads the attribute for the
+-- same reason. One source of truth, on the instance both sides already touch.
 local function targetMusicVolume()
-	return (VolumeSettings.master or 1) * VolumeSettings.music
+	local scale = tonumber(zoneMusic:GetAttribute("TrackVolumeScale")) or 1
+	return (VolumeSettings.master or 1) * VolumeSettings.music * scale * (VolumeSettings.OUTPUT_GAIN or 1)
 end
+
+-- Seeking needs the asset loaded: set TimePosition on an unloaded Sound and it
+-- snaps back to 0. Applied again on Loaded for that reason, and again on every
+-- loop -- Looped restarts at 0, not at the offset, so without DidLoop a track
+-- would skip its intro once and then play it on every repeat.
+local function applyTrackStart()
+	local startTime = MusicPlayback.Get(currentMusicId).StartTime or 0
+	if startTime <= 0 then return end
+	if zoneMusic.TimeLength > 0 and startTime >= zoneMusic.TimeLength then return end
+	zoneMusic.TimePosition = startTime
+end
+
+zoneMusic.DidLoop:Connect(applyTrackStart)
 
 local function setZoneMusic(musicId)
 	musicId = type(musicId) == "string" and musicId or ""
@@ -251,8 +292,19 @@ local function setZoneMusic(musicId)
 	local function swapAndFadeIn()
 		if myToken ~= musicFadeToken then return end
 		zoneMusic.SoundId = musicId
+		zoneMusic:SetAttribute("TrackVolumeScale", MusicPlayback.Get(musicId).VolumeScale)
 		zoneMusic.Volume  = 0
 		zoneMusic:Play()
+		applyTrackStart()
+		if not zoneMusic.IsLoaded then
+			-- Still streaming: the seek above was a no-op, so redo it once the
+			-- asset arrives (guarded, in case the track changed while loading).
+			zoneMusic.Loaded:Once(function()
+				if myToken == musicFadeToken and zoneMusic.SoundId == musicId then
+					applyTrackStart()
+				end
+			end)
+		end
 		TweenService:Create(zoneMusic,
 			TweenInfo.new(ZoneConfig.ZONE_MUSIC_FADE_SEC, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
 			{ Volume = targetMusicVolume() }):Play()

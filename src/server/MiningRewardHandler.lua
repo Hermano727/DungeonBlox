@@ -295,8 +295,8 @@ local function grantCoalDrop(player, orePart, coalAmount, tierCfg)
 		MiningCoalDrop:FireClient(player, { position = dropPos, nonce = nonce, amount = 1, grantItemId = grantItemId })
 	end
 	local xpGain = math.max(1, math.floor(xpPerUnit * coalAmount))
-	DungeonProfile.AddSkillXP(player, "mining", xpGain)
-	MiningXPEvent:FireClient(player, xpGain)
+	local _, _, totals = DungeonProfile.AddSkillXP(player, "mining", xpGain)
+	MiningXPEvent:FireClient(player, xpGain, totals)
 end
 
 local function completeExcavation(player, session)
@@ -493,9 +493,9 @@ MiningCoalCollect.OnServerEvent:Connect(function(player, nonce)
 		warn("[MiningReward] GrantItemId failed for collect", player.Name, grantItemId)
 		return
 	end
-	if grantItemId == "Coal" then
-		QuestProgress.OnCoalCollected(player, amount)
-	end
+	-- Fires for every ore, not just coal -- OnOreCollected tracks the lifetime totals
+	-- and forwards to the coal quest itself only when the ore actually is coal.
+	QuestProgress.OnOreCollected(player, grantItemId, amount)
 end)
 
 Players.PlayerRemoving:Connect(function(player)

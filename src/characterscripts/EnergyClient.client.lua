@@ -228,30 +228,42 @@ end
 -- ProfileMenusState.GetCarouselAnchor() (published by QuickNav.lua) rather than a fixed
 -- corner offset -- see HealthClient.client.lua's matching section and ProfileMenusState's doc
 -- comment for the full reasoning. This bar's Y target has to land right below HP's in that
--- stack, so MIRROR_ELITEPITY_HEIGHT/MIRROR_GAP_ELITEPITY_TO_HP/MIRROR_HP_HEIGHT/
+-- stack, so MIRROR_HP_HEIGHT/
 -- MIRROR_GAP_HP_TO_ENERGY/MENU_PAD_TOP still mirror HealthClient.client.lua's own constants --
 -- MUST stay in sync with that file, same convention as BAR_SIZE_MULTIPLIER and friends above.
 ---------------------------------------------------------------------------
 
 local MENU_ANCHOR = Vector2.new(0.5, 0) -- top-center -- hangs off the carousel's own bottom-center anchor
-local MENU_PAD_TOP = 16 -- gap between the carousel's bottom edge and the first bar (Elite Pity) -- MUST match HealthClient's own MENU_PAD_TOP
+local MENU_PAD_TOP = 16 -- gap between the carousel's bottom edge and the first bar (HP) -- MUST match HealthClient's own MENU_PAD_TOP
+local MENU_DROP_SCALE = 0.10 -- extra drop, fraction of screen height -- MUST match HealthClient's MENU_DROP_SCALE
 local MENU_MOVE_TWEEN = TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
-local MIRROR_ELITEPITY_HEIGHT = 34
-local MIRROR_GAP_ELITEPITY_TO_HP = 10
 local MIRROR_HP_HEIGHT = 15 * 1.33 -- HealthClient's BASE_HEIGHT * HP_SIZE_MULTIPLIER
 local MIRROR_GAP_HP_TO_ENERGY = 24
 
+-- Valve-puzzle layout: mirrors HealthClient's (MAZE_TOP_LEFT + the HP->Energy stacking MUST
+-- match that file). While the Miasma valve maze is open the bars sit top-left, off the puzzle.
+local MAZE_ANCHOR = Vector2.new(0, 0)
+local MAZE_TOP_LEFT = Vector2.new(20, 76)
+
 local function applyProfileMenusLayout()
+	if Players.LocalPlayer:GetAttribute("MiasmaMazeOpen") == true then
+		TweenService:Create(barBackground, MENU_MOVE_TWEEN, {
+			AnchorPoint = MAZE_ANCHOR,
+			Position = UDim2.fromOffset(MAZE_TOP_LEFT.X, MAZE_TOP_LEFT.Y + MIRROR_HP_HEIGHT + MIRROR_GAP_HP_TO_ENERGY),
+		}):Play()
+		return
+	end
 	local open = ProfileMenusState.IsOpen()
 	local anchor = ProfileMenusState.GetCarouselAnchor()
 
 	local energyPos: UDim2? = nil
 	if anchor then
-		local elitePityY = anchor.Y + MENU_PAD_TOP
-		local hpY = elitePityY + MIRROR_ELITEPITY_HEIGHT + MIRROR_GAP_ELITEPITY_TO_HP
+		-- HP is the first bar under the carousel now: the elite pity bar moved to the
+		-- top of the screen and left the menu stack (mirrors HealthClient).
+		local hpY = anchor.Y + MENU_PAD_TOP
 		local energyY = hpY + MIRROR_HP_HEIGHT + MIRROR_GAP_HP_TO_ENERGY
-		energyPos = UDim2.fromOffset(anchor.X, energyY)
+		energyPos = UDim2.new(0, anchor.X, MENU_DROP_SCALE, energyY)
 	end
 
 	if open and not energyPos then
@@ -267,6 +279,7 @@ local function applyProfileMenusLayout()
 end
 
 ProfileMenusState.Subscribe(applyProfileMenusLayout)
+Players.LocalPlayer:GetAttributeChangedSignal("MiasmaMazeOpen"):Connect(applyProfileMenusLayout)
 
 EnergyChanged.OnClientEvent:Connect(function(newEnergy, lockout)
 	updateBar(newEnergy)
@@ -290,3 +303,14 @@ end)
 -- Paint the real color/gradient immediately instead of leaving whatever flat
 -- color was baked into the hand-built instance until the first server event.
 exitLockout()
+
+-- Vitals hide while a menu is up (RS/HudVitals, same rule HealthClient follows). This script
+-- re-runs every life, so the subscription is dropped when it goes.
+do
+	local HudVitals = require(ReplicatedStorage:WaitForChild("HudVitals"))
+	local function applyVitals(hidden) barBackground.Visible = not hidden end
+	applyVitals(HudVitals.IsHidden())
+	local unsubscribe = HudVitals.Subscribe(applyVitals)
+	script.Destroying:Connect(unsubscribe)
+	character.Destroying:Connect(unsubscribe)
+end

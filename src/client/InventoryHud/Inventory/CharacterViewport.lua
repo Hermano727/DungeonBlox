@@ -1,7 +1,8 @@
 --!strict
---  CharacterViewport -- renders a static 3D snapshot of the local player's own custom
---  character (gear included) into PlayerPreview's backdrop area, via a ViewportFrame +
---  WorldModel holding a cleaned clone of Players.LocalPlayer.Character.
+--  CharacterViewport -- renders the local player's own custom character (gear included)
+--  into PlayerPreview's backdrop area, via a ViewportFrame + WorldModel holding a cleaned
+--  clone of Players.LocalPlayer.Character, looping the Unarmed idle clip and framed from
+--  a three-quarter angle (PREVIEW_YAW_DEG) rather than dead-on.
 --
 --  Deliberately implementation-agnostic to HOW gear is visually attached to the
 --  character. It never reads ArmorVisualsService internals, part names, or assumes
@@ -10,17 +11,31 @@
 --  welds to real Accessories/Layered Clothing: both are just more descendants of the
 --  same Character Model at clone time.
 --
---  Not a live view: the clone/camera are (re)built once per mount and once per distinct
---  `equipped` signature (see equipSignature below), never on a RenderStepped/Heartbeat
---  loop -- ViewportFrame content only updates when its children change, so a camera set
---  once and left alone is already static/cheap by construction.
+--  Why the idle clip: a :Clone() never carries the live Bone.Transform pose (it isn't
+--  serialized), so an un-animated clone of the skinned Hero_Character rig shows its bind
+--  pose -- the stiff A-pose. Animators inside a WorldModel do play, so the clone gets
+--  the same Unarmed Idle track Animate2 uses (CharacterAnimProfiles). Unarmed, not the
+--  weapon profile, because cleanClone strips any held Tool.
+--
+--  The clone/camera/track are (re)built once per mount and once per distinct `equipped`
+--  signature (see equipSignature below), never on a RenderStepped/Heartbeat loop. The
+--  only per-frame cost is the engine advancing one looped track on one skinned mesh.
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local React = require(ReplicatedStorage.Packages.React)
 local e = React.createElement
 
+local CharacterAnimProfiles = require(ReplicatedStorage:WaitForChild("CharacterAnimProfiles"))
+
 local FOV = 30
 local FRAME_PADDING = 1.15 -- 15% headroom above/below the bounding box
+-- How far the camera orbits off dead-front, around the character's vertical axis.
+-- 0 = straight-on; flip the sign to angle from the other side.
+local PREVIEW_YAW_DEG = 25
+-- Hide the viewport until the idle track has actually started, so opening the menu
+-- never flashes the bind pose for a frame. Reveal anyway after this long, so a failed
+-- clip load degrades to the old static A-pose instead of an empty panel.
+local IDLE_REVEAL_TIMEOUT = 2
 
 export type CharacterViewportProps = {
 	-- Only used to build a rebuild-trigger signature -- never interpreted, so this
@@ -97,6 +112,11 @@ local function buildCamera(viewport: ViewportFrame, clone: Model): Camera
 	-- happened to be facing in the world when it was cloned.
 	local rootPart = clone:FindFirstChild("HumanoidRootPart") :: BasePart?
 	local lookVector = rootPart and rootPart.CFrame.LookVector or Vector3.new(0, 0, -1)
+	-- Flatten to the horizontal plane first, so a lean/tilt on the live root at clone
+	-- time can't tip the camera above or below the character.
+	local flat = Vector3.new(lookVector.X, 0, lookVector.Z)
+	lookVector = if flat.Magnitude > 1e-3 then flat.Unit else Vector3.new(0, 0, -1)
+	lookVector = CFrame.Angles(0, math.rad(PREVIEW_YAW_DEG), 0):VectorToWorldSpace(lookVector)
 
 	local camera = Instance.new("Camera")
 	camera.FieldOfView = FOV
@@ -111,6 +131,32 @@ local function buildCamera(viewport: ViewportFrame, clone: Model): Camera
 	viewport.CurrentCamera = camera
 
 	return camera
+end
+
+-- Loops the Unarmed idle on the clone's own Animator (cloned along with its Humanoid).
+-- Returns the track, or nil if the rig has no Animator or the clip id is missing.
+local function playIdle(clone: Model): AnimationTrack?
+	local humanoid = clone:FindFirstChildOfClass("Humanoid")
+	local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+	local idleId = CharacterAnimProfiles.Profiles.Unarmed.Idle
+	if not animator or not idleId or idleId == "" then
+		return nil
+	end
+
+	local anim = Instance.new("Animation")
+	anim.AnimationId = idleId
+	local ok, track = pcall(function()
+		return animator:LoadAnimation(anim)
+	end)
+	if not ok or not track then
+		warn("[CharacterViewport] failed to load idle animation", idleId, track)
+		return nil
+	end
+
+	track.Priority = Enum.AnimationPriority.Core
+	track.Looped = true
+	track:Play(0)
+	return track
 end
 
 local function CharacterViewport(props: CharacterViewportProps)
@@ -180,6 +226,23 @@ local function CharacterViewport(props: CharacterViewportProps)
 			cloneRef.current = clone
 
 			cameraRef.current = buildCamera(viewport, clone)
+
+			-- Parent before loading: the Animator needs to be in the WorldModel to drive
+			-- the bones. Stays hidden until the clip reports a Length (i.e. has loaded
+			-- and is actually posing the rig), see IDLE_REVEAL_TIMEOUT.
+			viewport.ImageTransparency = 1
+			local track = playIdle(clone)
+			local thisBuild = clone
+			task.spawn(function()
+				local deadline = os.clock() + IDLE_REVEAL_TIMEOUT
+				while track and track.Length <= 0 and os.clock() < deadline do
+					task.wait()
+				end
+				-- A newer build (or unmount) owns the viewport now -- leave it alone.
+				if cloneRef.current == thisBuild then
+					viewport.ImageTransparency = 0
+				end
+			end)
 		end
 
 		build()

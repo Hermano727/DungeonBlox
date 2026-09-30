@@ -6,8 +6,30 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
 local ItemConfig = require(ReplicatedStorage:WaitForChild("ItemConfig"))
+local ItemIdentity = require(ReplicatedStorage:WaitForChild("ItemIdentity"))
+local ItemStatRanges = require(ReplicatedStorage:WaitForChild("ItemStatRanges"))
+local EnchantScrollApply = require(ReplicatedStorage:WaitForChild("EnchantScrollApply"))
 
 local ProfileTypes = {}
+
+-- One-way data migrations, by name. Each value is the version that migration has
+-- been run to on this profile; the migration re-runs only when the profile's
+-- stored number is lower.
+--
+-- Deliberately NOT `ProfileTypes.VERSION` -- a single profile-wide integer means
+-- every future unrelated schema bump silently re-triggers every past migration.
+-- A named dict costs ~30 bytes and tolerates migrations landing out of order or
+-- being reverted.
+ProfileTypes.MIGRATIONS = {
+	itemIdentity = 1,
+	-- Armor enchanted under the pre-2026-09-27 formula (energy never multiplied; every piece
+	-- given HP/s): re-derived by EnchantScrollApply.RecomputeEnchantedArmor.
+	enchantStats = 1,
+}
+
+-- The game's 5 progression tiers (lvl 1/21/41/61/81). Used to size the per-tier
+-- loot-score totals in stats.tracking.
+ProfileTypes.TIER_COUNT = 5
 
 -- Bootstrap / legacy items used display `name` without `itemId`; map to ItemDefinitions catalog keys.
 local LEGACY_DISPLAY_NAME_TO_ITEM_ID = {
@@ -47,12 +69,40 @@ ProfileTypes.BAG_SLOT_COUNT = 30
 function ProfileTypes.DefaultProfile()
 	return {
 		version = ProfileTypes.VERSION,
+		-- Which one-way migrations have run on this profile. See ProfileTypes.MIGRATIONS.
+		migrations = {},
+		-- Stamped by Reconcile from the loading player. Lets an admin reading raw
+		-- DataStore JSON -- and AuditItemIdentity -- self-identify without a param.
+		ownerUserId = 0,
+		-- Which ItemConfig.SUBSTAT_RANGES_VERSION this profile's items have been
+		-- swept to. 0 means "never swept", so a fresh profile gets one no-op pass.
+		statsVersion = 0,
 		currencies = {
 			Coins = 0,
 		},
 
 		bank = {
 			Coins = 0,
+		},
+
+		-- Wardrobe choices (RS/Assets/Appearance/AppearanceOptions; same keys + defaults as
+		-- AppearanceOptions.Default()). Reconcile's fillMissing gives older profiles these.
+		appearance = {
+			Skin = 0.30,
+			Hair = "None",
+			HairColor = 0.15,
+			FacialHair = "None",
+			Eyes = "Default",
+			EyeColor = 0.15,
+			Nose = "Default",
+			Mouth = "Default",
+		},
+
+		-- World map (SSS/MinimapService): zones entered at least once, and the explored cells as
+		-- base64 bitsets per map chunk (RS/MinimapConfig). Reconcile's fillMissing adds it.
+		map = {
+			discovered = {},
+			revealed = {},
 		},
 
 		flags = {
@@ -112,6 +162,30 @@ function ProfileTypes.DefaultProfile()
 				level = 1,
 				xp = 0,
 				fishingLevel = 1,
+			},
+			-- Lifetime grind totals, surfaced by the Journal panel. Distinct from the
+			-- quest counters in flags.*Quest, which cap at their target and only count
+			-- while that quest is active -- these are uncapped and only ever go up.
+			-- Reconcile's fillMissing backfills them onto existing profiles.
+			tracking = {
+				mobsKilled = 0,
+				oresMined = 0,
+				coalMined = 0,
+				fishCaught = 0,
+				-- Loot score earned, per tier. Tracked SEPARATELY from mobsKilled on
+				-- purpose: score is loot rolls, not kills, and one kill can award
+				-- several (a dungeon's flat party rate, or a loot-buff roll landing
+				-- its bonus) -- or none at all, when the damage-contribution gate
+				-- rejects a low-contribution kill. Dense 1..TIER_COUNT array: every
+				-- tier is always present so this survives RemoteEvent serialization
+				-- as an array instead of reindexing around a hole.
+				scoreByTier = (function()
+					local t = {}
+					for i = 1, ProfileTypes.TIER_COUNT do
+						t[i] = 0
+					end
+					return t
+				end)(),
 			},
 		},
 		runtime = {
@@ -518,7 +592,90 @@ local function migrateLegacyEquipSlots(loaded)
 	rehome("Weapon")
 end
 
-function ProfileTypes.Reconcile(loaded)
+--  stats.tracking accessors -- the one place that table's shape is enforced, so
+--  the kill/mine/fish hooks and the two score paths don't each re-implement it.
+--  All tolerate a profile that predates the field: Reconcile backfills it on
+--  load, but these run on hot paths that can touch a profile mid-load.
+local function trackingTable(profile)
+	if type(profile) ~= "table" then
+		return nil
+	end
+	if type(profile.stats) ~= "table" then
+		profile.stats = {}
+	end
+	local t = profile.stats.tracking
+	if type(t) ~= "table" then
+		t = { mobsKilled = 0, oresMined = 0, coalMined = 0, fishCaught = 0, scoreByTier = {} }
+		profile.stats.tracking = t
+	end
+	return t
+end
+
+function ProfileTypes.BumpTracking(profile, key, amount)
+	local t = trackingTable(profile)
+	if not t then
+		return
+	end
+	local add = math.floor(tonumber(amount) or 0)
+	if add <= 0 then
+		return
+	end
+	t[key] = math.max(0, math.floor(tonumber(t[key]) or 0)) + add
+end
+
+function ProfileTypes.AddTierScore(profile, tier, amount)
+	local t = trackingTable(profile)
+	if not t then
+		return
+	end
+	local add = math.floor(tonumber(amount) or 0)
+	if add <= 0 then
+		return
+	end
+	if type(t.scoreByTier) ~= "table" then
+		t.scoreByTier = {}
+	end
+	-- Normalize every slot, not just the one being written: a hole anywhere in
+	-- the array would reindex when the snapshot is serialized to the client.
+	for i = 1, ProfileTypes.TIER_COUNT do
+		t.scoreByTier[i] = math.max(0, math.floor(tonumber(t.scoreByTier[i]) or 0))
+	end
+	local idx = math.clamp(math.floor(tonumber(tier) or 1), 1, ProfileTypes.TIER_COUNT)
+	t.scoreByTier[idx] += add
+end
+
+-- Gives every pre-existing non-stackable item a serial + origin, once.
+--
+-- Backfilled items get `t = 0` and a legacy serial whose time prefix is all
+-- zeroes, NOT os.time(). Stamping "now" would make every item that predates this
+-- system claim it was created at migration time, which would poison every
+-- date-window query and rollback from then on. Zero is an explicit
+-- "predates provenance" sentinel, and the two representations agree so the
+-- audit's "serial prefix vs origin.t disagree" check stays meaningful.
+local function backfillItemIdentity(inv, ownerUserId)
+	if type(inv) ~= "table" then
+		return
+	end
+	for _, it in pairs(inv) do
+		if type(it) == "table" and not ItemIdentity.IsSerial(it.serial) then
+			local stackable = type(it.itemId) == "string" and ItemDefinitions.IsStackable(it.itemId)
+			if not stackable then
+				it.serial = ItemIdentity.NewLegacySerial()
+				it.origin = {
+					t = 0,
+					by = tonumber(ownerUserId) or 0,
+					k = ItemIdentity.SOURCE.MIGRATION,
+					p = game.PlaceId,
+				}
+			end
+		end
+	end
+end
+
+-- `ownerUserId` is the player this profile belongs to. Optional so the function
+-- stays callable without one, but pass it wherever it's available -- it's what
+-- stamps profile.ownerUserId for the identity audit.
+function ProfileTypes.Reconcile(loaded, ownerUserId)
 	if type(loaded) ~= "table" then
 		loaded = {}
 	end
@@ -680,12 +837,161 @@ function ProfileTypes.Reconcile(loaded)
 	normalizeOwnedItems(loaded.inventory)
 	normalizeOwnedItems(loaded.chestInventory)
 
+	-- Item identity backfill. Must run after normalizeOwnedItems, which is what
+	-- populates itemId for legacy display-name-only items -- without it the
+	-- "is this stackable?" check below can't answer for those.
+	--
+	-- Gated on the migrations dict because Reconcile runs on EVERY
+	-- ProfileService.Load(), including cached hits, and Load() is on the
+	-- per-mob-kill path (LootService.getTotalCoinFind). Steady-state cost here
+	-- has to stay at one integer compare.
+	if type(loaded.migrations) ~= "table" then
+		loaded.migrations = {}
+	end
+	if type(ownerUserId) == "number" and ownerUserId > 0 then
+		loaded.ownerUserId = ownerUserId
+	end
+	if (tonumber(loaded.migrations.itemIdentity) or 0) < ProfileTypes.MIGRATIONS.itemIdentity then
+		backfillItemIdentity(loaded.inventory, loaded.ownerUserId)
+		backfillItemIdentity(loaded.chestInventory, loaded.ownerUserId)
+		loaded.migrations.itemIdentity = ProfileTypes.MIGRATIONS.itemIdentity
+	end
+
+	-- Substat rebalance sweep. Runs after the identity backfill on purpose:
+	-- ItemStatRanges reads origin.d to spot authored named-elite/Mythic gear,
+	-- whose windows are deliberately outside the generic ones.
+	--
+	-- Gated at the PROFILE level rather than per item, so no `statsVersion` field
+	-- is needed on every item. That is sound because Reconcile runs before any
+	-- grant in a session, so anything granted afterwards was rolled from the
+	-- current ranges and is already in-window. The one gap is an item that sat in
+	-- a DataStore OUTSIDE a profile across a rebalance (an auction listing, a
+	-- death bundle) and then lands in an already-swept profile -- those two entry
+	-- points clamp explicitly on the way in. See AuctionHouseService.grantItemDirect
+	-- and WorldLootService.GrantLootToPlayer.
+	if (tonumber(loaded.statsVersion) or 0) ~= ItemConfig.SUBSTAT_RANGES_VERSION then
+		local swept = ItemStatRanges.ClampInventory(loaded.inventory)
+			+ ItemStatRanges.ClampInventory(loaded.chestInventory)
+		if swept > 0 then
+			print(("[ItemStatRanges] clamped %d item(s) to substat range version %d")
+				:format(swept, ItemConfig.SUBSTAT_RANGES_VERSION))
+		end
+		loaded.statsVersion = ItemConfig.SUBSTAT_RANGES_VERSION
+	end
+
+	if (tonumber(loaded.migrations.enchantStats) or 0) < ProfileTypes.MIGRATIONS.enchantStats then
+		local fixed = 0
+		for _, inv in ipairs({ loaded.inventory, loaded.chestInventory }) do
+			if type(inv) == "table" then
+				for _, item in pairs(inv) do
+					if EnchantScrollApply.RecomputeEnchantedArmor(item) then fixed += 1 end
+				end
+			end
+		end
+		if fixed > 0 then
+			print(("[ProfileTypes] re-derived enchant stats on %d armor piece(s)"):format(fixed))
+		end
+		loaded.migrations.enchantStats = ProfileTypes.MIGRATIONS.enchantStats
+	end
+
 	-- Must run after bagSlots is normalized above (rehome may need to place a displaced
 	-- item into it) and after normalizeOwnedItems (so item.itemId is populated for legacy
 	-- display-name-only items before we try to look up their catalog def).
 	migrateLegacyEquipSlots(loaded)
 
 	return loaded
+end
+
+--[[
+	AuditItemIdentity(profile) -> report
+
+	Scans one profile for item-identity anomalies. Returns
+	{ dupes = {serial...}, unserialed = n, suspect = {string...} }.
+
+	MUST NOT be called from Reconcile. Reconcile re-runs on every cached
+	ProfileService.Load(), which is on the per-mob-kill path -- an ~84-entry
+	allocation there is exactly what the migration gate exists to avoid. Call it
+	from Load()'s COLD path and from SaveProfile() instead: once per session at
+	each end, which is enough.
+
+	Reports only; never deletes. Every check here is a heuristic, and destroying
+	a player's item on a false positive is worse than the exploit it guards.
+
+	What per-profile state can see:
+	  * the same serial twice in one profile -- the double-grant class of bug
+	  * a non-stackable with no serial, once the backfill has run -- this is the
+	    CHOKEPOINT DRIFT DETECTOR, and it is arguably worth more than the dupe
+	    check: it means a mint path exists that doesn't go through ItemIdentity
+	  * a creation time in the future, or an origin.t that contradicts its own
+	    serial -- hand-edited data
+
+	What it fundamentally cannot see, because it needs cross-player state:
+	  * the same serial in two different players' profiles (the auction-house
+	    dupe: delivered to the buyer AND returned to the seller)
+	  * a salvaged/trashed serial reappearing later
+	  * mint-rate anomalies
+	Those need a real ledger, which is deliberately not built yet.
+]]
+function ProfileTypes.AuditItemIdentity(profile)
+	local report = { dupes = {}, unserialed = 0, suspect = {} }
+	if type(profile) ~= "table" then
+		return report
+	end
+
+	local seen = {}
+	local futureCutoff = os.time() + 300 -- tolerate a little clock skew between servers
+
+	local function scan(inv, where)
+		if type(inv) ~= "table" then
+			return
+		end
+		for uuid, it in pairs(inv) do
+			if type(it) == "table" then
+				local stackable = type(it.itemId) == "string" and ItemDefinitions.IsStackable(it.itemId)
+				if not stackable then
+					local serial = it.serial
+					if not ItemIdentity.IsSerial(serial) then
+						report.unserialed += 1
+					else
+						if seen[serial] then
+							table.insert(report.dupes, serial)
+						end
+						seen[serial] = true
+
+						local decoded = ItemIdentity.DecodeSerial(serial)
+						if decoded and decoded.createdAt > futureCutoff then
+							table.insert(report.suspect, ("%s/%s: serial dated in the future"):format(where, uuid))
+						end
+						local originTime = type(it.origin) == "table" and tonumber(it.origin.t) or nil
+						if decoded and originTime and originTime ~= decoded.createdAt then
+							table.insert(report.suspect, ("%s/%s: origin.t disagrees with serial"):format(where, uuid))
+						end
+					end
+				end
+			end
+		end
+	end
+
+	scan(profile.inventory, "inventory")
+	scan(profile.chestInventory, "chest")
+	return report
+end
+
+-- Convenience wrapper: runs the audit and warns if anything turned up. Returns
+-- the report so a caller can do more with it.
+function ProfileTypes.WarnOnItemIdentityAnomalies(profile, label)
+	local report = ProfileTypes.AuditItemIdentity(profile)
+	label = tostring(label or "profile")
+	if #report.dupes > 0 then
+		warn(("[ItemIdentity] %s: %d duplicated serial(s), first = %s"):format(label, #report.dupes, report.dupes[1]))
+	end
+	if report.unserialed > 0 then
+		warn(("[ItemIdentity] %s: %d non-stackable item(s) with no serial -- a mint path is bypassing ItemIdentity.Stamp"):format(label, report.unserialed))
+	end
+	for _, note in ipairs(report.suspect) do
+		warn(("[ItemIdentity] %s: %s"):format(label, note))
+	end
+	return report
 end
 
 return ProfileTypes

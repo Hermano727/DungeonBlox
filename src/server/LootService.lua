@@ -18,6 +18,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local Config         = require(ReplicatedStorage:WaitForChild("ItemConfig"))
 local Types          = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
+local ItemIdentity   = require(ReplicatedStorage:WaitForChild("ItemIdentity"))
 local ItemGenerator  = require(ServerScriptService:WaitForChild("ItemGenerator"))
 local DungeonProfile = require(ServerScriptService:WaitForChild("ProfileService"))
 local BuffService    = require(ServerScriptService:WaitForChild("BuffService"))
@@ -244,6 +245,7 @@ local function tryDropGear(tier, level, elite, killingBlowPlayer, deathPos, owne
     end
 
     local template = item:toGrantTemplate()
+    ItemIdentity.Stamp(template, { by = killingBlowPlayer, kind = ItemIdentity.SOURCE.MOB_DROP })
     local okTpl, errTpl = Types.ValidateItemTemplate(template)
     if not okTpl then
         warn("[LootService] Invalid generated template for " .. killingBlowPlayer.Name .. ": " .. tostring(errTpl))
@@ -287,9 +289,16 @@ end
 -- Both paths share ONE dry-streak pool per player (LootPityService), so
 -- dungeon progress and overworld progress are the same pity.
 -- ---------------------------------------------------------------------
-local function spawnGeneratedItem(item, killingBlowPlayer, deathPos, ownerUserId, scatterIndex)
+local function spawnGeneratedItem(item, killingBlowPlayer, deathPos, ownerUserId, scatterIndex, mobId)
     local okTpl, template = pcall(function() return item:toGrantTemplate() end)
     if not okTpl or not template then return scatterIndex end
+    -- Born here, not at pickup: the template carries its identity through the
+    -- world-loot orb, and GrantItem carries it forward rather than re-minting.
+    ItemIdentity.Stamp(template, {
+        by = killingBlowPlayer,
+        kind = ItemIdentity.SOURCE.MOB_DROP,
+        src = mobId,
+    })
     local valid, errTpl = Types.ValidateItemTemplate(template)
     if not valid then
         warn("[LootService] invalid template: " .. tostring(errTpl))
@@ -322,15 +331,34 @@ local function tryDropGearByScore(mob, tier, level, killingBlowPlayer, deathPos,
         if total > 0 then contribution = mine / total end
     end
 
+    -- The one place both score paths are visible, so it's where the lifetime
+    -- per-tier totals are recorded (see ProfileTypes' stats.tracking). Score is
+    -- whatever was actually awarded -- 0 when the contribution gate rejects the
+    -- kill, more than 1 for a dungeon's party rate or a loot-buff roll -- which
+    -- is why it's recorded from the return value rather than assumed to be 1.
+    -- No PushProfile here: this runs on every kill, and the Journal panel syncs
+    -- on open instead.
+    local function recordScore(tier, gained)
+        local profile = DungeonProfile.Get(killingBlowPlayer)
+        if profile then
+            Types.AddTierScore(profile, tier, gained)
+        end
+    end
+
     -- In a dungeon the score is banked, not spent.
     if DungeonScore.IsInRun(killingBlowPlayer) then
-        DungeonScore.AddKill(killingBlowPlayer, mob, contribution)
+        local _, gained = DungeonScore.AddKill(killingBlowPlayer, mob, contribution)
+        -- Credited against the RUN's tier, not the mob's -- that's the tier the
+        -- banked score eventually rolls against in DungeonScoreService.EndRun.
+        local run = DungeonScore.GetRun(killingBlowPlayer)
+        recordScore((run and run.tier) or tier, gained)
         return scatterIndex
     end
 
-    local items = Pity.OnKill(killingBlowPlayer, mob, contribution)
+    local items, gained = Pity.OnKill(killingBlowPlayer, mob, contribution)
+    recordScore(tier, gained)
     for _, item in ipairs(items) do
-        scatterIndex = spawnGeneratedItem(item, killingBlowPlayer, deathPos, ownerUserId, scatterIndex)
+        scatterIndex = spawnGeneratedItem(item, killingBlowPlayer, deathPos, ownerUserId, scatterIndex, mob and mob.MobID)
     end
     return scatterIndex
 end
@@ -372,11 +400,18 @@ function LootService.onMobDied(mob, killingBlowPlayer)
     scatterIndex = tryDropKeyFragment(tier, deathPos, ownerUserId, scatterIndex, killingBlowPlayer)
     scatterIndex = tryDropGearByScore(mob, tier, level, killingBlowPlayer, deathPos, ownerUserId, scatterIndex)
     scatterIndex = tryDropMythic(mob, killingBlowPlayer, deathPos, scatterIndex)
+    -- Named-elite signature gear: flat per-item chance, no score/pity, to the
+    -- killing player only. Separate from the Mythic path above -- see
+    -- NamedEliteLootService and docs/named-elite-loot.md.
+    if mob.Stats and mob.Stats.IsNamedElite then
+        local EliteLoot = require(ServerScriptService:WaitForChild("NamedEliteLootService"))
+        scatterIndex = EliteLoot.OnNamedEliteKilled(mob, killingBlowPlayer, deathPos, scatterIndex)
+    end
 
     -- Boss death ends the run: cash everyone out, then open the exit window.
     -- Players are NOT ejected -- they get a grace period to loot and regroup
     -- before being pulled to hearthstone.
-    if mob.Stats and mob.Stats.IsBoss then
+    if mob.Stats and mob.Stats.IsBoss and mob.MobID ~= "MiasmaBoss" then
         task.defer(function()
             local okRun, runSvc = pcall(function()
                 return require(ServerScriptService:WaitForChild("DungeonRunService", 5))

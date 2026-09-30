@@ -11,6 +11,15 @@ local QuestRegistry = require(ReplicatedStorage:WaitForChild("QuestRegistry"))
 
 local QuestProgress = {}
 
+-- Lifetime grind totals (profile.stats.tracking), read by the Journal panel.
+-- These piggyback on the quest hooks below because those are already wired into
+-- every kill / ore collect / fish catch -- but unlike the quest counters they're
+-- uncapped and count regardless of whether any quest is active. Loot score is
+-- NOT tracked here; it's recorded in LootService, the one place that sees both
+-- the overworld and dungeon score paths.
+local Types = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
+local bumpTracking = Types.BumpTracking
+
 local function grantQuestCoins(player, amount)
 	local add = math.max(0, math.floor(tonumber(amount) or 0))
 	if add <= 0 then
@@ -104,11 +113,15 @@ local function getFisherFishQuestTable(profile)
 end
 
 function QuestProgress.OnMobKilledByPlayer(player, mobId)
-	if mobId ~= "Bandit" then
-		return
-	end
 	local profile = DungeonProfile.Get(player) or DungeonProfile.Load(player)
 	if not profile then
+		return
+	end
+	-- Every kill counts toward the lifetime total, not just the quest's target mob.
+	-- Deliberately no PushProfile on this path: it fires on every mob death, and the
+	-- Journal panel requests its own sync on open instead.
+	bumpTracking(profile, "mobsKilled", 1)
+	if mobId ~= "Bandit" then
 		return
 	end
 	local q = getCusoQuestTable(profile)
@@ -161,6 +174,22 @@ function QuestProgress.OnCoalCollected(player, amount)
 	DungeonProfile.PushProfile(player)
 end
 
+-- Called from MiningRewardHandler for EVERY collected ore, not just coal -- the
+-- Journal panel tracks total ores separately from the coal-specific count, and
+-- the coal quest itself still only advances on coal.
+function QuestProgress.OnOreCollected(player, itemId, amount)
+	local amt = math.max(1, math.floor(tonumber(amount) or 1))
+	local profile = DungeonProfile.Get(player) or DungeonProfile.Load(player)
+	if not profile then
+		return
+	end
+	bumpTracking(profile, "oresMined", amt)
+	if itemId == "Coal" then
+		bumpTracking(profile, "coalMined", amt)
+		QuestProgress.OnCoalCollected(player, amt)
+	end
+end
+
 -- Called from SpearFishHandler when a spear-caught fish is granted to the player.
 function QuestProgress.OnSpearFishCaught(player, amount)
 	local amt = math.max(1, math.floor(tonumber(amount) or 1))
@@ -168,6 +197,7 @@ function QuestProgress.OnSpearFishCaught(player, amount)
 	if not profile then
 		return
 	end
+	bumpTracking(profile, "fishCaught", amt)
 	local q = getFisherFishQuestTable(profile)
 	if q.completed or not q.active then
 		return

@@ -8,6 +8,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 
 local DungeonProfile = require(ServerScriptService:WaitForChild("ProfileService"))
+local ItemIdentity = require(game:GetService("ReplicatedStorage"):WaitForChild("ItemIdentity"))
+local ItemStatRanges = require(game:GetService("ReplicatedStorage"):WaitForChild("ItemStatRanges"))
 local ItemConfig = require(ReplicatedStorage:WaitForChild("ItemConfig"))
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
 local Types = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
@@ -240,7 +242,19 @@ local function resolveVisualEntry(kind, dropSpec)
 	elseif kind == "item_id" then
 		return LootDropVisuals.GetForItemId(dropSpec.itemId)
 	elseif kind == "item_template" then
-		return LootDropVisuals.GetForGearTemplate(dropSpec.template)
+		local template = dropSpec.template
+		local entry = LootDropVisuals.GetForGearTemplate(template)
+		if entry or type(template) ~= "table" then
+			return entry
+		end
+		-- Catalog gear (TrainingBoots, ...) carries an itemId but no slot tag, so the
+		-- tag lookup misses it; fall back to its slot (equipSlot, then the catalog Slot).
+		local def = type(template.itemId) == "string" and ItemDefinitions.Get(template.itemId) or nil
+		for _, slot in ipairs({ template.equipSlot, def and def.Slot }) do
+			if type(slot) == "string" and LootDropVisuals.ByGearTag[slot] then
+				return LootDropVisuals.ByGearTag[slot]
+			end
+		end
 	end
 	return nil
 end
@@ -457,7 +471,9 @@ local function grantMobDrop(player, entry)
 		end
 		return granted, err
 	elseif entry.kind == "item_template" then
-		local granted, err = DungeonProfile.GrantItem(player, entry.template, 1)
+		local granted, err = DungeonProfile.GrantItem(player, entry.template, 1, {
+			by = player, kind = ItemIdentity.SOURCE.MIGRATION, src = "world_loot",
+		})
 		if granted then
 			firePickupBanner(player, {
 				name = entry.template.name,
@@ -808,6 +824,9 @@ function WorldLootService.SpawnPlayerDrop(player, item)
 	else
 		local template = cloneTable(item)
 		template.uuid = nil -- a fresh uuid is minted on pickup (GrantItem); never reuse the dropped one
+		-- Do NOT nil `template.serial`/`template.origin` here "for symmetry". The
+		-- uuid is a per-profile slot key and is meant to be re-minted; the serial
+		-- is the item's durable identity and dropping an item must not change it.
 		dropSpec = {
 			kind = "item_template",
 			template = template,
@@ -836,6 +855,15 @@ function WorldLootService.GrantLootToPlayer(player, items)
 			local newItem = cloneTable(item)
 			local newUuid = HttpService:GenerateGUID(false)
 			newItem.uuid = newUuid
+			-- cloneTable is deep, so serial/origin already carry forward. The guard
+			-- covers death bundles that were already on the ground when item
+			-- identity shipped.
+			if not ItemIdentity.HasSerial(newItem) then
+				ItemIdentity.Stamp(newItem, { by = player, kind = ItemIdentity.SOURCE.MIGRATION, src = "loot_legacy" })
+			end
+			-- Same reason as the auction-house path: a death bundle can outlive a
+			-- substat rebalance without ever passing through Reconcile's sweep.
+			ItemStatRanges.ClampItem(newItem)
 			profile.inventory[newUuid] = newItem
 			DungeonProfile.PlaceItemInFirstEmptySlot(profile, newUuid, player)
 		end

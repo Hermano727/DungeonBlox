@@ -21,6 +21,12 @@ local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Keys = require(ReplicatedStorage:WaitForChild("KeybindConfig"))
 local VideoSettings = require(ReplicatedStorage:WaitForChild("VideoSettings"))
+local CameraOverrideState = require(ReplicatedStorage:WaitForChild("CameraOverrideState"))
+local Movement = require(script.Parent:WaitForChild("MovementPresentation"))
+local GroundState = require(script.Parent:WaitForChild("CharacterGroundState"))
+local MotionMath = require(ReplicatedStorage:WaitForChild("MovementPresentationMath"))
+local MotionConfig = require(ReplicatedStorage:WaitForChild("MovementPresentationConfig"))
+local landingConnection = nil
 
 local player = Players.LocalPlayer
 local camera = workspace.CurrentCamera
@@ -39,6 +45,13 @@ local camera = workspace.CurrentCamera
 -- Example: Vector3.new(0, 0, 0) = center of head
 --          Vector3.new(0, 0.2, -0.3) = slightly up and forward
 local CAMERA_OFFSET = Vector3.new(0, 0, -0.5)
+-- Extra forward clearance beyond the idle offset. Use the existing locomotion
+-- state so unarmed/sword, sprint denial, and backwards walking all agree.
+-- Total forward distance: idle 0.5, walk 1.5, sprint 2.0 studs.
+local WALK_CAMERA_FORWARD = 1.0
+local SPRINT_CAMERA_FORWARD = 1.5
+local CAMERA_FORWARD_BLEND_SPEED = 18
+local FIRST_PERSON_WALL_PAD = 0.15
 
 -- Camera rotation sensitivity now lives in VideoSettings.sensitivity (Settings
 -- menu Video tab) -- read live below instead of a cached local, so dragging
@@ -47,15 +60,43 @@ local CAMERA_OFFSET = Vector3.new(0, 0, -0.5)
 -- PERSPECTIVE MODES (Minecraft-style F5 cycling, bound to Keys.TogglePerspective)
 --   1 = first person       - camera at the head, original behaviour
 --   2 = over-shoulder      - camera pulled back along the look vector
+--   3 = front              - camera out in FRONT, looking back at the face (Minecraft's
+--                            second F5 view). The character still faces where you aim, and
+--                            movement is re-applied relative to the CHARACTER (W walks toward
+--                            the camera), since Roblox's default controls move relative to the
+--                            camera and would otherwise walk you backwards.
 -- Minecraft's 3rd-person camera sits 4 blocks back; scaled to a 5.8-stud
 -- character that is ~13 studs. Roblox's own zoom system is NOT in play here
 -- (CameraType is Scriptable), so this is an absolute distance, not a zoom %.
 local PERSPECTIVE_FIRST  = 1
 local PERSPECTIVE_THIRD  = 2
+local PERSPECTIVE_FRONT  = 3
+local FRONT_DISTANCE     = 8       -- studs in front of the head
+local FRONT_HEIGHT       = 0.6     -- studs above the head
+-- Published as Player attribute "PerspectiveMode" (RS/AimRay reads it: in the front view the
+-- camera's look is the OPPOSITE of the aim, so tools aim from the head instead).
+local PERSPECTIVE_NAMES  = { "First", "Back", "Front" }
 local THIRD_DISTANCE     = 11.05      -- studs behind the head
 local THIRD_HEIGHT       = 1.5     -- studs above the head
 local CAMERA_COLLIDE_PAD = 1.0     -- keep this far off geometry when pulled in
 local perspective = PERSPECTIVE_FIRST
+-- Published so other client systems (CombatClient's first-person swing pick)
+-- don't need their own copy of the perspective state.
+player:SetAttribute("FirstPersonView", perspective == PERSPECTIVE_FIRST)
+player:SetAttribute("PerspectiveMode", PERSPECTIVE_NAMES[perspective])
+
+-- Roblox's own ControlModule (camera-relative movement); the front view overrides its output.
+local controlModule
+local function getControlModule()
+	if controlModule == nil then
+		local ok, module = pcall(function()
+			return require(player:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule", 5)):GetControls()
+		end)
+		controlModule = ok and module or false
+	end
+	return controlModule or nil
+end
+task.spawn(getControlModule) -- fetch it now, off the camera step (which must never yield)
 
 -- Transparency settings
 local HEAD_TRANSPARENCY = 0  -- Not used - head clipped by camera near plane
@@ -99,7 +140,19 @@ local function setupFirstPersonCamera(character)
 	local humanoid = character:WaitForChild("Humanoid")
 	local head = character:WaitForChild("Head")
 	local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
-	local headBone = nil
+	local movementCameraForward = 0
+    local crouchY, cameraRoll, cameraPitch, landing = 0, 0, 0, 0
+    if landingConnection then landingConnection:Disconnect() end
+    landingConnection = GroundState.Landed:Connect(function(speed, snapshot)
+        if snapshot.Character == character and perspective == PERSPECTIVE_FIRST
+            and UserInputService.MouseBehavior == Enum.MouseBehavior.LockCenter then
+            landing = math.max(landing, MotionMath.LandingStrength(speed))
+        end
+    end)
+	local cameraRayParams = RaycastParams.new()
+	cameraRayParams.FilterType = Enum.RaycastFilterType.Exclude
+	cameraRayParams.FilterDescendantsInstances = { character }
+	cameraRayParams.RespectCanCollide = true
 
 	print("[FirstPersonViewModel] Setting up first person camera")
 
@@ -146,36 +199,85 @@ local function setupFirstPersonCamera(character)
 	end)
 
 	-- Camera update function
-	local function updateCamera()
+	local function updateCamera(deltaTime)
+		-- Studio/respawn can replace CurrentCamera; always drive the live camera.
+		camera = workspace.CurrentCamera
+		if not camera then return end
+		-- Some other system (e.g. EnchantStationClient's altar-view pan) owns the
+		-- camera right now -- leave CameraType/CFrame alone until it hands back.
+		if CameraOverrideState.IsActive() then return end
+		-- An override owner asked for us to come back looking somewhere (boss cutscene).
+		-- Yaw/pitch are this script's own convention: Angles(pitch, yaw) looks along -Z.
+		local look = CameraOverrideState.ConsumeLook()
+		if look then
+			cameraRotation = Vector2.new(
+				math.clamp(math.asin(math.clamp(look.Y, -1, 1)), -math.pi/2 + 0.1, math.pi/2 - 0.1),
+				math.atan2(-look.X, -look.Z)
+			)
+		end
+		camera.CameraType = Enum.CameraType.Scriptable
 		if head and head.Parent and humanoidRootPart and humanoidRootPart.Parent then
 			local yaw = CFrame.Angles(0, cameraRotation.Y, 0)
-			-- Align the character before measuring its animated forward lean.
 			humanoidRootPart.CFrame = CFrame.new(humanoidRootPart.Position) * yaw
 			local eyePosition = head.Position
+			local locomotionState = character:GetAttribute("LocomotionState")
+			local desiredForward = 0
+			if locomotionState == "RunStart" or locomotionState == "RunLoop" then
+				desiredForward = SPRINT_CAMERA_FORWARD
+			elseif locomotionState == "Walk" or locomotionState == "CrouchWalk" then
+				desiredForward = WALK_CAMERA_FORWARD
+			end
+			local blend = 1 - math.exp(-CAMERA_FORWARD_BLEND_SPEED * deltaTime)
+			movementCameraForward += (desiredForward - movementCameraForward) * blend
 			if perspective == PERSPECTIVE_FIRST then
-				if not headBone or not headBone.Parent then
-					local mesh = character:FindFirstChild("Hero_Character")
-					local candidate = mesh and mesh:FindFirstChild("Head", true)
-					headBone = candidate and candidate:IsA("Bone") and candidate or nil
-				end
-				if headBone then
-					-- The helper Head stays still while walk/run poses lean forward.
-					-- Follow only that forward displacement, keeping height and lateral
-					-- position steady. Blended poses also ease this back when stopping.
-					local displacement = headBone.TransformedWorldCFrame.Position - headBone.WorldPosition
-					local forwardLean = math.max(0, displacement:Dot(yaw.LookVector))
-					eyePosition += yaw.LookVector * forwardLean
-				end
+				eyePosition += yaw.LookVector * movementCameraForward
 			end
 
+            local effectsEnabled = perspective == PERSPECTIVE_FIRST and humanoid.Health > 0
+                and UserInputService.MouseBehavior == Enum.MouseBehavior.LockCenter
+            local motion = Movement.GetLocalMotion()
+            local crouched = humanoidRootPart:GetAttribute("IsCrouching") == true
+            crouchY += ((crouched and MotionConfig.CrouchCameraY or 0) - crouchY)
+                * (1-math.exp(-MotionConfig.CrouchBlendSpeed*deltaTime))
+            if not effectsEnabled then landing = 0 end
+            local targetRoll = effectsEnabled and motion and -motion.CameraSide * MotionConfig.CameraRoll or 0
+            local targetPitch = effectsEnabled and motion and motion.Burst * MotionConfig.CameraSprintPitch or 0
+            local effectBlend = 1-math.exp(-MotionConfig.BlendSpeed*deltaTime)
+            cameraRoll += (targetRoll-cameraRoll)*effectBlend
+            cameraPitch += (targetPitch-cameraPitch)*effectBlend
+            if perspective == PERSPECTIVE_FIRST then
+                eyePosition += Vector3.new(0, crouchY - landing*MotionConfig.LandingDip, 0)
+            end
+            local roll = effectsEnabled and cameraRoll or 0
+            local pitch = effectsEnabled and (cameraPitch + landing*MotionConfig.LandingPitch) or 0
+            landing *= math.exp(-MotionConfig.LandingDecay*deltaTime)
 			-- Position at eye height before pitching, so looking up/down cannot
 			-- orbit the camera around the head if an offset is tuned later.
 			local cameraCFrame = CFrame.new(eyePosition) *
 				yaw *
 				CFrame.new(CAMERA_OFFSET) *
-				CFrame.Angles(cameraRotation.X, 0, 0)  -- Pitch (vertical rotation)
+				CFrame.Angles(cameraRotation.X + pitch, 0, roll)  -- Look plus bounded movement feedback
 
-			if perspective == PERSPECTIVE_THIRD then
+			if perspective == PERSPECTIVE_FRONT then
+				-- Out in front, looking back at the face along the reversed aim.
+				local focus = cameraCFrame.Position + Vector3.new(0, FRONT_HEIGHT, 0)
+				local ahead = cameraCFrame.LookVector
+				local params = RaycastParams.new()
+				params.FilterType = Enum.RaycastFilterType.Exclude
+				params.FilterDescendantsInstances = { humanoidRootPart.Parent }
+				local hit = workspace:Raycast(focus, ahead * FRONT_DISTANCE, params)
+				local dist = hit and math.max((hit.Position - focus).Magnitude - CAMERA_COLLIDE_PAD, 0.5)
+					or FRONT_DISTANCE
+				cameraCFrame = CFrame.lookAt(focus + ahead * dist, focus)
+				-- The default controls just moved us relative to THIS (reversed) camera, which
+				-- would walk backwards; re-apply the input relative to the character instead.
+				-- (Camera priority runs after the controls' Input-priority step, so this wins.)
+				local controls = controlModule or nil
+				local moveVector = controls and controls.GetMoveVector and controls:GetMoveVector()
+				if moveVector then
+					humanoid:Move(yaw:VectorToWorldSpace(moveVector), false)
+				end
+			elseif perspective == PERSPECTIVE_THIRD then
 				local focus = cameraCFrame.Position + Vector3.new(0, THIRD_HEIGHT, 0)
 				local back  = -cameraCFrame.LookVector
 				local params = RaycastParams.new()
@@ -185,6 +287,15 @@ local function setupFirstPersonCamera(character)
 				local dist = hit and math.max((hit.Position - focus).Magnitude - CAMERA_COLLIDE_PAD, 0.5)
 					or THIRD_DISTANCE
 				cameraCFrame = CFrame.lookAt(focus + back * dist, focus)
+			else
+				-- The larger forward offset must not put the camera through a wall.
+				local wallOrigin = head.Position + Vector3.new(0, crouchY, 0)
+				local offset = cameraCFrame.Position - wallOrigin
+				local hit = workspace:Raycast(wallOrigin, offset, cameraRayParams)
+				if hit and offset.Magnitude > 0.001 then
+					local distance = math.max(0, (hit.Position - wallOrigin).Magnitude - FIRST_PERSON_WALL_PAD)
+					cameraCFrame = CFrame.new(wallOrigin + offset.Unit * distance) * cameraCFrame.Rotation
+				end
 			end
 
 			camera.CFrame = cameraCFrame
@@ -224,15 +335,14 @@ player.CharacterAdded:Connect(onCharacterAdded)
 print("[FirstPersonViewModel] Script loaded")
 
 -- Perspective toggle (Keys.TogglePerspective, default R).
--- Cycles first person <-> over-shoulder, Minecraft F5 style.
--- View 3 (camera facing the player's face) is deliberately NOT implemented:
--- it needs character rotation decoupled from camera yaw, which the
--- humanoidRootPart.CFrame line inside updateCamera owns.
+-- Cycles first person -> over-shoulder -> front -> first person, Minecraft F5 style.
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if gameProcessed then return end
 	if input.KeyCode ~= Keys.TogglePerspective then return end
 
-	perspective = (perspective == PERSPECTIVE_FIRST) and PERSPECTIVE_THIRD or PERSPECTIVE_FIRST
+	perspective = perspective % #PERSPECTIVE_NAMES + 1
+	player:SetAttribute("FirstPersonView", perspective == PERSPECTIVE_FIRST)
+	player:SetAttribute("PerspectiveMode", PERSPECTIVE_NAMES[perspective])
 
 	-- the head decal is forced invisible for first person; restore it in third
 	local char = player.Character

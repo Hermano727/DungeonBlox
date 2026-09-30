@@ -200,6 +200,7 @@ slotsLayout.Parent = slotsContainer
 
 local itemIcons        = {}
 local selectionStrokes  = {}
+local enchantBadges     = {} -- "+N" chip per slot, same look as the inventory's EnchantBadge
 
 for i = 1, TOOL_SLOTS do
 	-- Diamond tile: background art + item icon + slot number, all sized/anchored
@@ -235,6 +236,27 @@ for i = 1, TOOL_SLOTS do
 	icon.ZIndex = 2
 	icon.Parent = diamond
 	itemIcons[i] = icon
+
+	local badge = Instance.new("TextLabel")
+	badge.Name = "EnchantBadge"
+	badge.Position = UDim2.fromScale(0.06, 0.08)
+	badge.Size = UDim2.fromScale(0.36, 0.22)
+	badge.BackgroundColor3 = Color3.fromRGB(20, 15, 12)
+	badge.BackgroundTransparency = 0.15
+	badge.BorderSizePixel = 0
+	badge.FontFace = UIFonts.HUDLabel
+	badge.TextScaled = true
+	badge.TextColor3 = Color3.fromRGB(255, 220, 130)
+	badge.Text = ""
+	badge.Visible = false
+	badge.ZIndex = 4
+	Instance.new("UICorner", badge).CornerRadius = UDim.new(0.2, 0)
+	local badgePad = Instance.new("UIPadding")
+	badgePad.PaddingTop, badgePad.PaddingBottom = UDim.new(0.12, 0), UDim.new(0.12, 0)
+	badgePad.PaddingLeft, badgePad.PaddingRight = UDim.new(0.08, 0), UDim.new(0.08, 0)
+	badgePad.Parent = badge
+	badge.Parent = diamond
+	enchantBadges[i] = badge
 
 	local selectionStroke = Instance.new("UIStroke")
 	selectionStroke.Name = "SelectionStroke"
@@ -364,6 +386,12 @@ local function refreshHud(_snap)
 			icon.Image = ItemDefinitions.GetIconForItem(it)
 		else
 			icon.Image = ""
+		end
+		local ench = it and math.floor(tonumber(it.enchantLevel) or 0) or 0
+		local badge = enchantBadges[i]
+		if badge then
+			badge.Visible = ench > 0
+			badge.Text = ench > 0 and ("+" .. tostring(ench)) or ""
 		end
 	end
 end

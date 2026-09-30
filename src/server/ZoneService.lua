@@ -367,6 +367,7 @@ function ZoneService.AddZone(attrs, position)
 		radius           = cleanedPoints and nil or math.clamp(tonumber(attrs.radius) or ZoneConfig.DEFAULT_RADIUS, ZoneConfig.MIN_RADIUS, ZoneConfig.MAX_RADIUS),
 		isEliteZone      = attrs.isEliteZone == true,
 		eliteMobId       = eliteMobId,
+		musicId          = ZoneConfig.NormalizeMusicId(attrs.musicId),
 	}
 
 	local okSave, rowOrErr = ZoneDevStore.addZone(saveAttrs, position)
@@ -378,6 +379,38 @@ function ZoneService.AddZone(attrs, position)
 	if not z then return false, "normalize_failed" end
 	table.insert(zones, z)
 	zoneById[z.id] = z
+	broadcastAll()
+	return true, z
+end
+
+ZoneService.MAX_ZONE_NAME_LENGTH = 40
+
+-- Renames an existing zone. Whitespace is trimmed; empty names are rejected.
+function ZoneService.SetZoneName(zoneId, name)
+	local z = zoneById[zoneId]
+	if not z then return false, "not_found" end
+	if type(name) ~= "string" then return false, "bad_name" end
+	name = name:match("^%s*(.-)%s*$")
+	if name == "" then return false, "empty_name" end
+	if #name > ZoneService.MAX_ZONE_NAME_LENGTH then return false, "name_too_long" end
+	local ok = ZoneDevStore.setZoneName(zoneId, name)
+	if not ok then return false, "save_failed" end
+	z.name = name
+	broadcastAll()
+	return true, z
+end
+
+-- Changes an existing zone's alignment (Lawful / Neutral / Chaotic). The value is
+-- the stored one, not the display label -- see ZoneConfig.DisplayAlignment.
+function ZoneService.SetZoneAlignment(zoneId, alignment)
+	local z = zoneById[zoneId]
+	if not z then return false, "not_found" end
+	if type(alignment) ~= "string" or not ZoneConfig.VALID_ALIGNMENTS[alignment] then
+		return false, "bad_alignment"
+	end
+	local ok = ZoneDevStore.setZoneAlignment(zoneId, alignment)
+	if not ok then return false, "save_failed" end
+	z.alignment = alignment
 	broadcastAll()
 	return true, z
 end
@@ -422,10 +455,73 @@ end
 local function getPlayerState(p)
 	local st = playerState[p]
 	if not st then
-		st = { inside = {}, lastFlash = {}, musicId = "" }
+		-- zoneMusicId = what the player's current zone wants; sentMusicId = what
+		-- the client was last told, which is the override when one is active.
+		st = { inside = {}, lastFlash = {}, zoneMusicId = "", sentMusicId = "" }
 		playerState[p] = st
 	end
 	return st
+end
+
+-- Per-player music override, higher priority than zone music. Used by
+-- MobManager for named-elite soundtracks (RS/Assets/Sounds/NamedEliteSoundtracks):
+-- while one is alive its track replaces the zone's, and clearing the override
+-- drops the player straight back to whatever their zone plays.
+local musicOverride = {} -- [player] = musicId
+-- Boss-encounter soundtrack (e.g. Miasma's phase 2, RS/Assets/Sounds/EncounterSoundtracks).
+-- Its own layer, ABOVE the named-elite override, because MobManager re-asserts that one
+-- every tick (clearing it to "" for anyone without a live elite) -- sharing it would get the
+-- encounter track wiped on the next heartbeat. Priority: encounter > elite > zone.
+local encounterMusic = {} -- [player] = musicId
+
+local function refreshMusic(p, st)
+	local target = encounterMusic[p]
+	if type(target) ~= "string" or target == "" then
+		target = musicOverride[p]
+	end
+	if type(target) ~= "string" or target == "" then
+		target = st.zoneMusicId or ""
+	end
+	if target ~= st.sentMusicId then
+		st.sentMusicId = target
+		ZoneMusicSync:FireClient(p, { musicId = target })
+	end
+end
+
+-- musicId "" (or nil) clears the override. Applies immediately rather than on
+-- the next occupancy tick, so a boss track starts with the fight.
+function ZoneService.SetMusicOverride(player, musicId)
+	if typeof(player) ~= "Instance" or not player:IsA("Player") then return end
+	musicId = type(musicId) == "string" and musicId or ""
+	if (musicOverride[player] or "") == musicId then return end
+	musicOverride[player] = musicId ~= "" and musicId or nil
+	if player.Parent then
+		refreshMusic(player, getPlayerState(player))
+	end
+end
+
+-- The encounter layer (see encounterMusic above). musicId "" (or nil) clears it; the player
+-- drops back to an elite override if one is live, else their zone's track.
+function ZoneService.SetEncounterMusic(player, musicId)
+	if typeof(player) ~= "Instance" or not player:IsA("Player") then return end
+	musicId = ZoneConfig.NormalizeMusicId(musicId)
+	if (encounterMusic[player] or "") == musicId then return end
+	encounterMusic[player] = musicId ~= "" and musicId or nil
+	if player.Parent then
+		refreshMusic(player, getPlayerState(player))
+	end
+end
+
+-- fn(player, zone) -> true if this is the player's first entry (it records it). One handler.
+local discoveryHandler
+function ZoneService.SetDiscoveryHandler(fn)
+	discoveryHandler = fn
+end
+
+-- Remote the entry banner rides on; the map fires a discovery on it when the profile was not
+-- loaded yet at the moment of entry (see MinimapService).
+function ZoneService.GetEntryNotifyRemote()
+	return ZoneEntryNotify
 end
 
 local function pollPlayer(p)
@@ -458,10 +554,8 @@ local function pollPlayer(p)
 			end
 		end
 	end
-	if activeMusicId ~= st.musicId then
-		st.musicId = activeMusicId
-		ZoneMusicSync:FireClient(p, { musicId = activeMusicId })
-	end
+	st.zoneMusicId = activeMusicId
+	refreshMusic(p, st)
 	p:SetAttribute("CurrentEliteZone", activeEliteZoneName)
 	p:SetAttribute("CurrentEliteMobId", activeEliteMobId)
 	p:SetAttribute("IsInEliteZone", activeEliteZoneName ~= "")
@@ -471,10 +565,18 @@ local function pollPlayer(p)
 	for zid, zoneObj in pairs(newInside) do
 		if not st.inside[zid] then
 			-- Entry transition: always notify the client so the zone name banner can show.
+			-- `discovered` = first time this player has ever entered it (the map's handler,
+			-- SSS/MinimapService): the client shows REGION DISCOVERED instead of the plain banner.
+			local firstTime = false
+			if discoveryHandler then
+				local ok, result = pcall(discoveryHandler, p, zoneObj)
+				firstTime = ok and result == true
+			end
 			ZoneEntryNotify:FireClient(p, {
 				zoneId        = zoneObj.id,
 				zoneName      = zoneObj.name,
 				zoneAlignment = zoneObj.alignment,
+				discovered    = firstTime,
 			})
 			-- If this zone bans anyone, look up the player's alignment
 			-- (lazily, once per tick) and fire the ENTRY DENIED flash if matched.
@@ -542,6 +644,8 @@ Players.PlayerAdded:Connect(function(p)
 end)
 Players.PlayerRemoving:Connect(function(p)
 	playerState[p] = nil
+	musicOverride[p] = nil
+	encounterMusic[p] = nil
 	p:SetAttribute("CurrentEliteZone", "")
 	p:SetAttribute("CurrentEliteMobId", "")
 	p:SetAttribute("IsInEliteZone", false)

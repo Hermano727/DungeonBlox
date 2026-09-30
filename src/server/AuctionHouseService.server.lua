@@ -4,6 +4,13 @@
 	Listings stored under AuctionHouse_v1 / key "active".
 	Seller coins held offline under "pendingCoins_userId".
 	Expired items held offline under "pendingReturn_userId".
+
+	Persistence ordering (2026-09-27): every transaction here moves value between the AH's own
+	DataStore and a player profile, which on its own only saves every AUTOSAVE_INTERVAL (120s)
+	or on leave. A server crash inside that window used to be able to dupe (listing saved,
+	profile still holding the item) or lose (item bought, profile never saved) value, so each
+	transaction now saves the affected online profiles straight away (saveNow). Pending
+	payouts are only claimed into a real, persistent profile (ProfileService.IsPersistent).
 ]]
 
 local DataStoreService = game:GetService("DataStoreService")
@@ -14,6 +21,8 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local Config = require(ReplicatedStorage:WaitForChild("AuctionConfig"))
 local DPS    = require(ServerScriptService:WaitForChild("ProfileService"))
+local ItemIdentity = require(game:GetService("ReplicatedStorage"):WaitForChild("ItemIdentity"))
+local ItemStatRanges = require(game:GetService("ReplicatedStorage"):WaitForChild("ItemStatRanges"))
 
 local store = DataStoreService:GetDataStore(Config.DATASTORE_NAME)
 
@@ -126,6 +135,13 @@ local function depositPendingReturn(userId, item)
 	end)
 end
 
+-- Write an online player's profile to its DataStore now rather than at the next autosave.
+local function saveNow(player)
+	if player and player.Parent then
+		task.spawn(DPS.SaveProfile, player)
+	end
+end
+
 -- Grant an item back directly into profile.inventory (bypasses ValidateItemTemplate).
 local function grantItemDirect(player, item)
 	local profile = DPS.Load(player)
@@ -134,6 +150,24 @@ local function grantItemDirect(player, item)
 	local copy = {}
 	for k, v in pairs(item) do copy[k] = v end
 	copy.uuid = newUuid
+	-- The pairs() copy above already carries serial/origin forward, which is what
+	-- we want -- an auction is a transfer, not a new item. The guard is for
+	-- listings created BEFORE item identity shipped: the AH's own `active` /
+	-- `pendingReturn` DataStore keys live outside ProfileTypes.Reconcile and will
+	-- never be migrated, so without this they would return serial-less items
+	-- indefinitely. This path also bypasses ValidateItemTemplate entirely, so
+	-- this guard is its only protection.
+	if not ItemIdentity.HasSerial(copy) then
+		ItemIdentity.Stamp(copy, {
+			by = player,
+			kind = ItemIdentity.SOURCE.MIGRATION,
+			src = "ah_legacy",
+		})
+	end
+	-- The AH's own DataStore keys are never swept by ProfileTypes.Reconcile, so an
+	-- item that sat in a listing across a substat rebalance would otherwise land
+	-- in an already-swept profile still holding out-of-range values.
+	ItemStatRanges.ClampItem(copy)
 	profile.inventory[newUuid] = copy
 	DPS.PlaceItemInFirstEmptySlot(profile, newUuid, player)
 	return true
@@ -145,6 +179,7 @@ local function returnItemToSeller(listing)
 	if seller then
 		if grantItemDirect(seller, listing.item) then
 			DPS.PushProfile(seller)
+			saveNow(seller)
 		end
 	else
 		depositPendingReturn(listing.sellerId, listing.item)
@@ -173,6 +208,12 @@ end
 -- ---------------------------------------------------------------------------
 local function claimPendingForPlayer(player)
 	local userId = player.UserId
+	-- Load FIRST, and only claim into a real profile: the pending keys are zeroed as they
+	-- are read, so claiming into an ephemeral stand-in (failed load) would delete the payout.
+	local claimProfile = DPS.Load(player)
+	if not claimProfile or not DPS.IsPersistent(player) or not player.Parent then
+		return
+	end
 
 	-- Pending coins from items sold while offline
 	local pendingCoins = 0
@@ -209,6 +250,9 @@ local function claimPendingForPlayer(player)
 			grantItemDirect(player, item)
 		end
 		DPS.PushProfile(player)
+	end
+	if pendingCoins > 0 or #pendingItems > 0 then
+		saveNow(player)
 	end
 end
 
@@ -357,11 +401,9 @@ rfCreateListing.OnServerInvoke = function(player, itemUuid, price, durationDays)
 	for k, v in pairs(item) do itemSnapshot[k] = v end
 
 	profile.inventory[itemUuid] = nil
-	if type(profile.hotbar) == "table" then
-		for i = 1, 9 do
-			if profile.hotbar[i] == itemUuid then profile.hotbar[i] = nil end
-		end
-	end
+	-- Hotbar, bag and equip-box pointers all go (a bag slot left pointing at the escrowed
+	-- uuid renders as a ghost and rejects drops).
+	DPS.ClearItemReferences(profile, itemUuid)
 
 	local listingId = HttpService:GenerateGUID(false)
 	local now       = os.time()
@@ -382,11 +424,14 @@ rfCreateListing.OnServerInvoke = function(player, itemUuid, price, durationDays)
 	if not saveOk then
 		-- Restore item
 		profile.inventory[itemUuid] = item
+		DPS.PlaceItemInFirstEmptySlot(profile, itemUuid, player)
+		DPS.PushProfile(player)
 		return { ok = false, err = "save_failed" }
 	end
 
 	processExpired(expiredListings)
 	DPS.PushProfile(player)
+	saveNow(player) -- the listing is saved; the profile without the item must be too
 	return { ok = true, listing = listing }
 end
 
@@ -416,6 +461,7 @@ rfCancelListing.OnServerInvoke = function(player, listingId)
 	if removedListing then
 		if grantItemDirect(player, removedListing.item) then
 			DPS.PushProfile(player)
+			saveNow(player)
 		end
 		addToHistory(player.UserId, {
 			id        = listingId,
@@ -468,13 +514,23 @@ rfBuyListing.OnServerInvoke = function(player, listingId)
 
 	processExpired(expiredListings)
 
+	-- Re-read the wallet: mutateActive yielded, and the buyer may have spent coins elsewhere
+	-- meanwhile. Writing back the pre-yield `coins` would undo that spend (free money).
+	local wallet = math.floor(tonumber(profile.currencies and profile.currencies.Coins) or 0)
+	if wallet < removedListing.price then
+		-- Can't pay any more: put the listing back untouched.
+		mutateActive(function(existing) existing[listingId] = removedListing end)
+		return { ok = false, err = "insufficient_funds" }
+	end
+
 	-- Deduct coins from buyer
-	profile.currencies.Coins = coins - removedListing.price
+	profile.currencies.Coins = wallet - removedListing.price
 
 	-- Grant item to buyer
 	if grantItemDirect(player, removedListing.item) then
 		DPS.PushProfile(player)
 	end
+	saveNow(player)
 
 	-- Pay seller
 	local seller = Players:GetPlayerByUserId(removedListing.sellerId)
@@ -484,6 +540,7 @@ rfBuyListing.OnServerInvoke = function(player, listingId)
 			sellerProfile.currencies.Coins =
 				(tonumber(sellerProfile.currencies.Coins) or 0) + removedListing.price
 			DPS.PushProfile(seller)
+			saveNow(seller)
 		end
 	else
 		depositPendingCoins(removedListing.sellerId, removedListing.price)

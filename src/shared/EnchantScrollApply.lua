@@ -130,29 +130,66 @@ local function refundScrollToBag(profile, uuid, scrollItem)
 	end
 end
 
-local function applyCompoundStatBonus(scrollDef, target)
-	local subs = target.subStats
-	if type(subs) ~= "table" then
-		subs = {}
-		target.subStats = subs
-	end
-	local mult = 1 + statMultForScrollTier(scrollDef.Tier)
-	if target.type == "Armor" then
+-- Shields are told apart by slot, falling back to their stat shape (only shields roll HP/s,
+-- only the other armor slots roll Energy/s -- see ItemGenerator).
+local function isShield(item, subs)
+	if type(item) == "table" and item.equipSlot == "Shield" then return true end
+	if type(item) == "table" and type(item.tags) == "table" and table.find(item.tags, "Shield") then return true end
+	return subs.hps ~= nil and subs.energy == nil
+end
+
+-- current * mult, floored, but always at least +1 (small values would otherwise never grow).
+local function growInt(v, mult)
+	local n = math.max(1, math.floor(v * mult + 1e-9))
+	if n <= v then n = v + 1 end
+	return n
+end
+
+-- current * mult at the stat's own 2-decimal precision, always at least +0.01.
+local function growEnergy(v, mult)
+	local n = math.floor(v * mult * 100 + 0.5) / 100
+	if n <= v then n = math.floor((v + 0.01) * 100 + 0.5) / 100 end
+	return n
+end
+
+--[[
+	Pure: given an item + its current subStats, returns the subStats ONE successful enchant
+	produces. Never mutates `subs`. Every bonus multiplies the CURRENT value (x1.05 per enchant,
+	compounding), never the base:
+	  Weapon                dmgMin, dmgMax
+	  Armor (not a shield)  hp, energy (Energy/s)
+	  Shield                hp, hps (HP/s out of combat)
+	Nothing else changes, and no stat is added that the piece didn't roll. (Before 2026-09-27,
+	armor set hps = floor(hp * 0.5) on EVERY piece -- giving helms/chests/legs/boots an HP/s
+	they never rolled -- and never touched energy; RecomputeEnchantedArmor corrects those.)
+	Shared by applyCompoundStatBonus (the real apply) and PreviewNextSubStats (the Enchanting
+	Station's before/after preview), so the two can never drift apart. This is the only place
+	the formula lives.
+]]
+local function computeBonusSubStats(item, subs, scrollTier)
+	local mult = 1 + statMultForScrollTier(scrollTier)
+	local itemType = type(item) == "table" and item.type or nil
+	if itemType == "Armor" then
 		local hp = tonumber(subs.hp)
 		if not hp or hp < 1 then
-			return false, "armor_missing_hp"
+			return false, "armor_missing_hp", nil
 		end
-		local newHp = math.max(1, math.floor(hp * mult + 1e-9))
-		if newHp <= hp then
-			newHp = hp + 1
+		local out = {}
+		for k, v in pairs(subs) do out[k] = v end
+		out.hp = growInt(hp, mult)
+		if isShield(item, subs) then
+			local hps = tonumber(subs.hps)
+			if hps and hps > 0 then out.hps = growInt(hps, mult) end
+		else
+			local energy = tonumber(subs.energy)
+			if energy and energy > 0 then out.energy = growEnergy(energy, mult) end
 		end
-		subs.hp = newHp
-		subs.hps = math.floor(subs.hp * 0.5)
-	elseif target.type == "Weapon" then
+		return true, nil, out
+	elseif itemType == "Weapon" then
 		local lo = tonumber(subs.dmgMin)
 		local hi = tonumber(subs.dmgMax)
 		if not lo or not hi or lo < 1 or hi < 1 then
-			return false, "weapon_missing_damage"
+			return false, "weapon_missing_damage", nil
 		end
 		local newLo = math.max(1, math.floor(lo * mult + 1e-9))
 		local newHi = math.max(newLo, math.floor(hi * mult + 1e-9))
@@ -160,12 +197,90 @@ local function applyCompoundStatBonus(scrollDef, target)
 			newLo = lo + 1
 			newHi = math.max(newLo, hi + (hi > lo and 1 or 0))
 		end
-		subs.dmgMin = newLo
-		subs.dmgMax = newHi
+		local out = {}
+		for k, v in pairs(subs) do out[k] = v end
+		out.dmgMin = newLo
+		out.dmgMax = newHi
+		return true, nil, out
+	end
+	return false, "bad_target_type", nil
+end
+
+--[[
+	One-time correction (ProfileTypes.MIGRATIONS.enchantStats) for armor enchanted under the
+	old formula. Re-derives the enchant-owned stats (hp + energy, or hp + hps for shields) by
+	replaying enchantLevel successful enchants from the pre-enchant snapshot (baseSubStats),
+	then writes just those keys back -- every other substat is left exactly as it is. A
+	non-shield piece loses the HP/s the old formula wrongly gave it. Items without a snapshot
+	(or not enchanted) are untouched. Returns true if it changed the item.
+]]
+function EnchantScrollApply.RecomputeEnchantedArmor(item)
+	if type(item) ~= "table" or item.type ~= "Armor" then return false end
+	local level = math.floor(tonumber(item.enchantLevel) or 0)
+	local base = item.baseSubStats
+	if level < 1 or type(base) ~= "table" or type(item.subStats) ~= "table" then return false end
+	local subs = {}
+	for k, v in pairs(base) do subs[k] = v end
+	for _ = 1, level do
+		local ok, _err, nextSubs = computeBonusSubStats(item, subs, nil)
+		if not ok then return false end
+		subs = nextSubs
+	end
+	local cur = item.subStats
+	cur.hp = subs.hp
+	if isShield(item, base) then
+		cur.hps = subs.hps
 	else
-		return false, "bad_target_type"
+		cur.energy = subs.energy
+		cur.hps = base.hps -- nil unless the piece really rolled HP/s
+	end
+	return true
+end
+
+local function applyCompoundStatBonus(scrollDef, target)
+	local subs = target.subStats
+	if type(subs) ~= "table" then
+		subs = {}
+		target.subStats = subs
+	end
+	local ok, err, newSubs = computeBonusSubStats(target, subs, scrollDef.Tier)
+	if not ok then
+		return false, err
+	end
+	for k, v in pairs(newSubs) do
+		subs[k] = v
 	end
 	return true, nil
+end
+
+-- Read-only preview: what would `target.subStats` look like after ONE successful enchant,
+-- with no side effects. Returns nil if the item can't be previewed (missing/invalid stats,
+-- unknown type) -- callers should fall back to showing no preview rather than erroring.
+function EnchantScrollApply.PreviewNextSubStats(target)
+	if type(target) ~= "table" or type(target.subStats) ~= "table" then
+		return nil
+	end
+	local ok, _err, newSubs = computeBonusSubStats(target, target.subStats, nil)
+	if not ok then
+		return nil
+	end
+	return newSubs
+end
+
+-- Read-only odds: success chance (0..1) for going from `currentEnchantLevel` to +1, with no
+-- side effects -- the same rule RollEnchantSuccess rolls against, exposed for UI odds
+-- display (e.g. the Enchanting Station's "X% success" text) without needing an RNG. Returns
+-- nil when already at the +9 cap (nothing to roll).
+function EnchantScrollApply.GetSuccessChanceForNextLevel(currentEnchantLevel)
+	local cur = math.floor(tonumber(currentEnchantLevel) or 0)
+	if cur >= 9 then
+		return nil
+	end
+	local nextLevel = cur + 1
+	if nextLevel <= 3 then
+		return 1
+	end
+	return EnchantScrollApply.SUCCESS_CHANCE_AT_TARGET_LEVEL[nextLevel]
 end
 
 function EnchantScrollApply.ApplyFromAct(profile, act, rng)
