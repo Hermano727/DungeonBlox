@@ -98,12 +98,15 @@ return {
 	divider = piece({ Image = "rbxassetid://115368801234699", Aspect = 1024 / 38 }), -- ink rule with a diamond
 
 	-- Batch 3: gems and icons
-	gem_common     = piece({}), -- small dull rough grey stone
-	gem_uncommon   = piece({}),
-	gem_rare       = piece({}),
-	gem_epic       = piece({}),
-	gem_legendary  = piece({}),
-	gem_glow       = piece({}), -- soft white halo, tinted per rarity behind Epic / Legendary
-	icon_loot_score = piece({}), -- coin pouch
-	icon_records    = piece({}), -- scroll
+	-- Gems escalate (rough grey stone -> radiant orange); Parts.Gem sizes them by rarity too.
+	gem_common    = piece({ Image = "rbxassetid://79628861988288",  Aspect = 176 / 207 }),
+	gem_uncommon  = piece({ Image = "rbxassetid://124151846447739", Aspect = 208 / 264 }),
+	gem_rare      = piece({ Image = "rbxassetid://111495892933135", Aspect = 260 / 307 }),
+	gem_epic      = piece({ Image = "rbxassetid://95984238263487",  Aspect = 329 / 372 }),
+	gem_legendary = piece({ Image = "rbxassetid://131788090121900", Aspect = 396 / 463 }),
+	-- soft white halo tinted per rarity behind Epic / Legendary (generated, not painted:
+	-- a radial falloff, see docs/ui-and-networking.md)
+	gem_glow        = piece({ Image = "rbxassetid://124669614530343", Aspect = 1 }),
+	icon_loot_score = piece({ Image = "rbxassetid://111981563075790", Aspect = 502 / 458 }), -- coin pouch
+	icon_records    = piece({ Image = "rbxassetid://111678186607517", Aspect = 611 / 384 }), -- sealed scroll
 }

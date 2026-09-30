@@ -135,6 +135,7 @@ function Parts.ChromeButton(props: any)
 			BackgroundTransparency = 1,
 			Image = props.icon,
 			ImageTransparency = disabled and 0.5 or 0,
+			ScaleType = Enum.ScaleType.Fit,
 			ZIndex = 2,
 		}) or nil,
 		Label = e("TextLabel", {
@@ -266,11 +267,11 @@ end
 
 -- Size and glow climb with rarity (the blueprint's "gems escalate" rule).
 local GEM = {
-	Common    = { size = 18, glow = false },
-	Uncommon  = { size = 21, glow = false },
-	Rare      = { size = 24, glow = false },
-	Epic      = { size = 28, glow = true },
-	Legendary = { size = 32, glow = true },
+	Common    = { size = 20, glow = false },
+	Uncommon  = { size = 23, glow = false },
+	Rare      = { size = 27, glow = false },
+	Epic      = { size = 31, glow = true },
+	Legendary = { size = 36, glow = true },
 }
 
 function Parts.Gem(props: { rarity: string, scale: number?, Position: UDim2?, AnchorPoint: Vector2? })

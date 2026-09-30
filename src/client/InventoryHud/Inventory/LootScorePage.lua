@@ -86,6 +86,7 @@ local function list(padding: number, children: { [string]: any }, align: Enum.Ho
 		Padding = UDim.new(0, padding),
 		SortOrder = Enum.SortOrder.LayoutOrder,
 		HorizontalAlignment = align or Enum.HorizontalAlignment.Center,
+		VerticalAlignment = Enum.VerticalAlignment.Center, -- short pages sit mid-page, not top-heavy
 	})
 	return e("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1 }, children)
 end
