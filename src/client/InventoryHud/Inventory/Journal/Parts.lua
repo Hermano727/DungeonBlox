@@ -45,7 +45,7 @@ function Parts.ArtFrame(props: any)
 		if art.SliceCenter then
 			base.ScaleType = Enum.ScaleType.Slice
 			base.SliceCenter = art.SliceCenter
-			base.SliceScale = props.SliceScale or 1
+			base.SliceScale = props.SliceScale or art.SliceScale or 1
 		elseif art.TileSize then
 			base.ScaleType = Enum.ScaleType.Tile
 			base.TileSize = UDim2.fromOffset(art.TileSize, art.TileSize)
@@ -185,7 +185,7 @@ function Parts.Divider(props: { order: number?, width: number? })
 			Position = UDim2.fromScale(0.5, 0.5),
 			Size = UDim2.fromOffset(7, 7),
 			Rotation = 45,
-			BackgroundColor3 = Style.Flat.Page,
+			BackgroundColor3 = Style.OnPaper and Color3.fromRGB(214, 196, 160) or Style.Flat.Page,
 			BorderSizePixel = 0,
 		}, {
 			Stroke = e("UIStroke", { Color = Style.Text.Muted, Thickness = 1 }),

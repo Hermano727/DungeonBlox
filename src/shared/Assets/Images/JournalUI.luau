@@ -8,8 +8,10 @@
 
 		Image        "rbxassetid://..."; "" = not made yet: the component draws its flat
 		             grey-box stand-in, so art drops in one piece at a time without layout changes
-		SliceCenter  Rect in the image's own pixels for 9-slice pieces (corners never scale),
+		SliceCenter  Rect in the image's own pixels for 9-slice pieces (corners never stretch),
 		             nil for plain images
+		SliceScale   how big the 9-slice corners draw relative to the image's pixels (0.3 =
+		             a 230 px cap draws at ~70 px); the component can still override it
 		Aspect       width / height of the processed PNG
 		TileSize     for tiling textures (paper): the on-screen size of one tile, in px
 
@@ -20,6 +22,7 @@ local function piece(fields)
 	return {
 		Image = fields.Image or "",
 		SliceCenter = fields.SliceCenter,
+		SliceScale = fields.SliceScale,
 		Aspect = fields.Aspect or 1,
 		TileSize = fields.TileSize,
 	}
@@ -27,11 +30,31 @@ end
 
 return {
 	-- Batch 1: structure
-	book_cover     = piece({}), -- the open leather spread, bronze corner caps, no pages (9-slice)
-	book_spine     = piece({}), -- the centre strip between the pages
-	page_paper     = piece({}), -- seamless parchment tile
-	sidebar_panel  = piece({}), -- tall leather/wood panel beside the book (9-slice)
-	sidebar_vines  = piece({}), -- vine overlay down the sidebar's edge
+	-- the leather around the pages, bronze corner caps (9-slice); caps reach ~220 px
+	book_cover = piece({
+		Image = "rbxassetid://74983544391835",
+		SliceCenter = Rect.new(230, 230, 794, 753),
+		SliceScale = 0.3,
+		Aspect = 1024 / 983,
+	}),
+	-- optional art for the centre strip; without it the Book draws a soft gutter shadow
+	book_spine = piece({}),
+	-- one page of parchment, worn edges + ink corner flourishes. Plain stretch, no 9-slice:
+	-- the book is locked at 2:1, so a page is always close to this image's square shape, and
+	-- 9-slicing showed a seam where the stretched centre met the (uneven) darkened edges.
+	page_paper = piece({
+		Image = "rbxassetid://84929950628081",
+		Aspect = 1024 / 1022,
+	}),
+	-- tall leather/wood panel beside the book, vine down its left side (9-slice); caps ~100 px.
+	-- SliceScale ~ sidebar width / 389 so the vine keeps its width; only the middle stretches.
+	sidebar_panel = piece({
+		Image = "rbxassetid://112313288107144",
+		SliceCenter = Rect.new(100, 105, 289, 919),
+		SliceScale = 0.49,
+		Aspect = 389 / 1024,
+	}),
+	sidebar_vines = piece({}), -- unused: the vine is painted into sidebar_panel
 
 	-- Batch 2: controls
 	sidebar_row          = piece({}), -- page row, normal (9-slice)

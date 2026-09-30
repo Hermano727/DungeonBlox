@@ -70,12 +70,14 @@ Style.Split = {
 	Dungeon   = Color3.fromRGB(92, 98, 110),  -- iron
 }
 
+-- The book is set in a serif (UIFonts.Serif*, Merriweather) like the blueprint; small
+-- running text stays in the game's body font for readability.
 Style.Font = {
-	Heading = UIFonts.DisplayBold,
-	Number  = UIFonts.DisplayBold,
-	Body    = UIFonts.Body,
-	BodyBold = UIFonts.BodyBold,
-	Chrome  = UIFonts.DisplayBold,
+	Heading  = UIFonts.SerifBold,
+	Number   = UIFonts.SerifBold,
+	Body     = UIFonts.Body,
+	BodyBold = UIFonts.SerifBold,
+	Chrome   = UIFonts.SerifBold,
 }
 
 -- The spread's shape (the blueprint's book is about twice as wide as tall).

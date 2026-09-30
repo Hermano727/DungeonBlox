@@ -43,7 +43,7 @@ The newer React-lua UI — Inventory/Skills/Stats/Hearthstone/Party tabs and the
 ## UI art pipeline
 
 1. **Generate:** the user makes each piece in ChatGPT (one piece per image, transparent background, no text, the blueprint attached as the style reference) and saves it as `assets/ui/incoming/<key>.png`. `<key>` is the registry key.
-2. **Process:** `python tools/ui_assets/process.py [key...]` (`--tile` for seamless textures).
+2. **Process:** `python tools/ui_assets/process.py [key...]` (`--tile` for seamless textures; `--split <sheet> <key> <key>...` cuts one image holding several pieces in a row or column into separate keys first).
    - Rejects images without real transparency (including painted checkerboards).
    - Trims, bleeds edge colour into transparent pixels (no dark halos), caps at 1024 px.
    - Writes `assets/ui/journal/<key>.png` and prints size, aspect and a starting 9-slice rect.

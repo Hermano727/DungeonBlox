@@ -64,6 +64,10 @@ local Families = {
 	Display = "rbxassetid://16658237174", -- Builder Extended
 	Body = "rbxassetid://12187373327", -- Work Sans
 	Damage = "rbxassetid://12187370000", -- Bungee Inline
+	-- Merriweather: a bundled Roblox family (Enum.Font.Merriweather resolves to this path,
+	-- verified in Studio 2026-09-30), so no asset id needed. The book-and-parchment UI
+	-- (the Journal) uses it for headings, numbers and labels, matching the blueprint's serif.
+	Serif = "rbxasset://fonts/families/Merriweather.json",
 }
 
 local NPCDefault = {
@@ -98,6 +102,8 @@ return {
 	Body = Font.new(Families.Body, Enum.FontWeight.Regular),
 	BodyMedium = Font.new(Families.Body, Enum.FontWeight.Medium),
 	BodyBold = Font.new(Families.Body, Enum.FontWeight.Bold),
+	Serif = Font.new(Families.Serif, Enum.FontWeight.Regular),
+	SerifBold = Font.new(Families.Serif, Enum.FontWeight.Bold),
 
 	Damage = Font.new(Families.Damage, Enum.FontWeight.Bold),
 

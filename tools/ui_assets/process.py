@@ -4,6 +4,10 @@ UI art pipeline: cleans ChatGPT (or any) PNGs into Roblox-ready UI pieces.
     python tools/ui_assets/process.py                 # every PNG in assets/ui/incoming/
     python tools/ui_assets/process.py book_cover      # one piece (name without .png)
     python tools/ui_assets/process.py --tile paper    # a seamless tiling texture: no trim
+    python tools/ui_assets/process.py --split sheet a b c
+        # one image holding several pieces in a row (or a column), separated by clear gaps:
+        # cut apart left-to-right (or top-to-bottom) and saved as incoming/a.png, b.png, c.png,
+        # then processed like any other piece
 
 For each piece, assets/ui/incoming/<name>.png -> assets/ui/journal/<name>.png:
   1. Checks there is real transparency. Image generators often paint a fake grey
@@ -125,7 +129,48 @@ def process(name, tile=False):
     }
 
 
+def split_sheet(sheet, names):
+    """Cut a sheet into len(names) pieces along the fully transparent gaps between them."""
+    src = INCOMING / f"{sheet}.png"
+    if not src.exists():
+        return f"missing {src}"
+    img = Image.open(src).convert("RGBA")
+    alpha = np.asarray(img)[:, :, 3] > ALPHA_VISIBLE
+
+    def runs(occupied):
+        spans, start = [], None
+        for i, filled in enumerate(occupied):
+            if filled and start is None:
+                start = i
+            elif not filled and start is not None:
+                spans.append((start, i))
+                start = None
+        if start is not None:
+            spans.append((start, len(occupied)))
+        # merge specks: ignore spans thinner than 2% of the sheet
+        return [sp for sp in spans if sp[1] - sp[0] > len(occupied) * 0.02]
+
+    for axis, occupied in (("x", alpha.any(axis=0)), ("y", alpha.any(axis=1))):
+        spans = runs(occupied)
+        if len(spans) == len(names):
+            for (a, b), name in zip(spans, names):
+                box = (a, 0, b, img.height) if axis == "x" else (0, a, img.width, b)
+                img.crop(box).save(INCOMING / f"{name}.png")
+            return None
+    return (f"could not find {len(names)} separate pieces in {sheet}.png "
+            f"(x gaps -> {len(runs(alpha.any(axis=0)))}, y gaps -> {len(runs(alpha.any(axis=1)))})")
+
+
 def main(argv):
+    if argv and argv[0] == "--split":
+        if len(argv) < 3:
+            print("usage: process.py --split <sheet> <piece> <piece> ...")
+            return 1
+        error = split_sheet(argv[1], argv[2:])
+        if error:
+            print(json.dumps([{"piece": argv[1], "error": error}], indent=2))
+            return 1
+        argv = argv[2:]
     tile = "--tile" in argv
     names = [a for a in argv if not a.startswith("--")]
     if not names:

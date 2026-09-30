@@ -18,7 +18,7 @@ local Parts = require(script.Parent:WaitForChild("Parts"))
 local e = React.createElement
 
 local COVER_INSET = 18 -- leather visible around the pages
-local SPINE_W = 26
+local SPINE_W = 8 -- the gap between the pages (the blueprint's thin crease, shaded below)
 local TAB_OVERLAP = 6  -- tabs sink this far into the cover's top edge
 
 local function Page(props: { side: string, content: any })
@@ -73,7 +73,26 @@ local function Book(props: { tabs: any?, left: any, right: any })
 				children = {
 					Left = e(Page, { side = "left", content = props.left }),
 					Right = e(Page, { side = "right", content = props.right }),
-					Spine = e(Parts.ArtFrame, {
+					-- On parchment (and with no spine art) the fold is a soft shadow across both
+					-- page edges; on the grey-box pages, a flat dark strip.
+					Spine = (Style.OnPaper and not Style.Art("book_spine")) and e("Frame", {
+						AnchorPoint = Vector2.new(0.5, 0),
+						Position = UDim2.new(0.5, 0, 0, COVER_INSET),
+						Size = UDim2.new(0, SPINE_W + 70, 1, -COVER_INSET * 2),
+						BackgroundColor3 = Color3.fromRGB(28, 18, 10),
+						BorderSizePixel = 0,
+						ZIndex = 4,
+					}, {
+						Shade = e("UIGradient", {
+							Transparency = NumberSequence.new({
+								NumberSequenceKeypoint.new(0, 1),
+								NumberSequenceKeypoint.new(0.4, 0.55),
+								NumberSequenceKeypoint.new(0.5, 0.05),
+								NumberSequenceKeypoint.new(0.6, 0.55),
+								NumberSequenceKeypoint.new(1, 1),
+							}),
+						}),
+					}) or e(Parts.ArtFrame, {
 						art = "book_spine",
 						flat = { color = Style.Flat.Spine, corner = 2 },
 						AnchorPoint = Vector2.new(0.5, 0),
