@@ -93,7 +93,9 @@ local PANELS: { [string]: any } = {
 -- dialed back to 2x same day after an actual playtest ran too big -- see that file), so this
 -- row's own height tracks it 1:1 (110 * SIZE_MULTIPLIER) so the carousel never gets clipped by
 -- its own container.
-local QUICKNAV_H = 220
+-- 2026-09-30: the carousel became a fixed row (QuickNav.lua) whose tiles top out at ~140 px,
+-- so the old 220 wasted height every tab's content could use (the Journal's book especially).
+local QUICKNAV_H = 160
 local GAP = 20 -- a bit more breathing room than the raw Figma export had
 local COLUMN_GAP = 10 -- tighter gap between the preview and slots columns specifically, per request
 

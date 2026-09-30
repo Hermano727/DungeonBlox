@@ -5,7 +5,9 @@
 --
 --  One bar per slot (12 five-minute bars for 1H, 24 hourly for 24H, 7 / 30 daily). Labels:
 --  the peak value on the left, and the first / middle / last slot times underneath, in the
---  player's local time.
+--  player's local time. Both axes are drawn as lines so it always reads as a chart. With no
+--  score in the window yet: faint placeholder bars and a note instead of a flat line and a
+--  lone "0".
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local React = require(ReplicatedStorage.Packages.React)
@@ -28,6 +30,7 @@ local function ScoreChart(props: { points: { any }, window: string, Size: UDim2?
 	local peak = 0
 	for _, p in ipairs(points) do peak = math.max(peak, tonumber(p.v) or 0) end
 	local ink = Style.OnPaper and Style.Text.Muted or Color3.fromRGB(150, 160, 110)
+	local empty = peak <= 0
 
 	local bars: { [string]: any } = {
 		Layout = e("UIListLayout", {
@@ -39,13 +42,15 @@ local function ScoreChart(props: { points: { any }, window: string, Size: UDim2?
 	}
 	local count = math.max(1, #points)
 	local gap = #points > 20 and 2 or 4
+	-- Empty window: a faint made-up silhouette so the space still reads as a chart.
+	local GHOST = { 0.35, 0.55, 0.4, 0.7, 0.5, 0.8, 0.45, 0.6, 0.3, 0.65, 0.5, 0.75 }
 	for i, p in ipairs(points) do
-		local h = peak > 0 and ((tonumber(p.v) or 0) / peak) or 0
+		local h = empty and GHOST[(i - 1) % #GHOST + 1] or ((tonumber(p.v) or 0) / peak)
 		bars["b" .. i] = e("Frame", {
 			LayoutOrder = i,
 			Size = UDim2.new(1 / count, -gap, math.max(h, 0.015), 0),
 			BackgroundColor3 = ink,
-			BackgroundTransparency = h > 0 and 0.15 or 0.7,
+			BackgroundTransparency = empty and 0.85 or (h > 0 and 0.15 or 0.7),
 			BorderSizePixel = 0,
 		})
 	end
@@ -75,7 +80,7 @@ local function ScoreChart(props: { points: { any }, window: string, Size: UDim2?
 		LayoutOrder = props.LayoutOrder,
 		BackgroundTransparency = 1,
 	}, {
-		Peak = e("TextLabel", {
+		Peak = not empty and e("TextLabel", {
 			Size = UDim2.fromOffset(AXIS_W - 6, LABEL_H),
 			BackgroundTransparency = 1,
 			Text = tostring(math.floor(peak)),
@@ -83,8 +88,8 @@ local function ScoreChart(props: { points: { any }, window: string, Size: UDim2?
 			TextSize = 13,
 			TextColor3 = Style.Text.Muted,
 			TextXAlignment = Enum.TextXAlignment.Right,
-		}),
-		Zero = e("TextLabel", {
+		}) or nil,
+		Zero = not empty and e("TextLabel", {
 			AnchorPoint = Vector2.new(0, 1),
 			Position = UDim2.new(0, 0, 1, -LABEL_H),
 			Size = UDim2.fromOffset(AXIS_W - 6, LABEL_H),
@@ -94,7 +99,7 @@ local function ScoreChart(props: { points: { any }, window: string, Size: UDim2?
 			TextSize = 13,
 			TextColor3 = Style.Text.Muted,
 			TextXAlignment = Enum.TextXAlignment.Right,
-		}),
+		}) or nil,
 		Plot = e("Frame", {
 			Position = UDim2.fromOffset(AXIS_W, 6),
 			Size = UDim2.new(1, -AXIS_W, 1, -(LABEL_H + 8)),
@@ -108,6 +113,22 @@ local function ScoreChart(props: { points: { any }, window: string, Size: UDim2?
 				BackgroundColor3 = Style.Text.Muted,
 				BorderSizePixel = 0,
 			}),
+			YAxis = e("Frame", {
+				Position = UDim2.fromOffset(-4, 0),
+				Size = UDim2.new(0, 1, 1, 0),
+				BackgroundColor3 = Style.Text.Muted,
+				BorderSizePixel = 0,
+			}),
+			Empty = empty and e("TextLabel", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.new(1, -20, 0, 22),
+				BackgroundTransparency = 1,
+				Text = "Not enough activity to chart yet",
+				FontFace = Style.Font.Body,
+				TextSize = 15,
+				TextColor3 = Style.Text.Muted,
+			}) or nil,
 		}),
 		XLabels = e("Frame", {
 			AnchorPoint = Vector2.new(0, 1),

@@ -7,8 +7,9 @@
 --    e(Book, { tabs = element?, left = element, right = element })
 --
 --  The spread keeps Style.BOOK_ASPECT (about 2:1) at any screen size, capped at
---  Style.BOOK_MAX, centred in whatever space it's given. Each page's content gets a padded
---  frame; lay it out with a UIListLayout or explicit positions.
+--  Style.BOOK_MAX, centred in whatever space it's given. Each page's content is laid out on
+--  a fixed Style.PAGE_DESIGN canvas and scaled (UIScale) to fit the page: design pages in
+--  those pixels and they fit every window size.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local React = require(ReplicatedStorage.Packages.React)
@@ -20,6 +21,39 @@ local e = React.createElement
 local COVER_INSET = 18 -- leather visible around the pages
 local SPINE_W = 8 -- the gap between the pages (the blueprint's thin crease, shaded below)
 local TAB_OVERLAP = 6  -- tabs sink this far into the cover's top edge
+
+-- Fits a Style.PAGE_DESIGN-sized canvas into whatever space the page has, keeping its shape.
+local function ScaledCanvas(props: { content: any })
+	local outerRef = React.useRef(nil :: Frame?)
+	local scale, setScale = React.useState(1)
+	React.useEffect(function()
+		local outer = outerRef.current
+		if not outer then return end
+		local function fit()
+			local size = outer.AbsoluteSize
+			if size.X <= 0 or size.Y <= 0 then return end
+			setScale(math.min(size.X / Style.PAGE_DESIGN.X, size.Y / Style.PAGE_DESIGN.Y))
+		end
+		fit()
+		local conn = outer:GetPropertyChangedSignal("AbsoluteSize"):Connect(fit)
+		return function() conn:Disconnect() end
+	end, {})
+	return e("Frame", {
+		ref = outerRef,
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+	}, {
+		Canvas = e("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(Style.PAGE_DESIGN.X, Style.PAGE_DESIGN.Y),
+			BackgroundTransparency = 1,
+		}, {
+			Scale = e("UIScale", { Scale = scale }),
+			Body = props.content,
+		}),
+	})
+end
 
 local function Page(props: { side: string, content: any })
 	local isLeft = props.side == "left"
@@ -36,7 +70,7 @@ local function Page(props: { side: string, content: any })
 				Size = UDim2.new(1, -Style.PAGE_PAD * 2, 1, -(Style.PAGE_PAD * 2 - 8)),
 				BackgroundTransparency = 1,
 				ZIndex = 3,
-			}, { Body = props.content }),
+			}, { Body = e(ScaledCanvas, { content = props.content }) }),
 		},
 	})
 end

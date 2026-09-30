@@ -85,6 +85,9 @@ Style.BOOK_ASPECT = 2.0
 Style.BOOK_MAX = Vector2.new(1500, 750)
 Style.SIDEBAR_W = 190
 Style.PAGE_PAD = 34 -- inside each page, before content
+-- Each page's content is laid out on this fixed design canvas (px) and scaled to fit the page
+-- (Journal/Book), so it never overflows on a small window and grows on a large one.
+Style.PAGE_DESIGN = Vector2.new(540, 480)
 Style.TAB_H = 34    -- bookmark tabs standing on the book's top edge
 
 return Style
