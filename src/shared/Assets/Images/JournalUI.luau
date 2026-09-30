@@ -27,6 +27,7 @@ local function piece(fields)
 		SliceCenter = fields.SliceCenter,
 		SliceScale = fields.SliceScale,
 		Pad = fields.Pad,
+		Width = fields.Width, -- processed PNG width in px, for pieces that use Pad without 9-slice
 		Aspect = fields.Aspect or 1,
 		TileSize = fields.TileSize,
 	}
@@ -109,4 +110,20 @@ return {
 	gem_glow        = piece({ Image = "rbxassetid://124669614530343", Aspect = 1 }),
 	icon_loot_score = piece({ Image = "rbxassetid://111981563075790", Aspect = 502 / 458 }), -- coin pouch
 	icon_records    = piece({ Image = "rbxassetid://111678186607517", Aspect = 611 / 384 }), -- sealed scroll
+
+	-- Batch 4: the Tab menu's top row (QuickNav.lua), same look as the book.
+	nav_medallion = piece({ Image = "rbxassetid://130795045169317", Aspect = 1 }), -- carved ring, empty green recess
+	nav_medallion_selected = piece({ -- brighter ring + warm glow; the ring matches nav_medallion's size
+		Image = "rbxassetid://98456248259699", Aspect = 546 / 548, Pad = { 24, 26, 23, 30 }, Width = 546,
+	}),
+	nav_plaque = piece({ -- name plaque under each medallion; pointed ends ~60 px
+		Image = "rbxassetid://118843587395252",
+		SliceCenter = Rect.new(70, 50, 732, 122), SliceScale = 0.15, Aspect = 802 / 172,
+	}),
+	nav_glyph_inventory   = piece({ Image = "rbxassetid://81539845232861",  Aspect = 313 / 350 }), -- backpack
+	nav_glyph_skills      = piece({ Image = "rbxassetid://125671058654812", Aspect = 331 / 356 }), -- bare tree
+	nav_glyph_stats       = piece({ Image = "rbxassetid://127211885778508", Aspect = 271 / 292 }), -- bar chart
+	nav_glyph_journal     = piece({ Image = "rbxassetid://99968572591327",  Aspect = 345 / 260 }), -- open book
+	nav_glyph_hearthstone = piece({ Image = "rbxassetid://78158006215872",  Aspect = 276 / 299 }), -- hearthstone rune
+	nav_glyph_party       = piece({ Image = "rbxassetid://133527886675350", Aspect = 332 / 271 }), -- three people
 }

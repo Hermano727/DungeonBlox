@@ -17,7 +17,12 @@
 --  ProfileMenusState.SetCarouselAnchor, which HealthClient/EnergyClient hang the vitals
 --  from (name kept for those callers).
 --
---  Adding a destination: one entry in ICONS (plus its panel in Inventory/init.lua's PANELS).
+--  Art (2026-09-30, the Journal's look): carved medallions (nav_medallion /
+--  nav_medallion_selected), bronze glyphs (nav_glyph_<id>) and a name plaque (nav_plaque) from
+--  RS/Assets/Images/JournalUI. Any piece missing falls back to the older art below.
+--
+--  Adding a destination: one entry in ICONS (plus its panel in Inventory/init.lua's PANELS),
+--  and a nav_glyph_<id> registry entry for its glyph.
 --  Tuning: the constants below.
 
 local TweenService = game:GetService("TweenService")
@@ -26,12 +31,21 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local React = require(ReplicatedStorage.Packages.React)
 local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
 local ProfileMenusState = require(ReplicatedStorage:WaitForChild("ProfileMenusState"))
+local JournalUI = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Images"):WaitForChild("JournalUI"))
 local e = React.createElement
+
+local function art(key: string): any?
+	local entry = (JournalUI :: any)[key]
+	return (type(entry) == "table" and entry.Image ~= "") and entry or nil
+end
+local MEDALLION = art("nav_medallion")
+local MEDALLION_SELECTED = art("nav_medallion_selected")
+local PLAQUE = art("nav_plaque")
 
 local BACKING_UNSELECTED = "rbxassetid://131438000506839"
 local BACKING_SELECTED = "rbxassetid://79091640085978"
 
--- PLACEHOLDER (2026-09-17): the Journal has no art of its own yet and reuses the Stats glyph.
+-- Older glyph for the Journal (the Stats one), used only if nav_glyph_journal is missing.
 local JOURNAL_ICON_PLACEHOLDER = "rbxassetid://113519481797233"
 
 local ICONS = {
@@ -42,15 +56,23 @@ local ICONS = {
 	{ id = "hearthstone", image = "rbxassetid://92412859018068",  label = "Hearthstone" },
 	{ id = "party",       image = "rbxassetid://80729608864109",  label = "Party" },
 }
+for _, icon in ipairs(ICONS) do
+	local glyph = art("nav_glyph_" .. icon.id)
+	if glyph then icon.image = glyph.Image end
+end
 local ICON_COUNT = #ICONS
 
 local TILE_MAX = 118         -- px, largest a tile gets (the row fits itself to the header)
 local TILE_GAP = 26          -- px between tiles
-local LABEL_H = 22           -- px, the name under each tile
-local GLYPH_FRACTION = 0.72  -- glyph size relative to its backing plate
+local LABEL_H = PLAQUE and 26 or 22   -- px, the name (on its plaque) under each tile
+local PLAQUE_W = 1.3                  -- plaque width relative to the medallion (wider, like the blueprint)
+local PLAQUE_OVERLAP = 8              -- px the plaque tucks up under the medallion
+local TILE_W = PLAQUE and PLAQUE_W or 1
+-- glyph size relative to its backing: the medallion's recess is smaller than the old plate
+local GLYPH_FRACTION = MEDALLION and 0.52 or 0.72
 local SELECTED_SCALE = 1.08
 local HOVER_SCALE = 1.05
-local DIM_TRANSPARENCY = 0.35 -- unselected, not hovered
+local DIM_TRANSPARENCY = MEDALLION and 0.2 or 0.35 -- unselected, not hovered
 local LABEL_SELECTED = Color3.fromRGB(245, 226, 180)
 local LABEL_IDLE = Color3.fromRGB(176, 164, 150)
 local LABEL_EDGE = Color3.fromRGB(10, 8, 8)
@@ -80,13 +102,15 @@ local function NavTile(props: {
 
 	return e("Frame", {
 		LayoutOrder = props.order,
-		Size = UDim2.fromOffset(size, size + LABEL_H),
+		Size = UDim2.fromOffset(math.floor(size * TILE_W), size + LABEL_H - (PLAQUE and PLAQUE_OVERLAP or 0)),
 		BackgroundTransparency = 1,
 	}, {
 		Plate = e("ImageButton", {
+			AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.fromScale(0.5, 0),
 			Size = UDim2.fromOffset(size, size),
 			BackgroundTransparency = 1,
-			Image = props.selected and BACKING_SELECTED or BACKING_UNSELECTED,
+			Image = MEDALLION and "" or (props.selected and BACKING_SELECTED or BACKING_UNSELECTED),
 			ImageTransparency = transparency,
 			ScaleType = Enum.ScaleType.Fit,
 			AutoButtonColor = false,
@@ -95,6 +119,25 @@ local function NavTile(props: {
 			[React.Event.MouseLeave] = function() setHovered(false) end,
 		}, {
 			Scale = e("UIScale", { ref = scaleRef, Scale = 1 }),
+			-- The selected medallion carries its glow outside the ring: draw it bigger by that
+			-- margin so both rings are the same size.
+			Medallion = MEDALLION and (function()
+				local sel = props.selected and MEDALLION_SELECTED
+				local grow = 1
+				if sel and sel.Pad and sel.Width then
+					grow = sel.Width / (sel.Width - sel.Pad[1] - sel.Pad[3])
+				end
+				return e("ImageLabel", {
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.fromScale(0.5, 0.5),
+					Size = UDim2.fromScale(grow, grow),
+					BackgroundTransparency = 1,
+					Image = sel and sel.Image or MEDALLION.Image,
+					ImageTransparency = transparency,
+					ScaleType = Enum.ScaleType.Fit,
+					ZIndex = 1,
+				})
+			end)() or nil,
 			Glyph = e("ImageLabel", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(0.5, 0.5),
@@ -106,17 +149,30 @@ local function NavTile(props: {
 				ZIndex = 2,
 			}),
 		}),
+		Plaque = PLAQUE and e("ImageLabel", {
+			AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.new(0.5, 0, 0, size - PLAQUE_OVERLAP),
+			Size = UDim2.new(1, 0, 0, LABEL_H),
+			BackgroundTransparency = 1,
+			Image = PLAQUE.Image,
+			ImageTransparency = transparency,
+			ScaleType = Enum.ScaleType.Slice,
+			SliceCenter = PLAQUE.SliceCenter,
+			SliceScale = PLAQUE.SliceScale or 1,
+			ZIndex = 3,
+		}) or nil,
 		Label = e("TextLabel", {
-			Position = UDim2.fromOffset(0, size),
+			Position = UDim2.fromOffset(0, size - (PLAQUE and PLAQUE_OVERLAP or 0)),
 			Size = UDim2.new(1, 0, 0, LABEL_H),
 			BackgroundTransparency = 1,
 			Text = props.label,
-			FontFace = UIFonts.DisplayBold,
-			TextSize = 16,
+			FontFace = PLAQUE and UIFonts.SerifBold or UIFonts.DisplayBold,
+			TextSize = PLAQUE and 15 or 16,
 			TextColor3 = props.selected and LABEL_SELECTED or LABEL_IDLE,
 			TextTransparency = lit and 0 or 0.25,
 			TextStrokeColor3 = LABEL_EDGE,
 			TextStrokeTransparency = 0.5,
+			ZIndex = 4,
 		}),
 	})
 end
@@ -136,7 +192,7 @@ local function QuickNav(props: { onSelect: (string, number) -> (), resetKey: num
 			local avail = container.AbsoluteSize
 			if avail.X <= 0 or avail.Y <= 0 then return end
 			local byHeight = avail.Y - LABEL_H
-			local byWidth = (avail.X - TILE_GAP * (ICON_COUNT - 1)) / ICON_COUNT
+			local byWidth = (avail.X - TILE_GAP * (ICON_COUNT - 1)) / ICON_COUNT / TILE_W
 			setTileSize(math.max(24, math.floor(math.min(TILE_MAX, byHeight, byWidth))))
 		end
 		recompute()
