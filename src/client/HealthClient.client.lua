@@ -133,6 +133,16 @@ do
     local BLOOD_DARK = Color3.fromRGB(96, 14, 14)
     local WIDTH = 300
 
+    -- Its own ScreenGui, NOT the vitals' one: that is a HudHider overlay (HP stays up over the
+    -- Tab menu), and this plate must hide behind menus like the rest of the HUD.
+    local pityGui = Instance.new("ScreenGui")
+    pityGui.Name = "ElitePityGui"
+    pityGui.ResetOnSpawn = false
+    pityGui.IgnoreGuiInset = true
+    pityGui.DisplayOrder = gui.DisplayOrder
+    pityGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    pityGui.Parent = playerGui
+
     local frame = Instance.new("Frame")
     frame.Name = "ElitePityFrame"
     frame.AnchorPoint = Vector2.new(0.5, 0)
@@ -141,7 +151,7 @@ do
     frame.AutomaticSize = Enum.AutomaticSize.Y
     frame.BackgroundTransparency = 1
     frame.Visible = false
-    frame.Parent = gui
+    frame.Parent = pityGui
     local layout = Instance.new("UIListLayout", frame)
     layout.FillDirection = Enum.FillDirection.Vertical
     layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
