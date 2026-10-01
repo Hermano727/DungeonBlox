@@ -3,6 +3,8 @@
 --  top-level pages) beside the open book (Journal/Book) the current page draws itself in.
 --    Loot Score  (default) per-tier score, dry streaks, and the Activity view -- LootScorePage.lua
 --    Records     lifetime grind totals: Combat on the left page, Mining + Fishing on the right
+--    Skills      SkillsPanel, unchanged (moved here from the Tab menu's top row 2026-09-30)
+--    Stats       StatsPanel, unchanged (same move); both still draw their own panel, not a book
 --  New page: a component that renders a Journal/Book, plus one entry in PAGES below.
 --
 --  Records page notes:
@@ -29,6 +31,8 @@ local ItemConfig = require(ReplicatedStorage:WaitForChild("ItemConfig"))
 local InventoryData = require(script.Parent:WaitForChild("InventoryData"))
 local DungeonMenuNet = require(script.Parent.Parent.Parent:WaitForChild("DungeonMenuNet"))
 local LootScorePage = require(script.Parent:WaitForChild("LootScorePage"))
+local SkillsPanel = require(script.Parent:WaitForChild("SkillsPanel"))
+local StatsPanel = require(script.Parent:WaitForChild("StatsPanel"))
 local JournalParts = script.Parent:WaitForChild("Journal")
 local Book = require(JournalParts:WaitForChild("Book"))
 local Sidebar = require(JournalParts:WaitForChild("Sidebar"))
@@ -335,6 +339,9 @@ end
 local PAGES = {
 	{ id = "lootScore", label = "Loot Score", iconArt = "icon_loot_score", component = LootScorePage },
 	{ id = "records",   label = "Records",    iconArt = "icon_records",    component = RecordsPage },
+	-- Their top-row glyphs for now (new sidebar icons to come).
+	{ id = "skills",    label = "Skills",     iconArt = "nav_glyph_skills", component = SkillsPanel },
+	{ id = "stats",     label = "Stats",      iconArt = "nav_glyph_stats",  component = StatsPanel },
 }
 local GAP = 22
 

@@ -2,7 +2,8 @@
 --  QuickNav -- the Tab menu's top navigation row (2026-09-30 rework: was a sliding
 --  carousel with arrows and 5 visible slots; now EVERY destination sits in one fixed
 --  row across the top at once, like a console game's menu tabs). Click an icon, or use
---  Left/Right, to move between Inventory / Skills / Stats / Journal / Hearthstone / Party.
+--  Left/Right, to move between Inventory / Journal / Hearthstone / Party. (Skills and Stats
+--  moved into the Journal's sidebar, 2026-09-30.)
 --
 --  Each destination: the backing plate (selected / unselected art), its glyph, and its
 --  name underneath. The selected one is lit and slightly larger; the rest are dimmed
@@ -50,8 +51,6 @@ local JOURNAL_ICON_PLACEHOLDER = "rbxassetid://113519481797233"
 
 local ICONS = {
 	{ id = "inventory",   image = "rbxassetid://124308421822604", label = "Inventory" },
-	{ id = "skills",      image = "rbxassetid://73632421462187",  label = "Skills" },
-	{ id = "stats",       image = "rbxassetid://113519481797233", label = "Stats" },
 	{ id = "journal",     image = JOURNAL_ICON_PLACEHOLDER,       label = "Journal" },
 	{ id = "hearthstone", image = "rbxassetid://92412859018068",  label = "Hearthstone" },
 	{ id = "party",       image = "rbxassetid://80729608864109",  label = "Party" },

@@ -112,7 +112,7 @@ return {
 
 	-- Per-tier page illustration: bottom of the Activity page's right side (LootScorePage).
 	-- Faint ink-and-wash scene on transparent ground so the parchment shows through.
-	illustration_t1 = piece({}),
+	illustration_t1 = piece({ Image = "rbxassetid://81869725203589", Aspect = 1024 / 525 }), -- cottage beneath an old tree
 
 	-- Batch 4: the Tab menu's top row (QuickNav.lua), same look as the book.
 	nav_medallion = piece({ Image = "rbxassetid://130795045169317", Aspect = 1 }), -- carved ring, empty green recess

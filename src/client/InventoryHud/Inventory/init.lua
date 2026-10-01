@@ -8,7 +8,7 @@
 --  this component, ABOVE whatever's showing below it, instead of being
 --  nested inside the main bag/equip screen -- so it stays visible and
 --  selectable no matter which destination is open. `selectedKey` is a flat
---  string ("inventory" | "skills" | "stats" | "hearthstone" | "party") owned
+--  string ("inventory" | "journal" | "hearthstone" | "party") owned
 --  by QuickNav's own carousel state and reported up via onSelect; this
 --  replaced the old push/pop stack, since there's no "the main screen is the
 --  base of the stack" special case anymore -- Inventory is just another
@@ -30,8 +30,6 @@ local e = React.createElement
 local PlayerPreview    = require(script:WaitForChild("PlayerPreview"))
 local InvSlots         = require(script:WaitForChild("InvSlots"))
 local QuickNav         = require(script:WaitForChild("QuickNav"))
-local SkillsPanel      = require(script:WaitForChild("SkillsPanel"))
-local StatsPanel       = require(script:WaitForChild("StatsPanel"))
 local JournalPanel     = require(script:WaitForChild("JournalPanel"))
 local HearthstonePanel = require(script:WaitForChild("HearthstonePanel"))
 local PartyPanel       = require(script:WaitForChild("PartyPanel"))
@@ -82,9 +80,7 @@ local function displayName(item)
 end
 
 local PANELS: { [string]: any } = {
-	skills = SkillsPanel,
-	stats = StatsPanel,
-	journal = JournalPanel,
+	journal = JournalPanel, -- also hosts Skills and Stats (JournalPanel's PAGES)
 	hearthstone = HearthstonePanel,
 	party = PartyPanel,
 }
