@@ -27,6 +27,10 @@ return {
 	EnchantSuccess = "rbxassetid://101663733274964",
 	EnchantFail = "rbxassetid://91534279231521",
 
+	-- Switching destinations in the Tab menu (Inventory -> Journal ...; not Journal pages).
+	-- Source: assets/soundtracks/whoosh tab switch.mp3, uploaded via Open Cloud 2026-10-01.
+	TabSwitch = "rbxassetid://99277096441013",
+
 	-- Miasma's roar, frames 65-100 of its landing slam (MiasmaRoarFX). Played there directly
 	-- rather than through PlayEffect, whose 10s safety cleanup could clip a long roar.
 	MiasmaRoar = "rbxassetid://128962677500476",

@@ -47,6 +47,7 @@ local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"
 local Types = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
 local ProfileMenusState = require(ReplicatedStorage:WaitForChild("ProfileMenusState"))
 local HudVitals = require(ReplicatedStorage:WaitForChild("HudVitals"))
+local SfxService = require(ReplicatedStorage:WaitForChild("SfxService"))
 local DungeonMenuNet = require(script.Parent.Parent:WaitForChild("DungeonMenuNet"))
 local CenterFlashUI = require(script.Parent.Parent:WaitForChild("CenterFlashUI"))
 
@@ -92,16 +93,16 @@ local PANELS: { [string]: any } = {
 }
 
 -- Screen layout (2026-10-01): the destinations are a vertical column down the right edge
--- (QuickNav, NAV_W wide, NAV_MARGIN from the edge), from NAV_TOP px down (clear of the
--- settings / crosshair buttons under the minimap, which end ~236 px down on any screen) to
--- NAV_BOTTOM px above the bottom, medallions centred in that span. Everything else is the
+-- (QuickNav, NAV_W wide, NAV_MARGIN from the edge), from NAV_TOP to NAV_BOTTOM of the screen,
+-- medallions spread over that span. (The minimap and its settings / crosshair buttons hide
+-- while the menu is open, HudHider, so nothing up there to keep clear of.) Everything else is the
 -- content area to its left, CONTENT_TOP below the screen's top edge (Roblox's own buttons sit
 -- there). Panels other than the Inventory get PANEL_HEIGHT of it, centred, so they keep roughly
 -- the size they had under the old top row; the Inventory uses all of it.
 local NAV_W = 190
 local NAV_MARGIN = 16
-local NAV_TOP = 256
-local NAV_BOTTOM = 20
+local NAV_TOP = 0.05
+local NAV_BOTTOM = 0.05
 local CONTENT_TOP = 60
 local CONTENT_BOTTOM = 20
 local CONTENT_LEFT = 24
@@ -697,8 +698,8 @@ local function SlidingBody(props: { activeKey: string, direction: number, render
 	currentRef.current = current
 	transitionRef.current = transition
 
-	local outgoingRef = React.useRef(nil :: Frame?)
-	local incomingRef = React.useRef(nil :: Frame?)
+	-- Each tab's wrapper Frame, by key (filled by the ref callbacks below).
+	local framesRef = React.useRef({} :: { [string]: Frame })
 
 	-- Kicks off (or redirects) a slide whenever the reported activeKey actually changes.
 	React.useEffect(function()
@@ -724,15 +725,13 @@ local function SlidingBody(props: { activeKey: string, direction: number, render
 		end
 		local dir = transition.direction
 		local outEnd = UDim2.fromScale(dir > 0 and -1 or 1, 0)
-		local inStart = UDim2.fromScale(dir > 0 and 1 or -1, 0)
-
-		if outgoingRef.current then
-			outgoingRef.current.Position = UDim2.fromScale(0, 0)
-			TweenService:Create(outgoingRef.current, SLIDE_TWEEN, { Position = outEnd }):Play()
+		local outgoing = framesRef.current[transition.fromKey]
+		local incoming = framesRef.current[transition.toKey]
+		if outgoing then
+			TweenService:Create(outgoing, SLIDE_TWEEN, { Position = outEnd }):Play()
 		end
-		if incomingRef.current then
-			incomingRef.current.Position = inStart
-			TweenService:Create(incomingRef.current, SLIDE_TWEEN, { Position = UDim2.fromScale(0, 0) }):Play()
+		if incoming then
+			TweenService:Create(incoming, SLIDE_TWEEN, { Position = UDim2.fromScale(0, 0) }):Play()
 		end
 
 		local toKey = transition.toKey
@@ -752,35 +751,32 @@ local function SlidingBody(props: { activeKey: string, direction: number, render
 		end
 	end, { transition })
 
-	if transition then
-		return e("Frame", {
+	-- One wrapper per tab, KEYED BY THE TAB, in the same parent whether sliding or settled: the
+	-- tab you're leaving keeps its mounted tree through the slide instead of being rebuilt in a
+	-- new wrapper. (Rebuilding it re-ran every panel's fit-to-size from scale 1, which showed as
+	-- one frame of a giant copy of the old tab.) The incoming tab is created already off to the
+	-- side (its starting Position is a prop), so its own first unfitted frame is off-screen.
+	local keys = transition and { transition.fromKey, transition.toKey } or { current }
+	local children: { [string]: any } = {}
+	for _, key in ipairs(keys) do
+		local isIncoming = transition ~= nil and key == transition.toKey
+		children["Tab_" .. key] = e("Frame", {
+			ref = function(rbx)
+				if rbx then framesRef.current[key] = rbx end
+			end,
 			Size = UDim2.fromScale(1, 1),
+			Position = isIncoming and UDim2.fromScale((transition :: any).direction > 0 and 1 or -1, 0) or UDim2.fromScale(0, 0),
 			BackgroundTransparency = 1,
-			ClipsDescendants = true,
 		}, {
-			Outgoing = e("Frame", {
-				ref = outgoingRef,
-				Size = UDim2.fromScale(1, 1),
-				BackgroundTransparency = 1,
-			}, {
-				Content = props.renderBody(transition.fromKey),
-			}),
-			Incoming = e("Frame", {
-				ref = incomingRef,
-				Size = UDim2.fromScale(1, 1),
-				BackgroundTransparency = 1,
-			}, {
-				Content = props.renderBody(transition.toKey),
-			}),
+			Content = props.renderBody(key),
 		})
 	end
 
 	return e("Frame", {
 		Size = UDim2.fromScale(1, 1),
 		BackgroundTransparency = 1,
-	}, {
-		Content = props.renderBody(current),
-	})
+		ClipsDescendants = transition ~= nil,
+	}, children)
 end
 
 local function Inventory(props: { resetKey: number? })
@@ -795,6 +791,10 @@ local function Inventory(props: { resetKey: number? })
 	local direction, setDirection = React.useState(0)
 
 	local function onNavSelect(key: string, dir: number?)
+		-- dir is 0 for the programmatic selects (mount, reset on close): no sound for those.
+		if (dir or 0) ~= 0 then
+			SfxService.PlayEffect("TabSwitch")
+		end
 		setDirection(dir or 0)
 		setSelectedKey(key)
 	end
@@ -821,8 +821,8 @@ local function Inventory(props: { resetKey: number? })
 
 		QuickNavCol = e("Frame", {
 			AnchorPoint = Vector2.new(1, 0),
-			Position = UDim2.new(1, -NAV_MARGIN, 0, NAV_TOP),
-			Size = UDim2.new(0, NAV_W, 1, -(NAV_TOP + NAV_BOTTOM)),
+			Position = UDim2.new(1, -NAV_MARGIN, NAV_TOP, 0),
+			Size = UDim2.new(0, NAV_W, 1 - NAV_TOP - NAV_BOTTOM, 0),
 			BackgroundTransparency = 1,
 			ZIndex = 2,
 		}, {
