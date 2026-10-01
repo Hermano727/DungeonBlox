@@ -10,8 +10,8 @@
 --  Activity (from "Activity >", Back returns):
 --    left   window chips 1H 24H 7D 30D; "This <window>": score + split, kills, runs, drops
 --           by rarity, and the score chart across the window
---    right  "Against your average": score / kills / drops vs the player's average window of
---           the same length (+/- %), then Luck: drops found vs expected per rarity
+--    right  a table: this window vs the player's average window of the same length (score,
+--           kills, runs, drops, +/- %), then the tier's illustration (JournalUI illustration_t<N>)
 --
 --  Data:
 --    totals   profile snapshot, stats.tracking: scoreByTier (total), dungeonScoreByTier,
@@ -46,8 +46,6 @@ local STREAK_HELP = "How many rolls since your last drop of each rarity. The bar
 	.. "a drop is almost certain, so a long streak means one is close."
 local AVERAGE_HELP = "Your avg: what you usually get in a window this long, counting only the windows in "
 	.. "which you played. The last column is how this one compares."
-local LUCK_HELP = "Expected is the exact sum of your odds on every roll in this window, dry-streak boost "
-	.. "included. Finding more than expected means you are running lucky."
 
 local function formatCount(n: number): string
 	local out = tostring(math.max(0, math.floor(n + 0.5)))
@@ -314,25 +312,6 @@ local function CompareRow(props: { label: string, now: number, avg: number?, ord
 	} })
 end
 
-local function luckVerdict(found: number, expected: number): (string, Color3)
-	if expected < 0.05 and found == 0 then return "-", Style.Text.Muted end
-	if found - expected >= 1 and found >= expected * 1.5 then return "lucky", Style.Text.Good end
-	if expected - found >= 1 and found <= expected * 0.5 then return "unlucky", Style.Text.Bad end
-	return "as expected", Style.Text.Muted
-end
-
-local function LuckRow(props: { rarity: string, found: number, expected: number, order: number })
-	local verdict, color = luckVerdict(props.found, props.expected)
-	return TableRow({ order = props.order, children = {
-		Gem = e(Parts.Gem, { rarity = props.rarity, scale = 0.75, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 12, 0.5, 0) }),
-		Name = cell({ col = "label", indent = 30, text = props.rarity, align = Enum.TextXAlignment.Left,
-			font = Style.Font.BodyBold, size = 17, color = Style.Text.Heading }),
-		Found = cell({ col = "a", text = tostring(math.floor(props.found)), font = Style.Font.Number, size = 18, color = Style.Text.Value }),
-		Expected = cell({ col = "b", text = string.format("%.1f", props.expected), size = 17, color = Style.Text.Muted }),
-		Verdict = cell({ col = "c", text = verdict, font = Style.Font.BodyBold, size = 15, color = color }),
-	} })
-end
-
 -- One labelled number in the row under the split bar.
 local function StatBlock(props: { value: number, caption: string, color: Color3?, order: number })
 	return e("Frame", {
@@ -428,6 +407,7 @@ local function Activity(props: { tier: number, window: string, tabs: any, setWin
 	})
 
 	local rightRows: { [string]: any } = {
+		Layout = e("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }),
 		Header = e("Frame", { LayoutOrder = 1, Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1 }, {
 			Columns = e(HeaderRow, { order = 1, a = WINDOW_SHORT[props.window], b = "Your avg" }),
 			Help = e(Parts.HelpIcon, {
@@ -436,25 +416,28 @@ local function Activity(props: { tier: number, window: string, tabs: any, setWin
 		}),
 		Score = e(CompareRow, { label = "Score", now = score, avg = avg and (avg.o + avg.d) or nil, order = 2 }),
 		Kills = e(CompareRow, { label = "Kills", now = cur and cur.k or 0, avg = avg and avg.k or nil, order = 3 }),
-		DropsRow = e(CompareRow, { label = "Drops", now = drops, avg = avg and avgDrops or nil, order = 4 }),
+		Runs = e(CompareRow, { label = "Runs", now = cur and cur.r or 0, avg = avg and avg.r or nil, order = 4 }),
+		DropsRow = e(CompareRow, { label = "Drops", now = drops, avg = avg and avgDrops or nil, order = 5 }),
 		NotEnough = (summary and not avg) and text({
 			text = string.format("Your average shows up after a few more %ss of play.", WINDOW_NOUN[props.window]),
-			wrap = true, size = 14, color = Style.Text.Muted, height = 20, order = 5,
+			wrap = true, size = 14, color = Style.Text.Muted, height = 20, order = 6,
 		}) or nil,
-		Gap = e("Frame", { LayoutOrder = 6, Size = UDim2.new(1, 0, 0, 6), BackgroundTransparency = 1 }),
-		LuckHeading = e(HeadingWithHelp, { text = "Luck", help = LUCK_HELP, order = 7 }),
-		LuckColumns = e(HeaderRow, { order = 8, a = "Found", b = "Expected" }),
 	}
-	for i, rarity in ipairs(PityConfig.RARITIES) do
-		rightRows["Luck" .. rarity] = e(LuckRow, {
-			rarity = rarity,
-			found = cur and (cur.w[i] or 0) or 0,
-			expected = cur and (cur.x[i] or 0) or 0,
-			order = 8 + i,
-		})
-	end
+	-- The rest of the page belongs to the tier's illustration (empty until its art exists).
+	local illustration = Style.Art("illustration_t" .. props.tier)
+	local right = e("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1 }, {
+		Table = e("Frame", { Size = UDim2.new(1, 0, 0, 190), BackgroundTransparency = 1 }, rightRows),
+		Illustration = illustration and e("ImageLabel", {
+			AnchorPoint = Vector2.new(0.5, 1),
+			Position = UDim2.fromScale(0.5, 1),
+			Size = UDim2.new(1, 0, 1, -206),
+			BackgroundTransparency = 1,
+			Image = illustration.Image,
+			ScaleType = Enum.ScaleType.Fit,
+		}) or nil,
+	})
 
-	return e(Book, { tabs = props.tabs, left = left, right = list(4, rightRows) })
+	return e(Book, { tabs = props.tabs, left = left, right = right })
 end
 
 ------------------------------------------------------------------------------------------

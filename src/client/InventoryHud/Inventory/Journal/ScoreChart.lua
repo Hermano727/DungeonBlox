@@ -18,9 +18,20 @@ local e = React.createElement
 local AXIS_W = 40
 local LABEL_H = 18
 
+local TICKS = 5 -- time labels under the chart (first slot, last = "now", evenly between)
+
+-- 12-hour clock in the player's local time: "5 PM" on the hour, "5:05 PM" otherwise;
+-- dates for the day windows ("Sep 28").
 local function timeLabel(t: number, window: string): string
 	if window == "1H" or window == "24H" then
-		return os.date("%H:%M", t) :: string
+		local d = os.date("*t", t) :: any
+		local hour = d.hour % 12
+		if hour == 0 then hour = 12 end
+		local suffix = d.hour < 12 and "AM" or "PM"
+		if d.min == 0 then
+			return ("%d %s"):format(hour, suffix)
+		end
+		return ("%d:%02d %s"):format(hour, d.min, suffix)
 	end
 	return os.date("%b %d", t) :: string
 end
@@ -57,20 +68,26 @@ local function ScoreChart(props: { points: { any }, window: string, Size: UDim2?
 
 	local labels: { [string]: any } = {}
 	if #points > 0 then
-		local picks = { 1, math.ceil(#points / 2), #points }
-		for n, index in ipairs(picks) do
+		-- TICKS slots spread evenly, each label centred under its own bar (the two ends are
+		-- pinned to the chart's edges so they never hang off it).
+		local ticks = math.min(TICKS, #points)
+		for n = 1, ticks do
+			local index = ticks == 1 and #points or (1 + math.floor((n - 1) * (#points - 1) / (ticks - 1) + 0.5))
 			local p = points[index]
+			local x = (index - 0.5) / #points
+			local anchorX = n == 1 and 0 or (n == ticks and 1 or 0.5)
+			if n == 1 then x = 0 elseif n == ticks then x = 1 end
 			labels["x" .. n] = e("TextLabel", {
-				AnchorPoint = Vector2.new(n == 1 and 0 or (n == 2 and 0.5 or 1), 0),
-				Position = UDim2.new(n == 1 and 0 or (n == 2 and 0.5 or 1), 0, 0, 0),
-				Size = UDim2.fromOffset(80, LABEL_H),
+				AnchorPoint = Vector2.new(anchorX, 0),
+				Position = UDim2.new(x, 0, 0, 0),
+				Size = UDim2.fromOffset(70, LABEL_H),
 				BackgroundTransparency = 1,
 				Text = index == #points and "now" or timeLabel(p.t, props.window),
 				FontFace = Style.Font.Body,
-				TextSize = 13,
+				TextSize = 12,
 				TextColor3 = Style.Text.Muted,
 				TextXAlignment = n == 1 and Enum.TextXAlignment.Left
-					or (n == 2 and Enum.TextXAlignment.Center or Enum.TextXAlignment.Right),
+					or (n == ticks and Enum.TextXAlignment.Right or Enum.TextXAlignment.Center),
 			})
 		end
 	end

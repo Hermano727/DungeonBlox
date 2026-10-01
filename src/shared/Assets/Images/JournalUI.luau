@@ -110,6 +110,10 @@ return {
 	icon_loot_score = piece({ Image = "rbxassetid://111981563075790", Aspect = 502 / 458 }), -- coin pouch
 	icon_records    = piece({ Image = "rbxassetid://111678186607517", Aspect = 611 / 384 }), -- sealed scroll
 
+	-- Per-tier page illustration: bottom of the Activity page's right side (LootScorePage).
+	-- Faint ink-and-wash scene on transparent ground so the parchment shows through.
+	illustration_t1 = piece({}),
+
 	-- Batch 4: the Tab menu's top row (QuickNav.lua), same look as the book.
 	nav_medallion = piece({ Image = "rbxassetid://130795045169317", Aspect = 1 }), -- carved ring, empty green recess
 	nav_medallion_selected = piece({ -- brighter ring + warm glow; the ring matches nav_medallion's size

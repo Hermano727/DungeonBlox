@@ -218,8 +218,14 @@ function Parts.Divider(props: { order: number?, width: number? })
 end
 
 -- A circled "?" beside a heading; hovering it shows `text`.
+local TIP_W = 280
+local TIP_CHARS_PER_LINE = 38 -- at 14 px in TIP_W minus padding (Work Sans averages ~6.5 px a glyph)
 function Parts.HelpIcon(props: { text: string, Position: UDim2?, AnchorPoint: Vector2? })
 	local hovered, setHovered = React.useState(false)
+	-- Explicit height: AutomaticSize + TextWrapped under the page's UIScale measured one line
+	-- and cut the rest off.
+	local lines = math.max(1, math.ceil(#props.text / TIP_CHARS_PER_LINE))
+	local tipH = lines * 18 + 16
 	return e("TextButton", {
 		Position = props.Position,
 		AnchorPoint = props.AnchorPoint,
@@ -243,8 +249,7 @@ function Parts.HelpIcon(props: { text: string, Position: UDim2?, AnchorPoint: Ve
 		Tip = hovered and e("TextLabel", {
 			AnchorPoint = Vector2.new(1, 0),
 			Position = UDim2.new(1, 0, 1, 8),
-			Size = UDim2.fromOffset(260, 0),
-			AutomaticSize = Enum.AutomaticSize.Y,
+			Size = UDim2.fromOffset(TIP_W, tipH),
 			BackgroundColor3 = Color3.fromRGB(16, 12, 9),
 			BackgroundTransparency = 0.05,
 			BorderSizePixel = 0,
@@ -254,6 +259,7 @@ function Parts.HelpIcon(props: { text: string, Position: UDim2?, AnchorPoint: Ve
 			TextSize = 14,
 			TextColor3 = Color3.fromRGB(236, 226, 208),
 			TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Top,
 			ZIndex = 50,
 		}, {
 			Corner = e("UICorner", { CornerRadius = UDim.new(0, 5) }),
