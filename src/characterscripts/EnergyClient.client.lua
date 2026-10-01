@@ -235,8 +235,11 @@ end
 ---------------------------------------------------------------------------
 
 local MENU_ANCHOR = Vector2.new(0.5, 0) -- top-center -- hangs off the carousel's own bottom-center anchor
-local MENU_PAD_TOP = 16 -- gap between the carousel's bottom edge and the first bar (HP) -- MUST match HealthClient's own MENU_PAD_TOP
-local MENU_DROP_SCALE = 0.10 -- extra drop, fraction of screen height -- MUST match HealthClient's MENU_DROP_SCALE
+-- MUST match HealthClient's MENU_PAD_TOP / MENU_DROP_SCALE (2026-10-01: both 0, the anchor is
+-- the top of the HP bar). While a menu is open this bar is hidden anyway (HudHider: the energy
+-- GUI isn't an overlay); the position below only matters if that changes.
+local MENU_PAD_TOP = 0
+local MENU_DROP_SCALE = 0
 local MENU_MOVE_TWEEN = TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 local MIRROR_HP_HEIGHT = 15 * 1.33 -- HealthClient's BASE_HEIGHT * HP_SIZE_MULTIPLIER

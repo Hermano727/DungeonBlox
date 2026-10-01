@@ -111,6 +111,8 @@ gui.ResetOnSpawn   = false
 gui.IgnoreGuiInset = true
 gui.DisplayOrder   = 110
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+-- Stays up over full-screen menus (HudHider overlay; tagged before parenting).
+game:GetService("CollectionService"):AddTag(gui, "OverMenus")
 gui.Parent         = playerGui
 
 ---------------------------------------------------------------------------
@@ -431,10 +433,13 @@ potionMountLayout.Parent = potionMount
 ---------------------------------------------------------------------------
 
 local MENU_ANCHOR = Vector2.new(0.5, 0) -- top-center -- hangs off the carousel's own bottom-center anchor
-local MENU_PAD_TOP = 16 -- gap between the carousel's bottom edge and the first bar (HP)
--- Extra drop as a fraction of screen height: the carousel's hover labels/tiles reach below its
--- published anchor, and the cluster overlapped them (2026-09-30). EnergyClient mirrors this.
-local MENU_DROP_SCALE = 0.10
+-- 2026-10-01: the anchor IS the top of the HP bar (the Inventory tab publishes the spot above
+-- the character's head), so no pad or drop any more. EnergyClient mirrors these two.
+local MENU_PAD_TOP = 0
+local MENU_DROP_SCALE = 0
+-- In the menu the energy bar is hidden (HudHider: it isn't an overlay, and you aren't moving),
+-- so hunger + potions sit right under HP instead of under energy's empty slot.
+local MENU_GAP_HP_TO_HUNGER = 14 -- clears the HP bar's ornate border overhang
 local MENU_MOVE_TWEEN = TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 local function setMenuLayout(frame: GuiObject, open: boolean, defaultAnchor: Vector2, defaultPos: UDim2, menuPos: UDim2?)
@@ -483,8 +488,7 @@ local function applyProfileMenusLayout()
 	local hpPos, hungerPos
 	if anchor then
 		local hpY = anchor.Y + MENU_PAD_TOP
-		local energyY = hpY + HP_HEIGHT + GAP_HP_TO_ENERGY -- EnergyClient.client.lua computes this same value
-		local hungerY = energyY + ENERGY_HEIGHT + GAP_ENERGY_TO_HUNGER
+		local hungerY = hpY + HP_HEIGHT + MENU_GAP_HP_TO_HUNGER
 		hpPos = UDim2.new(0, anchor.X, MENU_DROP_SCALE, hpY)
 		hungerPos = UDim2.new(0, anchor.X, MENU_DROP_SCALE, hungerY)
 	end

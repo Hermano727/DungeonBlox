@@ -23,6 +23,7 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local React = require(ReplicatedStorage.Packages.React)
+local ProfileMenusState = require(ReplicatedStorage:WaitForChild("ProfileMenusState"))
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
 local RarityBorder = require(script.Parent:WaitForChild("RarityBorder"))
 local LegendaryGlow = require(script.Parent:WaitForChild("LegendaryGlow"))
@@ -31,33 +32,38 @@ local CharacterViewport = require(script.Parent:WaitForChild("CharacterViewport"
 local Style = require(script.Parent:WaitForChild("Journal"):WaitForChild("Style"))
 local e = React.createElement
 
-local DESIGN = Vector2.new(820, 1010) -- Inventory/init.lua's STAGE_ASPECT mirrors this
-local SOCKET = 120       -- armor + combat sockets
-local TOOL_SOCKET = 96   -- the two profession sockets under the feet
-local PLAQUE_H = 40
+local DESIGN = Vector2.new(840, 1170) -- Inventory/init.lua's STAGE_ASPECT mirrors this
+local SOCKET = 150       -- armor + combat sockets
+local TOOL_SOCKET = 124  -- the two profession sockets under the feet
+local PLAQUE_H = 44
+local ICON_FRACTION = 0.64 -- the item picture, of the socket (the carved ring is the rest)
 local RING_THICKNESS = 4 -- the rarity ring, design px
 
 -- The character: centred and as tall as the column allows, standing on the flagstones (FEET_Y
 -- is where its feet land; the viewport frames the model with 15% headroom, see
--- CharacterViewport FRAME_PADDING). The sockets tuck in around it; the right column starts a
--- row lower so its top socket stays clear of anything hanging at the top of the screen.
-local FIGURE = { x = 220, y = 0, w = 380, h = 900 }
+-- CharacterViewport FRAME_PADDING). Above its head is a band for the HP / hunger cluster:
+-- this component publishes that spot (VITALS_Y, at the figure's centre) as the vitals anchor,
+-- ProfileMenusState.SetCarouselAnchor, so the bars sit over the player. The sockets tuck in
+-- around the figure, the right column centred on the left one.
+local VITALS_Y = 18
+local FIGURE = { x = 225, y = 110, w = 390, h = 900 }
 local FEET_Y = FIGURE.y + FIGURE.h * (1 - 0.15 / 2 / 1.15)
 
-local LEFT_X, RIGHT_X = 95, 725
-local ROWS = { 120, 320, 520, 720 }
-local TOOLS_Y = 920
+local LEFT_X, RIGHT_X = 105, 735
+local LEFT_ROWS = { 250, 450, 650, 850 }
+local RIGHT_ROWS = { 350, 550, 750 }
+local TOOLS_Y = 1060
 
 local SLOTS = {
-	{ id = "Helmet",       label = "Helm",          slot = "Helm",         x = LEFT_X,  y = ROWS[1] },
-	{ id = "Chestplate",   label = "Chest",         slot = "Chest",        x = LEFT_X,  y = ROWS[2] },
-	{ id = "Leggings",     label = "Legs",          slot = "Legs",         x = LEFT_X,  y = ROWS[3] },
-	{ id = "Boots",        label = "Boots",         slot = "Boots",        x = LEFT_X,  y = ROWS[4] },
-	{ id = "Weapon",       label = "Weapon",        slot = "Weapon",       x = RIGHT_X, y = ROWS[2] },
-	{ id = "Shield",       label = "Shield",        slot = "Shield",       x = RIGHT_X, y = ROWS[3] },
-	{ id = "Bow",          label = "Bow",           slot = "Bow",          x = RIGHT_X, y = ROWS[4] },
-	{ id = "Pickaxe",      label = "Pickaxe",       slot = "Pickaxe",      x = 320,     y = TOOLS_Y, small = true },
-	{ id = "FishingSpear", label = "Fishing Spear", slot = "FishingSpear", x = 500,     y = TOOLS_Y, small = true },
+	{ id = "Helmet",       label = "Helm",          slot = "Helm",         x = LEFT_X,  y = LEFT_ROWS[1] },
+	{ id = "Chestplate",   label = "Chest",         slot = "Chest",        x = LEFT_X,  y = LEFT_ROWS[2] },
+	{ id = "Leggings",     label = "Leggings",      slot = "Legs",         x = LEFT_X,  y = LEFT_ROWS[3] },
+	{ id = "Boots",        label = "Boots",         slot = "Boots",        x = LEFT_X,  y = LEFT_ROWS[4] },
+	{ id = "Weapon",       label = "Weapon",        slot = "Weapon",       x = RIGHT_X, y = RIGHT_ROWS[1] },
+	{ id = "Shield",       label = "Shield",        slot = "Shield",       x = RIGHT_X, y = RIGHT_ROWS[2] },
+	{ id = "Bow",          label = "Bow",           slot = "Bow",          x = RIGHT_X, y = RIGHT_ROWS[3] },
+	{ id = "Pickaxe",      label = "Pickaxe",       slot = "Pickaxe",      x = 330,     y = TOOLS_Y, small = true },
+	{ id = "FishingSpear", label = "Fishing Spear", slot = "FishingSpear", x = 510,     y = TOOLS_Y, small = true },
 }
 
 local function padScale(art: any): (UDim2, UDim2)
@@ -112,7 +118,7 @@ local function Socket(props: SocketProps)
 			inner.Icon = e("ImageLabel", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(0.5, 0.5),
-				Size = UDim2.fromScale(0.6, 0.6),
+				Size = UDim2.fromScale(1, 1),
 				BackgroundTransparency = 1,
 				Image = icon,
 				ScaleType = Enum.ScaleType.Fit,
@@ -147,14 +153,14 @@ local function Socket(props: SocketProps)
 		Inner = e("Frame", {
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.fromScale(0.72, 0.72),
+			Size = UDim2.fromScale(ICON_FRACTION, ICON_FRACTION),
 			BackgroundTransparency = 1,
 			ZIndex = 4,
 		}, inner),
 		Plaque = e("ImageLabel", {
 			AnchorPoint = Vector2.new(0.5, 0),
 			Position = UDim2.new(0.5, 0, 1, -6),
-			Size = UDim2.fromOffset(props.small and 190 or 160, PLAQUE_H),
+			Size = UDim2.fromOffset(props.small and 196 or 180, PLAQUE_H),
 			BackgroundTransparency = 1,
 			Image = (Style.Art("nav_plaque") or { Image = "" }).Image,
 			ScaleType = Style.Art("nav_plaque") and Enum.ScaleType.Slice or Enum.ScaleType.Stretch,
@@ -167,7 +173,7 @@ local function Socket(props: SocketProps)
 				BackgroundTransparency = 1,
 				Text = props.label,
 				FontFace = Style.Font.Chrome,
-				TextSize = props.small and 19 or 22,
+				TextSize = props.small and 21 or 24,
 				TextColor3 = hovered and Style.Chrome.Selected or Style.Chrome.Label,
 				ZIndex = 6,
 			}),
@@ -234,6 +240,30 @@ local function PlayerPreview(props: PlayerPreviewProps?)
 		return function() conn:Disconnect() end
 	end, {})
 
+	-- The HP / hunger cluster hangs at the top of the canvas, over the character's head.
+	local canvasRef = React.useRef(nil :: Frame?)
+	React.useEffect(function()
+		local canvas = canvasRef.current
+		if not canvas then return end
+		local function publish()
+			local size = canvas.AbsoluteSize
+			if size.X <= 0 then return end
+			local k = size.X / DESIGN.X -- real px per design px (the UIScale)
+			local pos = canvas.AbsolutePosition
+			ProfileMenusState.SetCarouselAnchor(Vector2.new(
+				pos.X + (FIGURE.x + FIGURE.w / 2) * k,
+				pos.Y + VITALS_Y * k
+			))
+		end
+		publish()
+		local c1 = canvas:GetPropertyChangedSignal("AbsolutePosition"):Connect(publish)
+		local c2 = canvas:GetPropertyChangedSignal("AbsoluteSize"):Connect(publish)
+		return function()
+			c1:Disconnect()
+			c2:Disconnect()
+		end
+	end, {})
+
 	local sockets: { [string]: any } = {}
 	for _, def in ipairs(SLOTS) do
 		local uuid = equipped[def.slot]
@@ -265,6 +295,7 @@ local function PlayerPreview(props: PlayerPreviewProps?)
 		BackgroundTransparency = 1,
 	}, {
 		Canvas = e("Frame", {
+			ref = canvasRef,
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0.5),
 			Size = UDim2.fromOffset(DESIGN.X, DESIGN.Y),

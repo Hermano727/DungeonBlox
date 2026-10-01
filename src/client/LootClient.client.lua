@@ -36,6 +36,8 @@ gui.IgnoreGuiInset = true
 gui.DisplayOrder   = 260
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Enabled        = true
+-- Stays up over full-screen menus (HudHider overlay; tagged before parenting).
+game:GetService("CollectionService"):AddTag(gui, "OverMenus")
 gui.Parent         = playerGui
 
 local stack = Instance.new("Frame", gui)

@@ -60,7 +60,7 @@ end
 local ICON_COUNT = #ICONS
 
 local TILE_MAX = 118         -- px, largest a tile gets (the row fits itself to the header)
-local TILE_GAP = 26          -- px between tiles
+local TILE_GAP = 26          -- MINIMUM px between tiles (the column spreads them further)
 local LABEL_H = PLAQUE and 26 or 22   -- px, the name (on its plaque) under each tile
 local PLAQUE_W = 1.3                  -- plaque width relative to the medallion (wider, like the blueprint)
 local PLAQUE_OVERLAP = 8              -- px the plaque tucks up under the medallion
@@ -229,9 +229,11 @@ local function QuickNav(props: { onSelect: (string, number) -> (), resetKey: num
 		Layout = e("UIListLayout", {
 			FillDirection = Enum.FillDirection.Vertical,
 			HorizontalAlignment = Enum.HorizontalAlignment.Center,
-			VerticalAlignment = Enum.VerticalAlignment.Center,
+			-- Spread over the whole column: the medallions keep their size and the GAPS take the
+			-- slack, so adding a destination only tightens the spacing (tiles shrink only once
+			-- the gaps are down to TILE_GAP, see the size fit above).
+			VerticalFlex = Enum.UIFlexAlignment.SpaceEvenly,
 			SortOrder = Enum.SortOrder.LayoutOrder,
-			Padding = UDim.new(0, TILE_GAP),
 		}),
 	}
 	for i, icon in ipairs(ICONS) do
@@ -252,10 +254,9 @@ local function QuickNav(props: { onSelect: (string, number) -> (), resetKey: num
 	}, {
 		Row = e("Frame", {
 			ref = rowRef,
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.fromOffset(math.floor(tileSize * TILE_W), 0),
-			AutomaticSize = Enum.AutomaticSize.Y,
+			AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.fromScale(0.5, 0),
+			Size = UDim2.new(0, math.floor(tileSize * TILE_W), 1, 0),
 			BackgroundTransparency = 1,
 		}, tiles),
 	})

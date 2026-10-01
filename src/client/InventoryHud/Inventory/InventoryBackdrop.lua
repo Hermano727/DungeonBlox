@@ -4,9 +4,9 @@
 --    e(InventoryBackdrop, { visible = boolean })
 --
 --  It lives in its OWN ScreenGui (portal), DisplayOrder BACKDROP_ORDER, not in the menu's:
---  the menu GUI (ProfileMenusReact, 120) draws above the HP/energy cluster (110) and the
---  hotbar (35), so a full-screen painting inside it would hide both. At 32 it sits above the
---  corner minimap (30) and below everything that should stay readable over it.
+--  the menu GUI (ProfileMenusReact, 120) draws above the HP cluster (110), so a full-screen
+--  painting inside it would hide the vitals. It's a HudHider overlay ("OverMenus"); the rest
+--  of the HUD (minimap, its buttons, XP bars...) is hidden while the Tab menu is open.
 --
 --  The painting follows the game clock (Lighting.ClockTime, driven by SSS/DayNightService):
 --    dawn       5:00 - 10:00
@@ -99,6 +99,8 @@ local function InventoryBackdrop(props: { visible: boolean })
 		screen.DisplayOrder = BACKDROP_ORDER
 		screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 		screen.Enabled = false
+		-- An overlay over the Tab menu (HudHider): the menu hides every untagged HUD.
+		game:GetService("CollectionService"):AddTag(screen, "OverMenus")
 		screen.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
 		return screen
 	end, {})

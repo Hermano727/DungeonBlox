@@ -28,6 +28,11 @@ local Inventory = require(script:WaitForChild("Inventory"))
 local ProfileMenusState = require(ReplicatedStorage:WaitForChild("ProfileMenusState"))
 local InteractionLock = require(ReplicatedStorage:WaitForChild("InteractionLock"))
 local HudVitals = require(ReplicatedStorage:WaitForChild("HudVitals"))
+-- While open, every other HUD hides (minimap + its settings / crosshair buttons, XP bars, party
+-- frames, any future HUD); only GUIs tagged as overlays stay (vitals, centre flashes, loot
+-- banners, the inventory courtyard). Chat and the Roblox core UI are left alone.
+local HudHider = require(script.Parent:WaitForChild("HudHider"))
+local releaseHud: (() -> ())? = nil
 
 -- The three FigBloxUI-imported copies stay as design references but must
 -- never render themselves -- this new ScreenGui is what players see.
@@ -107,8 +112,13 @@ local function setOpen(v: boolean)
 	-- keepVitals: the Inventory tab keeps HP/energy on screen; the OTHER tabs hide them
 	-- (Inventory/init.lua's tab effect, owner "ProfileMenuTab"), cleared here on close.
 	if v then
+		releaseHud = releaseHud or HudHider.Acquire(gui, { keepOverlays = true, keepCore = true })
 		InteractionLock.OpenMenu("Inventory", function() setOpen(false) end, { keepVitals = true })
 	else
+		if releaseHud then
+			releaseHud()
+			releaseHud = nil
+		end
 		InteractionLock.MenuClosed("Inventory")
 		HudVitals.SetHidden("ProfileMenuTab", false)
 	end

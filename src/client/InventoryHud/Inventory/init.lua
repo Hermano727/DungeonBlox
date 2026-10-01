@@ -110,14 +110,10 @@ local PANEL_HEIGHT = 0.86
 -- The Inventory tab (courtyard layout): the character + gear sockets (PlayerPreview) fill the
 -- left of the content area at full height (STAGE_ASPECT = its DESIGN canvas, width / height;
 -- never more than STAGE_MAX_SHARE of the width), the bag (InvSlots) the rest, BAG_GAP after it.
--- The HP / energy / hunger cluster sits at the top of the bag's column: InventoryMain publishes
--- that point through ProfileMenusState.SetCarouselAnchor (HealthClient / EnergyClient place the
--- cluster at anchor.Y + VITALS_PAD_TOP + VITALS_DROP_SCALE of the screen; keep these three in
--- step with them) and the bag starts VITALS_H + VITALS_GAP below it.
-local STAGE_ASPECT = 820 / 1010
+-- The HP / hunger cluster hangs over the character's head: PlayerPreview publishes that spot.
+local STAGE_ASPECT = 840 / 1170
 local STAGE_MAX_SHARE = 0.55
 local BAG_GAP = 40
-local VITALS_PAD_TOP, VITALS_DROP_SCALE, VITALS_H, VITALS_GAP = 16, 0.10, 72, 16
 
 -- Direction-aware slide when switching profilemenu tabs (skills/stats/party/etc, per
 -- request item 4). See SlidingBody below.
@@ -523,7 +519,7 @@ local function InventoryMain()
 	end, {})
 
 	-- Layout from the area's real size: the stage's width follows its height (its shape), the
-	-- bag takes what's left. Also publishes where the vitals go (top of the bag's column).
+	-- bag takes what's left.
 	local layout, setLayout = React.useState({ stageW = 0, bagX = 0 })
 	React.useEffect(function()
 		local container = containerRef.current
@@ -537,15 +533,6 @@ local function InventoryMain()
 				if prev.stageW == stageW and prev.bagX == bagX then return prev end
 				return { stageW = stageW, bagX = bagX }
 			end)
-			local gui = container:FindFirstAncestorWhichIsA("ScreenGui")
-			local screenH = gui and gui.AbsoluteSize.Y or 0
-			if screenH > 0 then
-				local pos = container.AbsolutePosition
-				ProfileMenusState.SetCarouselAnchor(Vector2.new(
-					pos.X + bagX + (size.X - bagX) / 2,
-					pos.Y - VITALS_PAD_TOP - VITALS_DROP_SCALE * screenH
-				))
-			end
 		end
 		measure()
 		local conns = {
@@ -588,10 +575,9 @@ local function InventoryMain()
 					onSlotLeave = onEquipSlotLeave,
 				}),
 			}),
-			-- The vitals hang at the top of this column; the bag fills the rest of it.
 			InvSlotsCol = e("Frame", {
-				Position = UDim2.fromOffset(layout.bagX, VITALS_H + VITALS_GAP),
-				Size = UDim2.new(1, -layout.bagX, 1, -(VITALS_H + VITALS_GAP)),
+				Position = UDim2.fromOffset(layout.bagX, 0),
+				Size = UDim2.new(1, -layout.bagX, 1, 0),
 				BackgroundTransparency = 1,
 			}, {
 				Slots = e(InvSlots, {
