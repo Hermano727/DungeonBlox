@@ -191,7 +191,7 @@ end
 -- Landing
 ------------------------------------------------------------------------------------------
 
-local function Landing(props: { tier: number, tracking: any, tabs: any, onActivity: () -> () })
+local function Landing(props: { tier: number, tracking: any, tabs: any, side: any?, onActivity: () -> () })
 	local reply = useRequest("lootScore")
 	local streaks = reply and reply.streaks
 	local tier = props.tier
@@ -229,7 +229,7 @@ local function Landing(props: { tier: number, tracking: any, tabs: any, onActivi
 		rows[rarity] = e(StreakRow, { rarity = rarity, streak = streak, fill = (streak or 0) / fullAt, order = 1 + i })
 	end
 
-	return e(Book, { tabs = props.tabs, left = left, right = list(14, rows) })
+	return e(Book, { tabs = props.tabs, side = props.side, left = left, right = list(14, rows) })
 end
 
 ------------------------------------------------------------------------------------------
@@ -326,7 +326,7 @@ local function StatBlock(props: { value: number, caption: string, color: Color3?
 	})
 end
 
-local function Activity(props: { tier: number, window: string, tabs: any, setWindow: (string) -> (), onBack: () -> () })
+local function Activity(props: { tier: number, window: string, tabs: any, side: any?, setWindow: (string) -> (), onBack: () -> () })
 	local summary = useRequest("activity", props.tier, props.window)
 	local cur = summary and summary.current
 	local avg = summary and summary.average
@@ -437,14 +437,14 @@ local function Activity(props: { tier: number, window: string, tabs: any, setWin
 		}) or nil,
 	})
 
-	return e(Book, { tabs = props.tabs, left = left, right = right })
+	return e(Book, { tabs = props.tabs, side = props.side, left = left, right = right })
 end
 
 ------------------------------------------------------------------------------------------
 -- Page
 ------------------------------------------------------------------------------------------
 
-local function LootScorePage()
+local function LootScorePage(props: { side: any? })
 	local snapshot = InventoryData.useSnapshot()
 	local view, setView = React.useState("landing")
 	local window, setWindow = React.useState("24H")
@@ -489,11 +489,14 @@ local function LootScorePage()
 
 	if view == "activity" then
 		return e(Activity, {
-			tier = tier, window = window, tabs = tabRow, setWindow = setWindow,
+			tier = tier, window = window, tabs = tabRow, side = props.side, setWindow = setWindow,
 			onBack = function() setView("landing") end,
 		})
 	end
-	return e(Landing, { tier = tier, tracking = tracking, tabs = tabRow, onActivity = function() setView("activity") end })
+	return e(Landing, {
+		tier = tier, tracking = tracking, tabs = tabRow, side = props.side,
+		onActivity = function() setView("activity") end,
+	})
 end
 
 return LootScorePage

@@ -4,7 +4,10 @@
 --  cover's top edge (the tier tabs: they filter BOTH pages, so they belong to the book, not
 --  to one page).
 --
---    e(Book, { tabs = element?, left = element, right = element })
+--    e(Book, { tabs = element?, left = element, right = element, side = element? })
+--
+--  `side` (the Journal sidebar) hangs off the spread's LEFT edge, outside it, so the book
+--  itself stays centred under the Tab menu's top row.
 --
 --  The spread keeps Style.BOOK_ASPECT (about 2:1) at any screen size, capped at
 --  Style.BOOK_MAX, centred in whatever space it's given. Each page's content is laid out on
@@ -75,7 +78,9 @@ local function Page(props: { side: string, content: any })
 	})
 end
 
-local function Book(props: { tabs: any?, left: any, right: any })
+local SIDE_GAP = 22 -- between `side` and the book's cover
+
+local function Book(props: { tabs: any?, left: any, right: any, side: any? })
 	local tabH = props.tabs and Style.TAB_H or 0
 	return e("Frame", {
 		Size = UDim2.fromScale(1, 1),
@@ -89,6 +94,13 @@ local function Book(props: { tabs: any?, left: any, right: any })
 		}, {
 			Aspect = e("UIAspectRatioConstraint", { AspectRatio = Style.BOOK_ASPECT }),
 			Max = e("UISizeConstraint", { MaxSize = Style.BOOK_MAX }),
+
+			Side = props.side and e("Frame", {
+				AnchorPoint = Vector2.new(1, 0),
+				Position = UDim2.new(0, -SIDE_GAP, 0, tabH),
+				Size = UDim2.new(0, Style.SIDEBAR_W, 1, -tabH),
+				BackgroundTransparency = 1,
+			}, { Body = props.side }) or nil,
 
 			Tabs = props.tabs and e("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0),

@@ -278,7 +278,7 @@ local function CategoryCard(props: {
 	})
 end
 
-local function RecordsPage()
+local function RecordsPage(props: { side: any? })
 	local snapshot = InventoryData.useSnapshot()
 
 	local profile = snapshot and snapshot.profile
@@ -327,6 +327,7 @@ local function RecordsPage()
 	end
 
 	return e(Book, {
+		side = props.side,
 		left = e("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1 }, leftCards),
 		right = e("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1 }, rightCards),
 	})
@@ -337,8 +338,9 @@ end
 ------------------------------------------------------------------------------------------
 
 local PAGES = {
-	{ id = "lootScore", label = "Loot Score", iconArt = "icon_loot_score", component = LootScorePage },
-	{ id = "records",   label = "Records",    iconArt = "icon_records",    component = RecordsPage },
+	-- book = true: the page draws a Journal/Book and carries the sidebar on its left edge.
+	{ id = "lootScore", label = "Loot Score", iconArt = "icon_loot_score", component = LootScorePage, book = true },
+	{ id = "records",   label = "Records",    iconArt = "icon_records",    component = RecordsPage, book = true },
 	-- Their top-row glyphs for now (new sidebar icons to come).
 	{ id = "skills",    label = "Skills",     iconArt = "nav_glyph_skills", component = SkillsPanel },
 	{ id = "stats",     label = "Stats",      iconArt = "nav_glyph_stats",  component = StatsPanel },
@@ -359,23 +361,29 @@ local function JournalPanel()
 		if entry.id == pageId then page = entry end
 	end
 
+	local sidebar = e(Sidebar, { pages = PAGES, selected = pageId, onSelect = setPageId })
+	-- Equal margins both sides (the sidebar's width), so the page is centred on the screen,
+	-- under the Tab menu's top row.
+	local margin = Style.SIDEBAR_W + GAP
 	return e("Frame", {
 		Size = UDim2.fromScale(1, 1),
 		BackgroundTransparency = 1,
 	}, {
-		Side = e("Frame", {
+		-- Plain panels: the sidebar sits in the left margin. Book pages carry it themselves
+		-- (Book.side), right against the cover.
+		Side = not page.book and e("Frame", {
 			Size = UDim2.new(0, Style.SIDEBAR_W, 1, -Style.TAB_H),
 			Position = UDim2.fromOffset(0, Style.TAB_H),
 			BackgroundTransparency = 1,
 		}, {
-			Panel = e(Sidebar, { pages = PAGES, selected = pageId, onSelect = setPageId }),
-		}),
+			Panel = sidebar,
+		}) or nil,
 		Page = e("Frame", {
-			Position = UDim2.fromOffset(Style.SIDEBAR_W + GAP, 0),
-			Size = UDim2.new(1, -(Style.SIDEBAR_W + GAP), 1, 0),
+			Position = UDim2.fromOffset(margin, 0),
+			Size = UDim2.new(1, -margin * 2, 1, 0),
 			BackgroundTransparency = 1,
 		}, {
-			Body = e(page.component, { key = page.id }),
+			Body = e(page.component, { key = page.id, side = page.book and sidebar or nil }),
 		}),
 	})
 end

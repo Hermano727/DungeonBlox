@@ -103,7 +103,8 @@ local COLUMN_GAP = 10 -- tighter gap between the preview and slots columns speci
 -- stacked on top of each other) -- each is a shift off its own original position, not off the
 -- other's shifted position. Both are still eyeballed estimates -- check visually and nudge
 -- again if either under- or overshoots.
-local QUICKNAV_UP_SHIFT = -0.17
+local QUICKNAV_UP_SHIFT = -0.17 -- no longer used for the row itself; see NAV_TOP
+local NAV_TOP = 8 -- px from the top of the screen to the top of the nav row
 local CONTENT_UP_SHIFT = -0.08
 
 -- Direction-aware slide when switching profilemenu tabs (skills/stats/party/etc, per
@@ -771,7 +772,10 @@ local function Inventory(props: { resetKey: number? })
 	-- screen" shift -- see QUICKNAV_UP_SHIFT/CONTENT_UP_SHIFT above. The two shifts are
 	-- independent, not stacked: contentY's scale is CONTENT_UP_SHIFT on its own, not
 	-- QUICKNAV_UP_SHIFT + CONTENT_UP_SHIFT.
-	local quickNavY = UDim2.new(0, 0, QUICKNAV_UP_SHIFT, GAP)
+	-- The row sits NAV_TOP px below the SCREEN's top edge: this frame is 86% of the screen and
+	-- centred, so the screen top is at -0.07 / 0.86 of its height. (A plain % shift clipped the
+	-- medallions off the top once QUICKNAV_H shrank.)
+	local quickNavY = UDim2.new(0, 0, -0.07 / 0.86, NAV_TOP)
 	local contentY = UDim2.new(0, 0, CONTENT_UP_SHIFT, GAP + QUICKNAV_H + GAP)
 
 	return e("Frame", {
