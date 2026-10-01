@@ -129,4 +129,40 @@ return {
 	nav_glyph_journal     = piece({ Image = "rbxassetid://99968572591327",  Aspect = 345 / 260 }), -- open book
 	nav_glyph_hearthstone = piece({ Image = "rbxassetid://78158006215872",  Aspect = 276 / 299 }), -- hearthstone rune
 	nav_glyph_party       = piece({ Image = "rbxassetid://133527886675350", Aspect = 332 / 271 }), -- three people
+
+	-- Stats page (2026-09-30). Category ribbons hang off the book's right edge; the vine card
+	-- frame holds the portrait and the weapon cards; fx_* are the stat / effect row icons.
+	-- Not made yet (components fall back): attribute glyphs, fx_bleeding, fx_blinding.
+	ribbon = piece({ Image = "rbxassetid://71185611413897", Aspect = 445 / 722 }), -- notch on the right edge: never 9-sliced
+	ribbon_selected = piece({ Image = "rbxassetid://113107004121855", Aspect = 458 / 752, Pad = { 1, 20, 14, 26 }, Width = 458 }),
+	card_frame = piece({ -- bronze frame, vines on the corners, EMPTY inside (9-slice); vines reach ~215 px
+		Image = "rbxassetid://73383604392715", SliceCenter = Rect.new(215, 275, 809, 455), SliceScale = 0.3, Aspect = 1024 / 750,
+	}),
+	stats_backdrop = piece({ Image = "rbxassetid://89283189407106", Aspect = 1024 / 768 }), -- painted courtyard behind the portrait
+	icon_stats = piece({ Image = "rbxassetid://99426945678481", Aspect = 587 / 626 }),
+	icon_cat_overview = piece({ Image = "rbxassetid://114756755504191", Aspect = 264 / 340 }),
+	icon_cat_defense = piece({ Image = "rbxassetid://127237297391062", Aspect = 305 / 389 }),
+	icon_cat_melee = piece({ Image = "rbxassetid://139067913230305", Aspect = 392 / 375 }),
+	icon_cat_ranged = piece({ Image = "rbxassetid://121094809926277", Aspect = 373 / 379 }),
+	icon_cat_mount = piece({ Image = "rbxassetid://94637238500839", Aspect = 364 / 390 }),
+	fx_critical = piece({ Image = "rbxassetid://105216896046627", Aspect = 297 / 336 }),
+	fx_execute = piece({ Image = "rbxassetid://88045605342609", Aspect = 292 / 337 }),
+	fx_pierce = piece({ Image = "rbxassetid://78764352736124", Aspect = 369 / 315 }),
+	fx_crushing = piece({ Image = "rbxassetid://127322791304818", Aspect = 347 / 320 }),
+	fx_shatter = piece({ Image = "rbxassetid://126219560343735", Aspect = 282 / 308 }),
+	fx_cleave = piece({ Image = "rbxassetid://103086142568057", Aspect = 349 / 313 }),
+	fx_lifesteal = piece({ Image = "rbxassetid://110826516371269", Aspect = 538 / 444 }),
+	fx_vsmon = piece({ Image = "rbxassetid://130281120502675", Aspect = 456 / 570 }),
+	fx_vsply = piece({ Image = "rbxassetid://72893358912609", Aspect = 581 / 497 }),
+	fx_elemental = piece({ Image = "rbxassetid://127037531403488", Aspect = 331 / 502 }),
+	fx_slowness = piece({ Image = "rbxassetid://126449399955037", Aspect = 360 / 308 }),
+	fx_health = piece({ Image = "rbxassetid://123868161242566", Aspect = 263 / 257 }),
+	fx_hpregen = piece({ Image = "rbxassetid://97315209898915", Aspect = 285 / 250 }),
+	fx_energy = piece({ Image = "rbxassetid://124810855408482", Aspect = 243 / 336 }),
+	fx_armor = piece({ Image = "rbxassetid://105625528851710", Aspect = 372 / 311 }),
+	fx_block = piece({ Image = "rbxassetid://93668380299607", Aspect = 299 / 311 }),
+	fx_coinfind = piece({ Image = "rbxassetid://108170715481607", Aspect = 597 / 471 }),
+	fx_bleeding = piece({}),
+	fx_blinding = piece({}),
+	attr_str = piece({}), attr_int = piece({}), attr_dex = piece({}), attr_vit = piece({}),
 }

@@ -4,10 +4,12 @@
 --  cover's top edge (the tier tabs: they filter BOTH pages, so they belong to the book, not
 --  to one page).
 --
---    e(Book, { tabs = element?, left = element, right = element, side = element? })
+--    e(Book, { tabs = element?, left = element, right = element, side = element?, ribbons = element? })
 --
 --  `side` (the Journal sidebar) hangs off the spread's LEFT edge, outside it, so the book
---  itself stays centred under the Tab menu's top row.
+--  itself stays centred under the Tab menu's top row. `ribbons` (the Stats page's category
+--  bookmarks) hang off the RIGHT edge, tucked under the cover: give it a vertical stack, it
+--  gets a column Style.RIBBON_W wide (a share of the book's width, so it scales with it).
 --
 --  The spread keeps Style.BOOK_ASPECT (about 2:1) at any screen size, capped at
 --  Style.BOOK_MAX, centred in whatever space it's given. Each page's content is laid out on
@@ -80,7 +82,7 @@ end
 
 local SIDE_GAP = 22 -- between `side` and the book's cover
 
-local function Book(props: { tabs: any?, left: any, right: any, side: any? })
+local function Book(props: { tabs: any?, left: any, right: any, side: any?, ribbons: any? })
 	local tabH = props.tabs and Style.TAB_H or 0
 	return e("Frame", {
 		Size = UDim2.fromScale(1, 1),
@@ -101,6 +103,14 @@ local function Book(props: { tabs: any?, left: any, right: any, side: any? })
 				Size = UDim2.new(0, Style.SIDEBAR_W, 1, -tabH),
 				BackgroundTransparency = 1,
 			}, { Body = props.side }) or nil,
+
+			-- ZIndex 0: behind the cover, so the tucked-in end of each ribbon disappears under it.
+			Ribbons = props.ribbons and e("Frame", {
+				Position = UDim2.new(1 - Style.RIBBON_W * Style.RIBBON_TUCK, 0, 0, tabH + 46),
+				Size = UDim2.new(Style.RIBBON_W, 0, 1, -(tabH + 92)),
+				BackgroundTransparency = 1,
+				ZIndex = 0,
+			}, { Stack = props.ribbons }) or nil,
 
 			Tabs = props.tabs and e("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0),

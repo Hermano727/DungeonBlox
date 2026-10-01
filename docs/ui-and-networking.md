@@ -18,7 +18,7 @@ The newer React-lua UI — Inventory/Skills/Stats/Hearthstone/Party tabs and the
 
 - `QuickNav.lua` — quick-nav icon carousel (tab switcher) + hover tooltip. `SIZE_MULTIPLIER` scales the whole carousel's icons/backing in one place.
 - `Inventory/init.lua` — tab content area (`ContentArea`); `QUICKNAV_H`/`QUICKNAV_UP_SHIFT`/`CONTENT_UP_SHIFT` control vertical layout of the carousel + content stack.
-- `PanelShell.lua` — shared wrapper every tab panel (`PartyPanel`, `StatsPanel`, `HearthstonePanel`, the inventory tab) renders through and fills; a layout symptom (gap, wrong size) shared across multiple tabs is almost always one fix in `Inventory/init.lua`'s `ContentArea` sizing, not a per-panel bug.
+- `PanelShell.lua` — shared wrapper every tab panel (`PartyPanel`, `SkillsPanel`, `HearthstonePanel`, the inventory tab) renders through and fills; a layout symptom (gap, wrong size) shared across multiple tabs is almost always one fix in `Inventory/init.lua`'s `ContentArea` sizing, not a per-panel bug.
 - `RS/ProfileMenusState.lua` — open/closed state + the carousel's live screen-position broadcast (see below).
 - `src/client/XpHud/XpHud.luau` — separate: Combat/Mining/Fishing XP bars + the kill orb-burst effect, tuned via constants at the top of the file (`BURST_ORB_COUNT`, `BURST_SPREAD_X/Y`, `BURST_CONVERGE_TIME`, `FLASH_*`).
 
@@ -28,9 +28,15 @@ The newer React-lua UI — Inventory/Skills/Stats/Hearthstone/Party tabs and the
 
 ## Journal (Tab menu -> Journal)
 
-- **Layout:** `Journal/Sidebar` (top-level pages) beside `Journal/Book` (leather cover, two pages, spine, bookmark tabs on the top edge). A page is a component that renders a `Book`; register it in `JournalPanel.lua`'s `PAGES`.
+- **Layout:** `Journal/Sidebar` (top-level pages: Stats, Skills, Loot Score, Records; the first opens by default) beside `Journal/Book` (leather cover, two pages, spine, bookmark tabs on the top edge, optional `ribbons` on the right edge). A page is a component that renders a `Book`; register it in `JournalPanel.lua`'s `PAGES`.
 - **Parts:** `Journal/Parts` has `ArtFrame`, `ChromeButton`, `Heading`, `Divider`, `HelpIcon`, `Gem`, `BarTrough` and `SplitBar`, plus `Journal/ScoreChart`. Each draws its art from `RS/Assets/Images/JournalUI` when uploaded, else a flat stand-in of the same size.
 - **Colours:** only `Journal/Style` picks them. Once `page_paper` art exists, the pages switch to dark ink text.
+- **Stats** (`StatsPage.lua`), combat stats only, one ribbon per category:
+  - Overview: rotatable portrait (`CharacterViewport` with `rotatable`), STR / INT / DEX / VIT medallions (the one boosting the current weapon is lit), and a summary whose rows jump to their ribbon.
+  - Defense (HP, regen, armor as % less damage, block vs its 30% cap, per-slot gear table), Melee / Ranged (the Weapon / Bow slot's weapon "currently equipped", damage per hit, its effects explained), Mount (best saddle vs sprint; "Show on map" pins the Animal Trainer).
+  - All numbers come from `RS/StatsSheet.Compute(snapshot)`, which mirrors the combat maths (`DamageService`, `MobCombat.armorSubstatMultiplier`). Display only: it never feeds combat. New live stat or effect: add it there (and an `EXPLAIN` line), not in the page.
+  - Every number has a hover tip saying where it comes from.
+- **Opening the world map from a menu:** `RS/WorldMapRequest.ShowAt(position, label)` opens the M map centred on that spot with a pin. NPC positions: `WorldMapRequest.NpcPosition(npcType)`, published by `SSS/NpcLocations` from the `NPC` tag.
 - **Loot Score** (`LootScorePage.lua`):
   - The landing spread is all-time: score, overworld / dungeon split, runs, dry streaks.
   - "Activity >" goes one level deeper: windows 1H / 24H / 7D / 30D, drops by rarity, score chart, comparison with your average window, and luck (drops found vs expected).

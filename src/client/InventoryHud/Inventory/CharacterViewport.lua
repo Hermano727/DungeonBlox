@@ -21,6 +21,7 @@
 --  signature (see equipSignature below), never on a RenderStepped/Heartbeat loop. The
 --  only per-frame cost is the engine advancing one looped track on one skinned mesh.
 local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local React = require(ReplicatedStorage.Packages.React)
 local e = React.createElement
@@ -44,7 +45,11 @@ export type CharacterViewportProps = {
 	size: UDim2,
 	position: UDim2,
 	zIndex: number?,
+	-- Drag (left mouse) across the portrait to turn the character (the Journal's Stats page).
+	rotatable: boolean?,
 }
+
+local DRAG_DEG_PER_PX = 0.6
 
 -- Sorted "slot=uuid,slot=uuid" string. A plain-string useEffect dependency, same pattern
 -- as SlidingBody's { props.activeKey } in init.lua -- fires on mount and again only when
@@ -102,7 +107,16 @@ local function cleanClone(clone: Model)
 	end
 end
 
-local function buildCamera(viewport: ViewportFrame, clone: Model): Camera
+-- Where buildCamera put the camera, so a drag can orbit it: centre, distance, and the
+-- front-facing direction the yaw is measured from.
+type Orbit = { center: Vector3, distance: number, front: Vector3 }
+
+local function placeCamera(camera: Camera, orbit: Orbit, yawDeg: number)
+	local look = CFrame.Angles(0, math.rad(yawDeg), 0):VectorToWorldSpace(orbit.front)
+	camera.CFrame = CFrame.lookAt(orbit.center + look * orbit.distance, orbit.center)
+end
+
+local function buildCamera(viewport: ViewportFrame, clone: Model): (Camera, Orbit)
 	local cframe, size = clone:GetBoundingBox()
 	local distance = (size.Y / 2) / math.tan(math.rad(FOV / 2)) * FRAME_PADDING
 
@@ -116,13 +130,13 @@ local function buildCamera(viewport: ViewportFrame, clone: Model): Camera
 	-- time can't tip the camera above or below the character.
 	local flat = Vector3.new(lookVector.X, 0, lookVector.Z)
 	lookVector = if flat.Magnitude > 1e-3 then flat.Unit else Vector3.new(0, 0, -1)
-	lookVector = CFrame.Angles(0, math.rad(PREVIEW_YAW_DEG), 0):VectorToWorldSpace(lookVector)
+	local orbit: Orbit = { center = cframe.Position, distance = distance, front = lookVector }
 
 	local camera = Instance.new("Camera")
 	camera.FieldOfView = FOV
 	-- The camera must sit in FRONT of the character (same side their face points
 	-- toward, i.e. + lookVector) and look back at them, or it frames their back.
-	camera.CFrame = CFrame.lookAt(cframe.Position + lookVector * distance, cframe.Position)
+	placeCamera(camera, orbit, PREVIEW_YAW_DEG)
 	camera.Parent = viewport
 
 	viewport.Ambient = Color3.fromRGB(140, 140, 140)
@@ -130,7 +144,7 @@ local function buildCamera(viewport: ViewportFrame, clone: Model): Camera
 	viewport.LightDirection = Vector3.new(-0.5, -1, -0.3)
 	viewport.CurrentCamera = camera
 
-	return camera
+	return camera, orbit
 end
 
 -- Loops the Unarmed idle on the clone's own Animator (cloned along with its Humanoid).
@@ -164,6 +178,8 @@ local function CharacterViewport(props: CharacterViewportProps)
 	local worldModelRef = React.useRef(nil :: WorldModel?)
 	local cloneRef = React.useRef(nil :: Model?)
 	local cameraRef = React.useRef(nil :: Camera?)
+	local orbitRef = React.useRef(nil :: Orbit?)
+	local yawRef = React.useRef(PREVIEW_YAW_DEG)
 
 	local signature = equipSignature(props.equipped)
 
@@ -225,7 +241,9 @@ local function CharacterViewport(props: CharacterViewportProps)
 			clone.Parent = worldModel
 			cloneRef.current = clone
 
-			cameraRef.current = buildCamera(viewport, clone)
+			local camera, orbit = buildCamera(viewport, clone)
+			cameraRef.current, orbitRef.current = camera, orbit
+			placeCamera(camera, orbit, yawRef.current) -- keep the angle the player turned it to
 
 			-- Parent before loading: the Animator needs to be in the WorldModel to drive
 			-- the bones. Stays hidden until the clip reports a Length (i.e. has loaded
@@ -250,6 +268,39 @@ local function CharacterViewport(props: CharacterViewportProps)
 		return teardown
 	end, { signature :: any })
 
+	-- Drag to turn: press on the portrait, then follow the mouse anywhere until release.
+	React.useEffect(function()
+		local viewport = viewportRef.current
+		if not props.rotatable or not viewport then
+			return
+		end
+		local dragging = false
+		local lastX = 0
+		local began = viewport.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				dragging, lastX = true, input.Position.X
+			end
+		end)
+		local moved = UserInputService.InputChanged:Connect(function(input)
+			if not dragging then return end
+			if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
+			local dx = input.Position.X - lastX
+			lastX = input.Position.X
+			yawRef.current -= dx * DRAG_DEG_PER_PX
+			if cameraRef.current and orbitRef.current then
+				placeCamera(cameraRef.current, orbitRef.current, yawRef.current)
+			end
+		end)
+		local ended = UserInputService.InputEnded:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = false
+			end
+		end)
+		return function()
+			began:Disconnect(); moved:Disconnect(); ended:Disconnect()
+		end
+	end, { props.rotatable == true })
+
 	return e("ViewportFrame", {
 		ref = viewportRef,
 		Size = props.size,
@@ -257,6 +308,7 @@ local function CharacterViewport(props: CharacterViewportProps)
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		ZIndex = props.zIndex or 1,
+		Active = props.rotatable == true, -- receive the press that starts a drag
 	}, {
 		World = e("WorldModel", { ref = worldModelRef }),
 	})

@@ -1,15 +1,16 @@
 --!strict
 --  JournalPanel -- the "Journal" QuickNav destination: the Sidebar (Journal/Sidebar, the
 --  top-level pages) beside the open book (Journal/Book) the current page draws itself in.
---    Loot Score  (default) per-tier score, dry streaks, and the Activity view -- LootScorePage.lua
+--    Stats       (default) combat stats by category, ribbons on the book's edge -- StatsPage.lua
+--    Skills      SkillsPanel, unchanged (moved here from the Tab menu's top row 2026-09-30);
+--                still draws its own panel, not a book (its revamp is next)
+--    Loot Score  per-tier score, dry streaks, and the Activity view -- LootScorePage.lua
 --    Records     lifetime grind totals: Combat on the left page, Mining + Fishing on the right
---    Skills      SkillsPanel, unchanged (moved here from the Tab menu's top row 2026-09-30)
---    Stats       StatsPanel, unchanged (same move); both still draw their own panel, not a book
 --  New page: a component that renders a Journal/Book, plus one entry in PAGES below.
 --
 --  Records page notes:
 --
---  Layout is deliberately NOT the label-left/value-right list StatsPanel uses
+--  Layout is deliberately NOT the label-left/value-right list the old StatsPanel used
 --  (per direct request). Each system gets its own bordered card with an icon
 --  badge, its skill level, and a row of big-number stat tiles -- so a system's
 --  numbers read as a group at a glance instead of dissolving into one long
@@ -32,7 +33,7 @@ local InventoryData = require(script.Parent:WaitForChild("InventoryData"))
 local DungeonMenuNet = require(script.Parent.Parent.Parent:WaitForChild("DungeonMenuNet"))
 local LootScorePage = require(script.Parent:WaitForChild("LootScorePage"))
 local SkillsPanel = require(script.Parent:WaitForChild("SkillsPanel"))
-local StatsPanel = require(script.Parent:WaitForChild("StatsPanel"))
+local StatsPage = require(script.Parent:WaitForChild("StatsPage"))
 local JournalParts = script.Parent:WaitForChild("Journal")
 local Book = require(JournalParts:WaitForChild("Book"))
 local Sidebar = require(JournalParts:WaitForChild("Sidebar"))
@@ -339,11 +340,11 @@ end
 
 local PAGES = {
 	-- book = true: the page draws a Journal/Book and carries the sidebar on its left edge.
-	{ id = "lootScore", label = "Loot Score", iconArt = "icon_loot_score", component = LootScorePage, book = true },
-	{ id = "records",   label = "Records",    iconArt = "icon_records",    component = RecordsPage, book = true },
-	-- Their top-row glyphs for now (new sidebar icons to come).
-	{ id = "skills",    label = "Skills",     iconArt = "nav_glyph_skills", component = SkillsPanel },
-	{ id = "stats",     label = "Stats",      iconArt = "nav_glyph_stats",  component = StatsPanel },
+	-- The first entry is the page the Journal opens on.
+	{ id = "stats",     label = "Stats",      iconArt = "icon_stats",       component = StatsPage, book = true },
+	{ id = "skills",    label = "Skills",     iconArt = "nav_glyph_skills", component = SkillsPanel }, -- top-row glyph until its revamp
+	{ id = "lootScore", label = "Loot Score", iconArt = "icon_loot_score",  component = LootScorePage, book = true },
+	{ id = "records",   label = "Records",    iconArt = "icon_records",     component = RecordsPage, book = true },
 }
 local GAP = 22
 

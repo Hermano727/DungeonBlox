@@ -30,6 +30,7 @@ local Keys = require(ReplicatedStorage:WaitForChild("KeybindConfig"))
 local MenuMouse = require(ReplicatedStorage:WaitForChild("CursorUtils"))
 local QuickNav = require(ReplicatedStorage:WaitForChild("HudQuickNav"))
 local InteractionLock = require(ReplicatedStorage:WaitForChild("InteractionLock"))
+local WorldMapRequest = require(ReplicatedStorage:WaitForChild("WorldMapRequest"))
 local LOCK_OWNER = "WorldMap"
 local MapView = require(script:WaitForChild("MapView"))
 local DiscoveryPeek = require(script:WaitForChild("DiscoveryPeek"))
@@ -490,6 +491,41 @@ end
 local isOpen = false
 local bigScale = 2
 local panX, panZ          -- map cell at the centre of the expanded view (nil = follow player)
+local pin                 -- { x, z } in map cells while a WorldMapRequest pin is shown
+
+-- The pin another screen asked for (WorldMapRequest.ShowAt): a marker + its label, drawn
+-- over the expanded map until it closes.
+local pinMarker = Instance.new("Frame")
+pinMarker.Name = "RequestPin"
+pinMarker.AnchorPoint = Vector2.new(.5, .5)
+pinMarker.Size = UDim2.fromOffset(14, 14)
+pinMarker.Rotation = 45
+pinMarker.BackgroundColor3 = Color3.fromRGB(214, 172, 84)
+pinMarker.BorderSizePixel = 0
+pinMarker.Visible = false
+pinMarker.ZIndex = 12
+pinMarker.Parent = bigView.clip
+stroke(pinMarker, Color3.fromRGB(20, 16, 12), 2)
+local pinLabel = Instance.new("TextLabel")
+pinLabel.Name = "RequestPinLabel"
+pinLabel.AnchorPoint = Vector2.new(.5, 1)
+pinLabel.Size = UDim2.fromOffset(0, 22)
+pinLabel.AutomaticSize = Enum.AutomaticSize.X
+pinLabel.BackgroundColor3 = PANEL
+pinLabel.BackgroundTransparency = .1
+pinLabel.BorderSizePixel = 0
+pinLabel.Font = Enum.Font.GothamBold
+pinLabel.TextSize = 14
+pinLabel.TextColor3 = TEXT
+pinLabel.Visible = false
+pinLabel.ZIndex = 12
+pinLabel.Parent = bigView.clip
+stroke(pinLabel, EDGE, 1)
+do
+	local pad = Instance.new("UIPadding")
+	pad.PaddingLeft, pad.PaddingRight = UDim.new(0, 8), UDim.new(0, 8)
+	pad.Parent = pinLabel
+end
 local dragging, dragFrom, dragPan
 
 local function fitScale()
@@ -520,9 +556,23 @@ local function setOpen(open)
 		MenuMouse.acquire()
 	else
 		dragging = false
+		pin = nil
+		pinMarker.Visible, pinLabel.Visible = false, false
 		MenuMouse.release()
 	end
 end
+
+-- Another screen (the Journal's "Show on map") asks for a spot: open centred on it, pinned.
+WorldMapRequest.Listen(function(position, label)
+	if not bounds then return end
+	setOpen(true)
+	if not isOpen then return end -- refused (another blocking overlay is up)
+	pin = { x = position.X / CELL, z = position.Z / CELL }
+	panX, panZ = pin.x, pin.z
+	pinLabel.Text = label or ""
+	pinLabel.Visible = (label or "") ~= ""
+	pinMarker.Visible = true
+end)
 
 -- Another blocking overlay took over (a station, a cutscene lock): close the map.
 InteractionLock.Subscribe(function(locked)
@@ -617,7 +667,14 @@ RunService.RenderStepped:Connect(function()
 	if inWorld then
 		miniView:Update(px, pz, px, pz, look)
 		if isOpen then
-			bigView:Update(panX or px, panZ or pz, px, pz, look)
+			local cx, cz = panX or px, panZ or pz
+			bigView:Update(cx, cz, px, pz, look)
+			if pin then
+				local s = bigView.scale
+				local at = UDim2.new(.5, (pin.x - cx) * s, .5, (pin.z - cz) * s)
+				pinMarker.Position = at
+				pinLabel.Position = at + UDim2.fromOffset(0, -14)
+			end
 		end
 	end
 end)

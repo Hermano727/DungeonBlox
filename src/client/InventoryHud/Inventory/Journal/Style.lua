@@ -90,5 +90,9 @@ Style.PAGE_PAD = 34 -- inside each page, before content
 -- Sized to the tallest page (Activity, ~440) so nothing scales down more than it must.
 Style.PAGE_DESIGN = Vector2.new(480, 440)
 Style.TAB_H = 34    -- bookmark tabs standing on the book's top edge
+-- The Stats page's category ribbons on the book's right edge: width as a share of the book's
+-- width, and how much of that width tucks under the cover.
+Style.RIBBON_W = 0.052
+Style.RIBBON_TUCK = 0.3
 
 return Style
