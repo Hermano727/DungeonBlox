@@ -16,6 +16,7 @@ local ROW_H = 50
 local PAD = 18
 
 local function Sidebar(props: { pages: { any }, selected: string, onSelect: (string) -> () })
+	local panelArt = Style.Art("sidebar_panel")
 	local rows: { [string]: any } = {
 		Layout = e("UIListLayout", { Padding = UDim.new(0, 12), SortOrder = Enum.SortOrder.LayoutOrder }),
 	}
@@ -27,9 +28,11 @@ local function Sidebar(props: { pages: { any }, selected: string, onSelect: (str
 			art = "sidebar_row",
 			artSelected = "sidebar_row_selected",
 			icon = iconArt and iconArt.Image or nil,
+			iconSize = 27,
+			iconInset = 24, -- clear of the plaque's bronze end cap
 			Size = UDim2.new(1, 0, 0, ROW_H),
 			LayoutOrder = i,
-			textSize = 18,
+			textSize = 16,
 			onClick = function() props.onSelect(page.id) end,
 		})
 	end
@@ -39,6 +42,12 @@ local function Sidebar(props: { pages: { any }, selected: string, onSelect: (str
 		flat = { color = Style.Flat.Sidebar, edge = Style.Flat.Edge, edgeTransparency = 0.25, corner = 8 },
 		Size = UDim2.fromScale(1, 1),
 		children = {
+			-- The panel art keeps its painted shape (top-aligned beside the book) rather than
+			-- stretching to the book's height: no seams through the vine, no squashed caps.
+			Aspect = panelArt and e("UIAspectRatioConstraint", {
+				AspectRatio = panelArt.Aspect,
+				DominantAxis = Enum.DominantAxis.Width,
+			}) or nil,
 			Vines = vines and e("ImageLabel", {
 				Position = UDim2.fromOffset(0, 0),
 				Size = UDim2.fromScale(1, 1),

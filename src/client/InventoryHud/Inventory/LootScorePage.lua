@@ -44,8 +44,8 @@ local WINDOW_NOUN = { ["1H"] = "hour", ["24H"] = "day", ["7D"] = "week", ["30D"]
 
 local STREAK_HELP = "How many rolls since your last drop of each rarity. The bar fills toward the point where "
 	.. "a drop is almost certain, so a long streak means one is close."
-local AVERAGE_HELP = "Compared with your average window of the same length, counting only the windows in "
-	.. "which you played."
+local AVERAGE_HELP = "Your avg: what you usually get in a window this long, counting only the windows in "
+	.. "which you played. The last column is how this one compares."
 local LUCK_HELP = "Expected is the exact sum of your odds on every roll in this window, dry-streak boost "
 	.. "included. Finding more than expected means you are running lucky."
 
@@ -238,6 +238,60 @@ end
 -- Activity
 ------------------------------------------------------------------------------------------
 
+local WINDOW_SHORT = { ["1H"] = "Last hour", ["24H"] = "Last 24h", ["7D"] = "Last 7d", ["30D"] = "Last 30d" }
+local CHART_TITLE = {
+	["1H"] = "Score every 5 minutes", ["24H"] = "Score per hour", ["7D"] = "Score per day", ["30D"] = "Score per day",
+}
+
+-- The two right-page tables share one column grid (design px; the canvas is 480 wide).
+-- Numbers are right-aligned inside their column so they line up down the table.
+local COL = {
+	label = { x = 0, w = 150 },
+	a = { x = 150, w = 100 },
+	b = { x = 262, w = 100 },
+	c = { x = 372, w = 108 },
+}
+
+local function cell(props: any)
+	local col = COL[props.col]
+	return e("TextLabel", {
+		Position = UDim2.fromOffset(col.x + (props.indent or 0), 0),
+		Size = UDim2.new(0, col.w - (props.indent or 0), 1, 0),
+		BackgroundTransparency = 1,
+		Text = props.text,
+		RichText = props.rich == true,
+		FontFace = props.font or Style.Font.Body,
+		TextSize = props.size or 17,
+		TextColor3 = props.color or Style.Text.Body,
+		TextXAlignment = props.align or Enum.TextXAlignment.Right,
+	})
+end
+
+local function TableRow(props: { order: number, height: number?, children: { [string]: any } })
+	return e("Frame", {
+		LayoutOrder = props.order,
+		Size = UDim2.new(1, 0, 0, props.height or 32),
+		BackgroundTransparency = 1,
+	}, props.children)
+end
+
+-- Small muted column headers above a table ("Last 24h   Your avg").
+local function HeaderRow(props: { order: number, a: string, b: string, c: string? })
+	return TableRow({ order = props.order, height = 22, children = {
+		A = cell({ col = "a", text = props.a, size = 14, color = Style.Text.Muted, font = Style.Font.BodyBold }),
+		B = cell({ col = "b", text = props.b, size = 14, color = Style.Text.Muted, font = Style.Font.BodyBold }),
+		C = props.c and cell({ col = "c", text = props.c, size = 14, color = Style.Text.Muted, font = Style.Font.BodyBold }) or nil,
+		Rule = e("Frame", {
+			AnchorPoint = Vector2.new(0, 1),
+			Position = UDim2.fromScale(0, 1),
+			Size = UDim2.new(1, 0, 0, 1),
+			BackgroundColor3 = Style.Text.Muted,
+			BackgroundTransparency = 0.6,
+			BorderSizePixel = 0,
+		}),
+	} })
+end
+
 local function percentText(now: number, avg: number): (string, Color3)
 	if avg <= 0 then
 		return now > 0 and "new" or "-", Style.Text.Muted
@@ -249,24 +303,15 @@ local function percentText(now: number, avg: number): (string, Color3)
 end
 
 local function CompareRow(props: { label: string, now: number, avg: number?, order: number })
-	local pct, pctColor = "-", Style.Text.Muted
+	local pct, pctColor = "", Style.Text.Muted
 	if props.avg then pct, pctColor = percentText(props.now, props.avg) end
-	return e("Frame", {
-		LayoutOrder = props.order,
-		Size = UDim2.new(1, 0, 0, 34),
-		BackgroundTransparency = 1,
-	}, {
-		Label = text({ text = props.label, font = Style.Font.BodyBold, size = 18, color = Style.Text.Heading,
-			align = Enum.TextXAlignment.Left, Size = UDim2.new(0.34, 0, 1, 0) }),
-		Values = text({
-			text = ("%s  <font transparency=\"0.4\">vs %s</font>"):format(formatCount(props.now),
-				props.avg and formatCount(props.avg) or "-"),
-			rich = true, size = 17, color = Style.Text.Body, align = Enum.TextXAlignment.Left,
-			Position = UDim2.fromScale(0.34, 0), Size = UDim2.new(0.44, 0, 1, 0),
-		}),
-		Pct = text({ text = pct, font = Style.Font.BodyBold, size = 18, color = pctColor, align = Enum.TextXAlignment.Right,
-			AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.new(0.22, 0, 1, 0) }),
-	})
+	return TableRow({ order = props.order, children = {
+		Label = cell({ col = "label", text = props.label, align = Enum.TextXAlignment.Left,
+			font = Style.Font.BodyBold, size = 18, color = Style.Text.Heading }),
+		Now = cell({ col = "a", text = formatCount(props.now), font = Style.Font.Number, size = 19, color = Style.Text.Value }),
+		Avg = cell({ col = "b", text = props.avg and formatCount(props.avg) or "-", size = 17, color = Style.Text.Muted }),
+		Pct = cell({ col = "c", text = pct, font = Style.Font.BodyBold, size = 17, color = pctColor }),
+	} })
 end
 
 local function luckVerdict(found: number, expected: number): (string, Color3)
@@ -278,21 +323,27 @@ end
 
 local function LuckRow(props: { rarity: string, found: number, expected: number, order: number })
 	local verdict, color = luckVerdict(props.found, props.expected)
+	return TableRow({ order = props.order, children = {
+		Gem = e(Parts.Gem, { rarity = props.rarity, scale = 0.75, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 12, 0.5, 0) }),
+		Name = cell({ col = "label", indent = 30, text = props.rarity, align = Enum.TextXAlignment.Left,
+			font = Style.Font.BodyBold, size = 17, color = Style.Text.Heading }),
+		Found = cell({ col = "a", text = tostring(math.floor(props.found)), font = Style.Font.Number, size = 18, color = Style.Text.Value }),
+		Expected = cell({ col = "b", text = string.format("%.1f", props.expected), size = 17, color = Style.Text.Muted }),
+		Verdict = cell({ col = "c", text = verdict, font = Style.Font.BodyBold, size = 15, color = color }),
+	} })
+end
+
+-- One labelled number in the row under the split bar.
+local function StatBlock(props: { value: number, caption: string, color: Color3?, order: number })
 	return e("Frame", {
 		LayoutOrder = props.order,
-		Size = UDim2.new(1, 0, 0, 34),
+		Size = UDim2.new(0.25, -6, 1, 0),
 		BackgroundTransparency = 1,
 	}, {
-		Gem = e(Parts.Gem, { rarity = props.rarity, scale = 0.8, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 14, 0.5, 0) }),
-		Name = text({ text = props.rarity, font = Style.Font.BodyBold, size = 17, color = Style.Text.Heading,
-			align = Enum.TextXAlignment.Left, Position = UDim2.fromOffset(34, 0), Size = UDim2.new(0, 110, 1, 0) }),
-		Numbers = text({
-			text = ("%d found  <font transparency=\"0.4\">/ %.1f expected</font>"):format(math.floor(props.found), props.expected),
-			rich = true, size = 16, color = Style.Text.Body, align = Enum.TextXAlignment.Left,
-			Position = UDim2.fromOffset(148, 0), Size = UDim2.new(1, -148 - 100, 1, 0),
-		}),
-		Verdict = text({ text = verdict, font = Style.Font.BodyBold, size = 16, color = color, align = Enum.TextXAlignment.Right,
-			AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.new(0, 100, 1, 0) }),
+		Value = text({ text = formatCount(props.value), font = Style.Font.Number, size = 21,
+			color = props.color or Style.Text.Value, height = 24 }),
+		Caption = text({ text = props.caption, size = 13, color = Style.Text.Muted, height = 16,
+			Position = UDim2.fromOffset(0, 25) }),
 	})
 end
 
@@ -304,6 +355,8 @@ local function Activity(props: { tier: number, window: string, tabs: any, setWin
 	if cur then for i = 1, 5 do drops += cur.w[i] or 0 end end
 	if avg then for i = 1, 5 do avgDrops += avg.w[i] or 0 end end
 	local score = cur and ((cur.o or 0) + (cur.d or 0)) or 0
+	local moss = Style.OnPaper and Color3.fromRGB(62, 84, 40) or Color3.fromRGB(150, 176, 112)
+	local iron = Style.OnPaper and Color3.fromRGB(62, 68, 80) or Color3.fromRGB(150, 160, 178)
 
 	local chips: { [string]: any } = {
 		Layout = e("UIListLayout", {
@@ -326,66 +379,82 @@ local function Activity(props: { tier: number, window: string, tabs: any, setWin
 			FillDirection = Enum.FillDirection.Horizontal,
 			HorizontalAlignment = Enum.HorizontalAlignment.Center,
 			VerticalAlignment = Enum.VerticalAlignment.Center,
-			Padding = UDim.new(0, 18),
+			Padding = UDim.new(0, 14),
 			SortOrder = Enum.SortOrder.LayoutOrder,
 		}),
+		Label = text({ text = "Drops", font = Style.Font.BodyBold, size = 15, color = Style.Text.Muted,
+			Size = UDim2.fromOffset(52, 32), order = 0, align = Enum.TextXAlignment.Left }),
 	}
 	for i, rarity in ipairs(PityConfig.RARITIES) do
-		dropGems[rarity] = e("Frame", { LayoutOrder = i, Size = UDim2.fromOffset(58, 34), BackgroundTransparency = 1 }, {
-			Gem = e(Parts.Gem, { rarity = rarity, scale = 0.85, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.fromScale(0, 0.5) }),
-			Count = text({ text = cur and tostring(cur.w[i] or 0) or "-", font = Style.Font.Number, size = 20,
+		dropGems[rarity] = e("Frame", { LayoutOrder = i, Size = UDim2.fromOffset(56, 32), BackgroundTransparency = 1 }, {
+			Gem = e(Parts.Gem, { rarity = rarity, scale = 0.8, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.fromScale(0, 0.5) }),
+			Count = text({ text = cur and tostring(cur.w[i] or 0) or "-", font = Style.Font.Number, size = 18,
 				color = Style.Text.Value, align = Enum.TextXAlignment.Right, Size = UDim2.fromScale(1, 1) }),
 		})
 	end
 
-	local left = list(8, {
+	local muted = Style.Text.Muted:ToHex()
+	local left = list(7, {
 		Chips = e("Frame", { LayoutOrder = 1, Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1 }, chips),
-		Heading = e(Parts.Heading, { text = WINDOW_TITLE[props.window], size = 28, order = 2, height = 36 }),
-		Score = text({ text = cur and formatCount(score) or "...", font = Style.Font.Number, size = 44,
-			color = Style.Text.Value, height = 50, order = 3 }),
-		Split = e(Parts.SplitBar, { a = cur and cur.o or 0, b = cur and cur.d or 0, height = 16, order = 4 }),
-		Line = text({
-			text = cur and ("%s overworld  /  %s dungeon  /  %s kills  /  %s runs"):format(
-				formatCount(cur.o or 0), formatCount(cur.d or 0), formatCount(cur.k or 0), formatCount(cur.r or 0)) or "",
-			size = 15, color = Style.Text.Muted, height = 20, order = 5,
+		Heading = e(Parts.Heading, { text = WINDOW_TITLE[props.window], size = 27, order = 2, height = 34 }),
+		Score = text({
+			text = cur and string.format('%s <font size="17" color="#%s">score</font>', formatCount(score), muted) or "...",
+			rich = true, font = Style.Font.Number, size = 42, color = Style.Text.Value, height = 46, order = 3,
 		}),
-		Drops = e("Frame", { LayoutOrder = 6, Size = UDim2.new(1, 0, 0, 36), BackgroundTransparency = 1 }, dropGems),
+		Split = e(Parts.SplitBar, { a = cur and cur.o or 0, b = cur and cur.d or 0, height = 14, order = 4 }),
+		Stats = e("Frame", { LayoutOrder = 5, Size = UDim2.new(1, 0, 0, 44), BackgroundTransparency = 1 }, {
+			Layout = e("UIListLayout", {
+				FillDirection = Enum.FillDirection.Horizontal,
+				HorizontalAlignment = Enum.HorizontalAlignment.Center,
+				Padding = UDim.new(0, 8),
+				SortOrder = Enum.SortOrder.LayoutOrder,
+			}),
+			Overworld = e(StatBlock, { value = cur and cur.o or 0, caption = "overworld", color = moss, order = 1 }),
+			Dungeon = e(StatBlock, { value = cur and cur.d or 0, caption = "dungeon", color = iron, order = 2 }),
+			Kills = e(StatBlock, { value = cur and cur.k or 0, caption = "kills", order = 3 }),
+			Runs = e(StatBlock, { value = cur and cur.r or 0, caption = "runs", order = 4 }),
+		}),
+		Drops = e("Frame", { LayoutOrder = 6, Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1 }, dropGems),
+		ChartTitle = text({ text = CHART_TITLE[props.window], font = Style.Font.BodyBold, size = 14,
+			color = Style.Text.Muted, align = Enum.TextXAlignment.Left, height = 18, order = 7 }),
 		Chart = e(ScoreChart, {
 			points = summary and summary.chart or {}, window = props.window,
-			Size = UDim2.new(1, 0, 0, 140), LayoutOrder = 7,
+			Size = UDim2.new(1, 0, 0, 108), LayoutOrder = 8,
 		}),
 		Back = e(Parts.ChromeButton, {
-			text = "<  Back", art = "chip", Size = UDim2.new(0.45, 0, 0, 38), LayoutOrder = 8, textSize = 17,
+			text = "<  Back", art = "chip", Size = UDim2.new(0.42, 0, 0, 36), LayoutOrder = 9, textSize = 17,
 			onClick = props.onBack,
 		}),
 	})
 
 	local rightRows: { [string]: any } = {
-		Heading = e(HeadingWithHelp, { text = "Against Your Average", help = AVERAGE_HELP, order = 1 }),
-		Divider = e(Parts.Divider, { order = 2 }),
+		Header = e("Frame", { LayoutOrder = 1, Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1 }, {
+			Columns = e(HeaderRow, { order = 1, a = WINDOW_SHORT[props.window], b = "Your avg" }),
+			Help = e(Parts.HelpIcon, {
+				text = AVERAGE_HELP, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0),
+			}),
+		}),
+		Score = e(CompareRow, { label = "Score", now = score, avg = avg and (avg.o + avg.d) or nil, order = 2 }),
+		Kills = e(CompareRow, { label = "Kills", now = cur and cur.k or 0, avg = avg and avg.k or nil, order = 3 }),
+		DropsRow = e(CompareRow, { label = "Drops", now = drops, avg = avg and avgDrops or nil, order = 4 }),
+		NotEnough = (summary and not avg) and text({
+			text = string.format("Your average shows up after a few more %ss of play.", WINDOW_NOUN[props.window]),
+			wrap = true, size = 14, color = Style.Text.Muted, height = 20, order = 5,
+		}) or nil,
+		Gap = e("Frame", { LayoutOrder = 6, Size = UDim2.new(1, 0, 0, 6), BackgroundTransparency = 1 }),
+		LuckHeading = e(HeadingWithHelp, { text = "Luck", help = LUCK_HELP, order = 7 }),
+		LuckColumns = e(HeaderRow, { order = 8, a = "Found", b = "Expected" }),
 	}
-	if summary and not avg then
-		rightRows.NotEnough = text({
-			text = ("Not enough history yet. Play across a few more %ss to compare."):format(WINDOW_NOUN[props.window]),
-			wrap = true, size = 16, color = Style.Text.Muted, height = 44, order = 3,
-		})
-	else
-		rightRows.Score = e(CompareRow, { label = "Score", now = score, avg = avg and (avg.o + avg.d) or nil, order = 3 })
-		rightRows.Kills = e(CompareRow, { label = "Kills", now = cur and cur.k or 0, avg = avg and avg.k or nil, order = 4 })
-		rightRows.DropsRow = e(CompareRow, { label = "Drops", now = drops, avg = avg and avgDrops or nil, order = 5 })
-	end
-	rightRows.LuckHeading = e(HeadingWithHelp, { text = "Luck", help = LUCK_HELP, order = 10 })
-	rightRows.LuckDivider = e(Parts.Divider, { order = 11 })
 	for i, rarity in ipairs(PityConfig.RARITIES) do
 		rightRows["Luck" .. rarity] = e(LuckRow, {
 			rarity = rarity,
 			found = cur and (cur.w[i] or 0) or 0,
 			expected = cur and (cur.x[i] or 0) or 0,
-			order = 11 + i,
+			order = 8 + i,
 		})
 	end
 
-	return e(Book, { tabs = props.tabs, left = left, right = list(6, rightRows) })
+	return e(Book, { tabs = props.tabs, left = left, right = list(4, rightRows) })
 end
 
 ------------------------------------------------------------------------------------------

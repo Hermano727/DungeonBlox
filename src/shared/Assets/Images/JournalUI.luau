@@ -51,12 +51,11 @@ return {
 		Image = "rbxassetid://84929950628081",
 		Aspect = 1024 / 1022,
 	}),
-	-- tall leather/wood panel beside the book, vine down its left side (9-slice); caps ~100 px.
-	-- SliceScale ~ sidebar width / 389 so the vine keeps its width; only the middle stretches.
+	-- tall leather/wood panel beside the book, vine down its left side. NOT 9-sliced: the vine
+	-- is leafy its whole length, so any slice line cut through leaves and showed a seam. The
+	-- Sidebar keeps this exact shape (UIAspectRatioConstraint) instead of stretching it.
 	sidebar_panel = piece({
 		Image = "rbxassetid://112313288107144",
-		SliceCenter = Rect.new(100, 105, 289, 919),
-		SliceScale = 0.49,
 		Aspect = 389 / 1024,
 	}),
 	sidebar_vines = piece({}), -- unused: the vine is painted into sidebar_panel

@@ -100,7 +100,8 @@ function Parts.ChromeButton(props: any)
 	local flatColor = selected and Style.Flat.PlateOn or Style.Flat.Plate
 	local textColor = disabled and Style.Chrome.Dim
 		or (selected and Style.Chrome.Selected or (hovered and Style.Chrome.Selected or Style.Chrome.Label))
-	local iconSize = props.icon and 22 or 0
+	local iconSize = props.icon and (props.iconSize or 22) or 0
+	local iconInset = props.iconInset or 14
 	return e("TextButton", {
 		Size = props.Size,
 		Position = props.Position,
@@ -130,7 +131,7 @@ function Parts.ChromeButton(props: any)
 		}),
 		Icon = props.icon and e("ImageLabel", {
 			AnchorPoint = Vector2.new(0, 0.5),
-			Position = UDim2.new(0, 14, 0.5, 0),
+			Position = UDim2.new(0, iconInset, 0.5, 0),
 			Size = UDim2.fromOffset(iconSize, iconSize),
 			BackgroundTransparency = 1,
 			Image = props.icon,
@@ -139,8 +140,8 @@ function Parts.ChromeButton(props: any)
 			ZIndex = 2,
 		}) or nil,
 		Label = e("TextLabel", {
-			Position = UDim2.fromOffset(props.icon and (14 + iconSize + 8) or 0, 0),
-			Size = UDim2.new(1, props.icon and -(14 + iconSize + 8) or 0, 1, 0),
+			Position = UDim2.fromOffset(props.icon and (iconInset + iconSize + 8) or 0, 0),
+			Size = UDim2.new(1, props.icon and -(iconInset + iconSize + 8) or 0, 1, 0),
 			BackgroundTransparency = 1,
 			Text = props.text,
 			FontFace = Style.Font.Chrome,
