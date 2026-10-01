@@ -3,6 +3,11 @@
 --  (Player Preview / Inv Slots / quick nav) plus the four icon-triggered
 --  sub-panels. Everything lives under this ONE component (per request).
 --
+--  Layout now (2026-10-01): full screen. QuickNav is a vertical column on the right edge
+--  (QuickNavCol), the selected destination fills ContentArea to its left. The Inventory tab
+--  is the courtyard (InventoryBackdrop behind, the character + sockets left, the bag right,
+--  the vitals above the bag). The history below describes the older top-row header.
+--
 --  Navigation (reworked 2026-09-13 into a persistent header, per direct
 --  request + reference screenshots): QuickNav now sits at the very top of
 --  this component, ABOVE whatever's showing below it, instead of being
@@ -28,6 +33,7 @@ local React = require(ReplicatedStorage.Packages.React)
 local e = React.createElement
 
 local PlayerPreview    = require(script:WaitForChild("PlayerPreview"))
+local InventoryBackdrop = require(script:WaitForChild("InventoryBackdrop"))
 local InvSlots         = require(script:WaitForChild("InvSlots"))
 local QuickNav         = require(script:WaitForChild("QuickNav"))
 local JournalPanel     = require(script:WaitForChild("JournalPanel"))
@@ -85,27 +91,33 @@ local PANELS: { [string]: any } = {
 	party = PartyPanel,
 }
 
--- QuickNav's icons/backing scale with SIZE_MULTIPLIER in QuickNav.lua (first tripled, then
--- dialed back to 2x same day after an actual playtest ran too big -- see that file), so this
--- row's own height tracks it 1:1 (110 * SIZE_MULTIPLIER) so the carousel never gets clipped by
--- its own container.
--- 2026-09-30: the carousel became a fixed row (QuickNav.lua) whose tiles top out at ~140 px,
--- so the old 220 wasted height every tab's content could use (the Journal's book especially).
-local QUICKNAV_H = 160
-local GAP = 20 -- a bit more breathing room than the raw Figma export had
-local COLUMN_GAP = 10 -- tighter gap between the preview and slots columns specifically, per request
+-- Screen layout (2026-10-01): the destinations are a vertical column down the right edge
+-- (QuickNav, NAV_W wide, NAV_MARGIN from the edge), from NAV_TOP px down (clear of the
+-- settings / crosshair buttons under the minimap, which end ~236 px down on any screen) to
+-- NAV_BOTTOM px above the bottom, medallions centred in that span. Everything else is the
+-- content area to its left, CONTENT_TOP below the screen's top edge (Roblox's own buttons sit
+-- there). Panels other than the Inventory get PANEL_HEIGHT of it, centred, so they keep roughly
+-- the size they had under the old top row; the Inventory uses all of it.
+local NAV_W = 190
+local NAV_MARGIN = 16
+local NAV_TOP = 256
+local NAV_BOTTOM = 20
+local CONTENT_TOP = 60
+local CONTENT_BOTTOM = 20
+local CONTENT_LEFT = 24
+local PANEL_HEIGHT = 0.86
 
--- Per request, then increased further same day after a playtest showed "still a ton of space
--- at the top": move the quicknav row up (as a % of screen height, so it tracks with screen
--- size), and move whatever profilemenu content is currently selected up too, to free room for
--- it (the inventory bag/equip screen especially -- reported as "way too small" with the
--- original, smaller shift). The two shifts are deliberately independent (NOT compounded /
--- stacked on top of each other) -- each is a shift off its own original position, not off the
--- other's shifted position. Both are still eyeballed estimates -- check visually and nudge
--- again if either under- or overshoots.
-local QUICKNAV_UP_SHIFT = -0.17 -- no longer used for the row itself; see NAV_TOP
-local NAV_TOP = 8 -- px from the top of the screen to the top of the nav row
-local CONTENT_UP_SHIFT = -0.08
+-- The Inventory tab (courtyard layout): the character + gear sockets (PlayerPreview) fill the
+-- left of the content area at full height (STAGE_ASPECT = its DESIGN canvas, width / height;
+-- never more than STAGE_MAX_SHARE of the width), the bag (InvSlots) the rest, BAG_GAP after it.
+-- The HP / energy / hunger cluster sits at the top of the bag's column: InventoryMain publishes
+-- that point through ProfileMenusState.SetCarouselAnchor (HealthClient / EnergyClient place the
+-- cluster at anchor.Y + VITALS_PAD_TOP + VITALS_DROP_SCALE of the screen; keep these three in
+-- step with them) and the bag starts VITALS_H + VITALS_GAP below it.
+local STAGE_ASPECT = 820 / 1010
+local STAGE_MAX_SHARE = 0.55
+local BAG_GAP = 40
+local VITALS_PAD_TOP, VITALS_DROP_SCALE, VITALS_H, VITALS_GAP = 16, 0.10, 72, 16
 
 -- Direction-aware slide when switching profilemenu tabs (skills/stats/party/etc, per
 -- request item 4). See SlidingBody below.
@@ -510,6 +522,41 @@ local function InventoryMain()
 		end
 	end, {})
 
+	-- Layout from the area's real size: the stage's width follows its height (its shape), the
+	-- bag takes what's left. Also publishes where the vitals go (top of the bag's column).
+	local layout, setLayout = React.useState({ stageW = 0, bagX = 0 })
+	React.useEffect(function()
+		local container = containerRef.current
+		if not container then return end
+		local function measure()
+			local size = container.AbsoluteSize
+			if size.X <= 0 or size.Y <= 0 then return end
+			local stageW = math.floor(math.min(size.Y * STAGE_ASPECT, size.X * STAGE_MAX_SHARE))
+			local bagX = stageW + BAG_GAP
+			setLayout(function(prev)
+				if prev.stageW == stageW and prev.bagX == bagX then return prev end
+				return { stageW = stageW, bagX = bagX }
+			end)
+			local gui = container:FindFirstAncestorWhichIsA("ScreenGui")
+			local screenH = gui and gui.AbsoluteSize.Y or 0
+			if screenH > 0 then
+				local pos = container.AbsolutePosition
+				ProfileMenusState.SetCarouselAnchor(Vector2.new(
+					pos.X + bagX + (size.X - bagX) / 2,
+					pos.Y - VITALS_PAD_TOP - VITALS_DROP_SCALE * screenH
+				))
+			end
+		end
+		measure()
+		local conns = {
+			container:GetPropertyChangedSignal("AbsoluteSize"):Connect(measure),
+			container:GetPropertyChangedSignal("AbsolutePosition"):Connect(measure),
+		}
+		return function()
+			for _, c in ipairs(conns) do c:Disconnect() end
+		end
+	end, {})
+
 	-- QuickNav moved out of this component entirely (2026-09-13, per direct request -- see
 	-- the persistent-header rework in this file's header comment) -- it now lives once in
 	-- the outer Inventory component, above whatever this renders. TopRow fills this whole
@@ -526,7 +573,7 @@ local function InventoryMain()
 			ZIndex = 2,
 		}, {
 			PlayerPreviewCol = e("Frame", {
-				Size = UDim2.new(0.46, -COLUMN_GAP / 2, 1, 0),
+				Size = UDim2.new(0, layout.stageW, 1, 0),
 				BackgroundTransparency = 1,
 			}, {
 				Preview = e(PlayerPreview, {
@@ -541,9 +588,10 @@ local function InventoryMain()
 					onSlotLeave = onEquipSlotLeave,
 				}),
 			}),
+			-- The vitals hang at the top of this column; the bag fills the rest of it.
 			InvSlotsCol = e("Frame", {
-				Size = UDim2.new(0.54, -COLUMN_GAP / 2, 1, 0),
-				Position = UDim2.new(0.46, COLUMN_GAP / 2, 0, 0),
+				Position = UDim2.fromOffset(layout.bagX, VITALS_H + VITALS_GAP),
+				Size = UDim2.new(1, -layout.bagX, 1, -(VITALS_H + VITALS_GAP)),
 				BackgroundTransparency = 1,
 			}, {
 				Slots = e(InvSlots, {
@@ -620,7 +668,14 @@ local function renderBody(key: string)
 		return e(InventoryMain)
 	end
 	local PanelComponent = PANELS[key]
-	return PanelComponent and e(PanelComponent, {})
+	return PanelComponent and e("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromScale(1, PANEL_HEIGHT),
+		BackgroundTransparency = 1,
+	}, {
+		Panel = e(PanelComponent, {}),
+	})
 end
 
 --[[
@@ -760,46 +815,37 @@ local function Inventory(props: { resetKey: number? })
 
 	-- Vitals (HP/energy/hunger) stay up on the Inventory tab only; every other tab hides them
 	-- (RS/HudVitals). Re-evaluated on open/close too, since reopening may land on this same key.
+	-- The courtyard behind the Inventory tab (InventoryBackdrop) shows only while the menu is
+	-- open on that tab.
+	local menuOpen, setMenuOpen = React.useState(ProfileMenusState.IsOpen())
 	React.useEffect(function()
 		local function apply()
 			HudVitals.SetHidden("ProfileMenuTab", ProfileMenusState.IsOpen() and selectedKey ~= "inventory")
+			setMenuOpen(ProfileMenusState.IsOpen())
 		end
 		apply()
 		return ProfileMenusState.Subscribe(apply)
 	end, { selectedKey })
 
-	-- Full UDim2s (not plain offset numbers) so the scale component can carry the "% of
-	-- screen" shift -- see QUICKNAV_UP_SHIFT/CONTENT_UP_SHIFT above. The two shifts are
-	-- independent, not stacked: contentY's scale is CONTENT_UP_SHIFT on its own, not
-	-- QUICKNAV_UP_SHIFT + CONTENT_UP_SHIFT.
-	-- The row sits NAV_TOP px below the SCREEN's top edge: this frame is 86% of the screen and
-	-- centred, so the screen top is at -0.07 / 0.86 of its height. (A plain % shift clipped the
-	-- medallions off the top once QUICKNAV_H shrank.)
-	local quickNavY = UDim2.new(0, 0, -0.07 / 0.86, NAV_TOP)
-	local contentY = UDim2.new(0, 0, CONTENT_UP_SHIFT, GAP + QUICKNAV_H + GAP)
-
 	return e("Frame", {
-		-- "at least 80% of the screen" per request -- 86% both axes.
-		Size = UDim2.fromScale(0.86, 0.86),
-		Position = UDim2.fromScale(0.5, 0.5),
-		AnchorPoint = Vector2.new(0.5, 0.5),
+		Size = UDim2.fromScale(1, 1),
 		BackgroundTransparency = 1,
 	}, {
-		QuickNavRow = e("Frame", {
-			Position = quickNavY,
-			Size = UDim2.new(1, 0, 0, QUICKNAV_H),
+		Backdrop = e(InventoryBackdrop, { visible = menuOpen and selectedKey == "inventory" }),
+
+		QuickNavCol = e("Frame", {
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, -NAV_MARGIN, 0, NAV_TOP),
+			Size = UDim2.new(0, NAV_W, 1, -(NAV_TOP + NAV_BOTTOM)),
 			BackgroundTransparency = 1,
 			ZIndex = 2,
 		}, {
 			Nav = e(QuickNav, { onSelect = onNavSelect, resetKey = props.resetKey }),
 		}),
 
-		-- Size grows by -CONTENT_UP_SHIFT (a positive amount, since the shift is negative) so
-		-- the bottom edge stays put at the parent's 100% mark while the top edge moves up by
-		-- CONTENT_UP_SHIFT -- same "shift up without changing where it ends" trick as QuickNavRow.
 		ContentArea = e("Frame", {
-			Position = contentY,
-			Size = UDim2.new(1, 0, 1 - CONTENT_UP_SHIFT, -(GAP + QUICKNAV_H + GAP)),
+			Position = UDim2.fromOffset(CONTENT_LEFT, CONTENT_TOP),
+			Size = UDim2.new(1, -(CONTENT_LEFT + NAV_W + NAV_MARGIN * 2), 1, -(CONTENT_TOP + CONTENT_BOTTOM)),
 			BackgroundTransparency = 1,
 		}, {
 			Body = e(SlidingBody, {

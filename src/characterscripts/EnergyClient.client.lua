@@ -225,7 +225,8 @@ end
 -- Inventory/Skills/Stats/Hearthstone/Party panel is open. First pass (2026-09-13) anchored
 -- this to the screen's top-right corner; per direct follow-up feedback the same day, this now
 -- hangs directly beneath the QuickNav carousel instead, reading its live position from
--- ProfileMenusState.GetCarouselAnchor() (published by QuickNav.lua) rather than a fixed
+-- ProfileMenusState.GetCarouselAnchor() (published by the Inventory tab's InventoryMain since
+-- 2026-10-01, the top-centre of the bag's column) rather than a fixed
 -- corner offset -- see HealthClient.client.lua's matching section and ProfileMenusState's doc
 -- comment for the full reasoning. This bar's Y target has to land right below HP's in that
 -- stack, so MIRROR_HP_HEIGHT/

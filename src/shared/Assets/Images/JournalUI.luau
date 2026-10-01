@@ -165,4 +165,16 @@ return {
 	fx_bleeding = piece({}),
 	fx_blinding = piece({}),
 	attr_str = piece({}), attr_int = piece({}), attr_dex = piece({}), attr_vit = piece({}),
+
+	-- Inventory screen (2026-09-30): the courtyard behind it, one painting per time of day, each
+	-- cropped to 16:9 (1448 x 814) and split into a left and right half so it stays sharp under
+	-- Roblox's 1024 px cap. A missing time of day falls back to afternoon (InventoryBackdrop).
+	inv_bg_afternoon_l = piece({ Image = "rbxassetid://80040945544472", Aspect = 724 / 814 }),
+	inv_bg_afternoon_r = piece({ Image = "rbxassetid://91176209285068", Aspect = 724 / 814 }),
+	inv_bg_dawn_l = piece({ Image = "rbxassetid://84134259013436", Aspect = 724 / 814 }),
+	inv_bg_dawn_r = piece({ Image = "rbxassetid://110288317957035", Aspect = 724 / 814 }),
+	inv_bg_dusk_l = piece({ Image = "rbxassetid://129827599883883", Aspect = 724 / 814 }),
+	inv_bg_dusk_r = piece({ Image = "rbxassetid://117036561663142", Aspect = 724 / 814 }),
+	-- Soft oval under the character's feet (generated, not painted), tinted black in code.
+	inv_shadow = piece({ Image = "rbxassetid://91887743415057", Aspect = 4 }),
 }

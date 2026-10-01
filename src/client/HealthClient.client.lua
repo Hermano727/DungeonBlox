@@ -420,7 +420,8 @@ potionMountLayout.Parent = potionMount
 -- top-right corner with hand-copied constants; per direct follow-up feedback the same day
 -- ("move ... to be resting beneath the carousel directly in the middle, wherever the
 -- carousel's new position will be") this now reads the carousel's ACTUAL live position from
--- ProfileMenusState.GetCarouselAnchor() (published by QuickNav.lua itself, in real screen
+-- ProfileMenusState.GetCarouselAnchor() (since 2026-10-01 published by the Inventory tab,
+-- InventoryMain: the top-centre of the bag's column, in real screen
 -- pixels) instead of re-deriving it by hand -- see that module's doc comment for why a fixed
 -- top-right offset couldn't just be nudged to fit instead. Stacked downward in the SAME
 -- relative order as bottom-center (Elite Pity, HP, Energy, Hunger+Potions) -- Energy's own Y

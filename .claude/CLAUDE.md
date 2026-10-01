@@ -185,16 +185,16 @@ Gotchas: never restore `SwingAnimId` tool attribute (reverts on play-stop, becom
 
 The newer React-lua UI — separate from the legacy `DungeonMenuUI` system above — is where Inventory/Skills/Stats/Hearthstone/Party tabs and the bottom quick-nav carousel actually live now. Key files, all under `src/client/InventoryHud/Inventory/` unless noted:
 
-- `QuickNav.lua` — the Tab menu's top navigation row (2026-09-30: was a sliding carousel). Every destination (Inventory, Journal, Hearthstone, Party) sits in one fixed row, carved medallion + glyph + name plaque from `RS/Assets/Images/JournalUI`; click or Left/Right to move. New destination = one `ICONS` entry + its panel in `Inventory/init.lua`'s `PANELS`. It still publishes `ProfileMenusState.SetCarouselAnchor` (the row's bottom-centre) for the vitals.
+- `QuickNav.lua` — the Tab menu's destinations (Inventory, Journal, Hearthstone, Party) as a vertical column of carved medallions down the right edge (2026-10-01; was a top row, before that a carousel), art from `RS/Assets/Images/JournalUI`; click or Up/Down (Left/Right) to move. It starts `NAV_TOP` (256) px down, clear of the minimap's settings/crosshair buttons. New destination = one `ICONS` entry + its panel in `Inventory/init.lua`'s `PANELS`.
 - `JournalPanel.lua` — the Journal: `Journal/Sidebar` beside `Journal/Book`, pages in `PAGES`: Stats (default; `StatsPage.lua`, category ribbons, numbers from `RS/StatsSheet`, display only), Skills (still its own panel, revamp pending), Loot Score with its Activity view, Records. Built from `Journal/Parts`, colours only from `Journal/Style`, art from `RS/Assets/Images/JournalUI` with flat fallbacks. Full detail and the art pipeline (`tools/ui_assets/process.py`, MCP `upload_image`): [UI & Networking](./docs/ui-and-networking.md).
   - Per-tier counters live in `profile.stats.tracking`: `scoreByTier` (total), `dungeonScoreByTier`, `runsClearedByTier`, all written through `ProfileTypes.AddTierCount`.
   - Activity history: `profile.activity` via `RS/JournalActivity` (not pushed; `GameEvents/JournalRequest` serves one window). Dry streaks come from the same request (`SSS/JournalService`).
-- `Inventory/init.lua` — the tab content area (`ContentArea`); `QUICKNAV_H`/`QUICKNAV_UP_SHIFT`/`CONTENT_UP_SHIFT` control how much vertical room the carousel takes and how far up the whole stack sits.
+- `Inventory/init.lua` — the Tab menu fills the screen: the nav column on the right, `ContentArea` to its left (`CONTENT_TOP` clear of Roblox's top-left buttons). Non-inventory panels get `PANEL_HEIGHT` of it, centred.
 - `PanelShell.lua` — shared wrapper every tab panel (`PartyPanel`, `StatsPanel`, `HearthstonePanel`, the inventory tab) renders through; each panel just fills whatever `ContentArea` gives it, so a "gap" or "too small" symptom across multiple tabs is almost always one root-cause fix in `Inventory/init.lua`'s `ContentArea` sizing, not four separate panel bugs.
 - `RS/ProfileMenusState.lua` — shared open/closed state, plus (2026-09-13) the carousel's live screen-position broadcast, see pattern below.
 - `src/client/XpHud/XpHud.luau` — separate system (XP bars + kill orb-burst effect), see its own entry below.
 
-**Carousel-anchor broadcast pattern (added 2026-09-13):** rather than hand-duplicating the carousel's screen position as constants in every HUD element that needs to hang below it (`HealthClient.client.lua`, `characterscripts/EnergyClient.client.lua`), `QuickNav.lua` publishes its own real rendered position via `ProfileMenusState.SetCarouselAnchor(Vector2)` — a `GetPropertyChangedSignal("AbsolutePosition"/"AbsoluteSize")` listener on its container — and dependents read `ProfileMenusState.GetCarouselAnchor()` and position themselves with `AnchorPoint = (0.5, 0)` off that point. **Use this pattern for any future "hang UI relative to another dynamically-positioned UI element" need** — publish real geometry once from the component that owns it, don't re-derive position math per dependent.
+**Carousel-anchor broadcast pattern (added 2026-09-13):** rather than hand-duplicating the carousel's screen position as constants in every HUD element that needs to hang below it (`HealthClient.client.lua`, `characterscripts/EnergyClient.client.lua`), the owner publishes its own real rendered position (since 2026-10-01 the Inventory tab's `InventoryMain`, the top-centre of the bag's column, so the vitals sit above the satchel; QuickNav no longer does) via `ProfileMenusState.SetCarouselAnchor(Vector2)` — a `GetPropertyChangedSignal("AbsolutePosition"/"AbsoluteSize")` listener on its container — and dependents read `ProfileMenusState.GetCarouselAnchor()` and position themselves with `AnchorPoint = (0.5, 0)` off that point. **Use this pattern for any future "hang UI relative to another dynamically-positioned UI element" need** — publish real geometry once from the component that owns it, don't re-derive position math per dependent.
 
 **One UI at a time (`RS/InteractionLock`, the UI stack, 2026-09-29):**
 - **Blocking overlays:** the world map, the Enchanting Station and the cleanse channel `Acquire` the lock. While one is up, menu hotkeys stand down; gameplay binds like dash keep working.
@@ -354,23 +354,13 @@ T1 is the reference implementation: earthy brown base, green accents, leather-an
 
 ---
 
-## Inventory item borders: ItemSlot vs PlayerPreview (recurring drift)
+## Inventory tab: the courtyard (2026-09-30)
 
-`RarityBorder` (`src/client/InventoryHud/Inventory/RarityBorder.lua`) is the one shared
-stroke component, but it's called from **two separate, independently-maintained sites**
-that must be tuned to match by hand -- nothing enforces parity:
-
-- `ItemSlot.lua` -- bag/inventory grid slots (used by `InvSlots`).
-- `PlayerPreview.lua`'s `EquipmentSlot` -- the 8 equipped-gear boxes. Despite `ItemSlot.lua`'s
-  own header comment claiming it's "used by both InvSlots (bag) and PlayerPreview (equip
-  boxes)", `PlayerPreview` actually reimplements the same icon/border/legendary-glow logic
-  itself rather than rendering `ItemSlot` -- that comment is aspirational, not current fact.
-
-This has drifted at least twice: equipped items rendered with a bold border while the same
-item sitting in the bag looked borderless/thin. Both times the fix was bumping `ItemSlot`'s
-`RarityBorder` `thickness` props to match `PlayerPreview`'s (currently **8**, with the
-`selected`/currently-held state a level above that at **10**). If you touch either file's
-border thickness, update the other one too, and check both still visually match in Studio.
+- **Backdrop:** `InventoryBackdrop.lua`, a painted courtyard in its OWN ScreenGui (DisplayOrder 32: above the minimap, below the hotbar 35 and the vitals 110; inside the menu's GUI, 120, it would hide both). It follows `Lighting.ClockTime`: dawn 5-10, afternoon 10-17, dusk otherwise (darkened through the night). Art: `JournalUI` `inv_bg_<time>_l/_r`, each 16:9 painting split in two halves (sharper under the 1024 px cap).
+- **Left: `PlayerPreview.lua`:** the 3D portrait (`CharacterViewport`, drag to turn) on the flagstones with a soft shadow, and the 9 gear slots as carved sockets (armor left, Weapon/Shield/Bow right, Pickaxe/Fishing Spear under the feet). Its `SLOTS` list is still the UI source of truth for real equip slots.
+- **Right: `InvSlots.lua`:** the bag on parchment (`page_paper`), all 30 slots, no scrolling, "Satchel N / 30".
+- **Layout (`Inventory/init.lua` `InventoryMain`):** the stage fills the left of the content area at full height (`STAGE_ASPECT` mirrors PlayerPreview's DESIGN), the bag the rest, starting under the vitals, which hang at the top of the bag's column (`VITALS_*` mirror HealthClient's menu placement). The hotbar hides while the Tab menu is open, so nothing reserves room for it.
+- **Borders:** `ItemSlot` (bag) keeps `RarityBorder` thickness 8 / 10 held, in its 508 px slot units. The sockets draw their own round rarity ring, so there is no second square-box copy to keep in step any more.
 
 ---
 

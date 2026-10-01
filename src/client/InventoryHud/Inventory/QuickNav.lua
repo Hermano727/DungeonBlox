@@ -1,9 +1,10 @@
 --!strict
---  QuickNav -- the Tab menu's top navigation row (2026-09-30 rework: was a sliding
---  carousel with arrows and 5 visible slots; now EVERY destination sits in one fixed
---  row across the top at once, like a console game's menu tabs). Click an icon, or use
---  Left/Right, to move between Inventory / Journal / Hearthstone / Party. (Skills and Stats
---  moved into the Journal's sidebar, 2026-09-30.)
+--  QuickNav -- the Tab menu's destinations (Inventory, Journal, Hearthstone, Party) as a
+--  VERTICAL column of carved medallions down the right edge of the screen (2026-10-01; was a
+--  row across the top, which cost every tab its top band). Click a medallion, or Up/Down
+--  (Left/Right also work) to move. The column fits itself to the space Inventory/init.lua gives
+--  it (QuickNavCol). The vitals no longer hang under this: the Inventory tab publishes their
+--  anchor itself (ProfileMenusState.SetCarouselAnchor, from InventoryMain).
 --
 --  Each destination: the backing plate (selected / unselected art), its glyph, and its
 --  name underneath. The selected one is lit and slightly larger; the rest are dimmed
@@ -14,9 +15,6 @@
 --                              direction is -1 / 1 by where the new tab sits relative to
 --                              the old one, which drives SlidingBody's slide.
 --    resetKey                  bumps when the menu closes -> back to "inventory".
---  It also publishes the row's bottom-centre point through
---  ProfileMenusState.SetCarouselAnchor, which HealthClient/EnergyClient hang the vitals
---  from (name kept for those callers).
 --
 --  Art (2026-09-30, the Journal's look): carved medallions (nav_medallion /
 --  nav_medallion_selected), bronze glyphs (nav_glyph_<id>) and a name plaque (nav_plaque) from
@@ -190,8 +188,8 @@ local function QuickNav(props: { onSelect: (string, number) -> (), resetKey: num
 		local function recompute()
 			local avail = container.AbsoluteSize
 			if avail.X <= 0 or avail.Y <= 0 then return end
-			local byHeight = avail.Y - LABEL_H
-			local byWidth = (avail.X - TILE_GAP * (ICON_COUNT - 1)) / ICON_COUNT / TILE_W
+			local byWidth = avail.X / TILE_W
+			local byHeight = (avail.Y - TILE_GAP * (ICON_COUNT - 1)) / ICON_COUNT - LABEL_H + (PLAQUE and PLAQUE_OVERLAP or 0)
 			setTileSize(math.max(24, math.floor(math.min(TILE_MAX, byHeight, byWidth))))
 		end
 		recompute()
@@ -200,22 +198,6 @@ local function QuickNav(props: { onSelect: (string, number) -> (), resetKey: num
 	end, {})
 
 	-- The row's real bottom-centre in screen pixels, for the vitals that hang beneath it.
-	React.useEffect(function()
-		local row = rowRef.current
-		if not row then return end
-		local function publishAnchor()
-			local size, pos = row.AbsoluteSize, row.AbsolutePosition
-			if size.Y <= 0 then return end
-			ProfileMenusState.SetCarouselAnchor(Vector2.new(pos.X + size.X / 2, pos.Y + size.Y))
-		end
-		publishAnchor()
-		local c1 = row:GetPropertyChangedSignal("AbsolutePosition"):Connect(publishAnchor)
-		local c2 = row:GetPropertyChangedSignal("AbsoluteSize"):Connect(publishAnchor)
-		return function()
-			c1:Disconnect()
-			c2:Disconnect()
-		end
-	end, {})
 
 	React.useEffect(function()
 		local prev = prevIndexRef.current
@@ -234,9 +216,9 @@ local function QuickNav(props: { onSelect: (string, number) -> (), resetKey: num
 	React.useEffect(function()
 		local conn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
 			if gameProcessed or not ProfileMenusState.IsOpen() then return end
-			if input.KeyCode == Enum.KeyCode.Left then
+			if input.KeyCode == Enum.KeyCode.Left or input.KeyCode == Enum.KeyCode.Up then
 				setSelectedIndex(function(i) return ((i - 2) % ICON_COUNT) + 1 end)
-			elseif input.KeyCode == Enum.KeyCode.Right then
+			elseif input.KeyCode == Enum.KeyCode.Right or input.KeyCode == Enum.KeyCode.Down then
 				setSelectedIndex(function(i) return (i % ICON_COUNT) + 1 end)
 			end
 		end)
@@ -245,7 +227,7 @@ local function QuickNav(props: { onSelect: (string, number) -> (), resetKey: num
 
 	local tiles: { [string]: any } = {
 		Layout = e("UIListLayout", {
-			FillDirection = Enum.FillDirection.Horizontal,
+			FillDirection = Enum.FillDirection.Vertical,
 			HorizontalAlignment = Enum.HorizontalAlignment.Center,
 			VerticalAlignment = Enum.VerticalAlignment.Center,
 			SortOrder = Enum.SortOrder.LayoutOrder,
@@ -272,8 +254,8 @@ local function QuickNav(props: { onSelect: (string, number) -> (), resetKey: num
 			ref = rowRef,
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0.5),
-			Size = UDim2.fromOffset(0, tileSize + LABEL_H),
-			AutomaticSize = Enum.AutomaticSize.X,
+			Size = UDim2.fromOffset(math.floor(tileSize * TILE_W), 0),
+			AutomaticSize = Enum.AutomaticSize.Y,
 			BackgroundTransparency = 1,
 		}, tiles),
 	})
