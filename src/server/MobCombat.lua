@@ -113,8 +113,8 @@ local function armorSubstatMultiplier(profile, weaponType)
 		if wt == weaponType then relevantId = id; break end
 	end
 	if not relevantId then return 1.0 end
-	local stacks = math.floor(totals[relevantId] / 200)
-	return 1.0 + stacks * SUBSTAT_DMG_PER_200
+	-- Smooth, no steps (2026-09-30): every point counts, 200 points = SUBSTAT_DMG_PER_200.
+	return 1.0 + (totals[relevantId] / 200) * SUBSTAT_DMG_PER_200
 end
 
 local function damageRollFromEquippedWeapon(player, weaponId)

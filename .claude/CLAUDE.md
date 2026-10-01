@@ -232,6 +232,8 @@ The newer React-lua UI — separate from the legacy `DungeonMenuUI` system above
 - **Discovery:** `ZoneService.SetDiscoveryHandler` puts `discovered = true` on `ZoneEntryNotify`; ZoneClient then shows REGION DISCOVERED and the map pulses the outline.
 - **Oakhaven:** discovered and fully revealed by default (`MinimapConfig.DefaultDiscovered/DefaultRevealed`, by zone NAME).
 - **Profile push:** `profile.map` is stripped from the profile push; it rides on `MinimapStateRequest` instead.
+- **Other players:** plain red arrows, no names, only within `MinimapConfig.OtherPlayerRadius` (190 studs) on both views, so the M map can't be used to hunt people. `MapView:SetOthers`.
+- **Opening it from a menu:** `RS/WorldMapRequest.ShowAt(position, label)` (pinned); NPC positions from `SSS/NpcLocations`.
 
 ## XpHud (`src/client/XpHud/XpHud.luau`)
 

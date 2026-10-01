@@ -27,7 +27,7 @@ Attacker-local world effects driven by **confirmed** combat outcomes, plus the g
 - **Execute** — dark red jaws close, then shed embers. Fires only when Execute actually **added damage**, so it is not an instant-kill indicator. Damage behavior pre-existed.
 - **Shatter** — a steel shell cracks and bursts. **Gameplay (new):** reduces armor by 20% for 3 seconds, including the triggering hit. Refreshes duration without stacking, and the break is shared across attackers.
 - **Crushing** — fragments compress inward, hold, then release a pressure ring and falling chips. **Gameplay (new):** ignores 50% of the remaining armor, for that hit only.
-- **Piercing** — a narrow needle and exit spray along the attack direction. Follows the existing always-on Piercing bonus; this pass did not rebalance it.
+- **Piercing** — a narrow needle and exit spray along the attack direction. Follows the always-on Piercing bonus: flat damage added to every hit (`DamageService.ComputeWeaponFinal`; a percent until 2026-09-30).
 
 Shatter/Crushing item values remain **proc chances**; strength and duration live in `ArmorEnchantConfig`. When both proc, 100 armor becomes 80 from Shatter and then 40 for that Crushing hit; the next ordinary hit sees 80, and expiry restores the current base armor. Base gear and mob stats are never modified, and **zero-armor targets trigger neither**.
 

@@ -47,7 +47,7 @@ local CATEGORIES = {
 	{ id = "mount",    label = "Mount",    icon = "icon_cat_mount" },
 }
 
-local STEP_PCT = ItemConfig.ARMOR_SUBSTAT_DMG_PER_200 * 100 -- damage % per full 200 of an attribute
+local PER_200_PCT = ItemConfig.ARMOR_SUBSTAT_DMG_PER_200 * 100 -- damage % per 200 points of an attribute (smooth)
 local SADDLE_TIERS = 5 -- T<n>MountSaddle ids looked up in ItemDefinitions; missing tiers are skipped
 
 ------------------------------------------------------------------------------------------
@@ -65,11 +65,11 @@ local function pct(n: number): string
 end
 
 local function range(lo: number, hi: number): string
-	return lo == hi and tostring(lo) or (tostring(lo) .. " - " .. tostring(hi))
+	return tostring(lo) .. " - " .. tostring(hi)
 end
 
 local function sources(list: { any }, unit: string?): string
-	if #list == 0 then return "Nothing equipped adds to it." end
+	if #list == 0 then return "None of your gear adds to it." end
 	local parts = {}
 	for _, src in ipairs(list) do
 		table.insert(parts, src.slot .. " " .. num(src.value, 2) .. (unit or ""))
@@ -126,42 +126,76 @@ local function padScale(art: any): (UDim2, UDim2)
 	return UDim2.fromScale(-l / innerW, -t / innerH), UDim2.fromScale(w / innerW, h / innerH)
 end
 
--- Hover tips. Explicit height (see Parts.HelpIcon: AutomaticSize under the page's UIScale
--- measures one line).
-local TIP_W = 270
-local TIP_CHARS = 37
-local function tipHeight(tip: string): number
-	local lines = 0
-	for line in string.gmatch(tip .. "\n", "(.-)\n") do
-		lines += math.max(1, math.ceil(#line / TIP_CHARS))
-	end
-	return lines * 18 + 16
+-- Hover tips: a small card, { title, lines = { ... }?, foot = string? }. A title in the
+-- book's serif, a rule, the plain-language lines, then where it comes from (muted).
+-- Explicit heights (see Parts.HelpIcon: AutomaticSize under the page's UIScale measures one
+-- line), estimated from the text length.
+export type Tip = { title: string, lines: { string }?, foot: string? }
+
+local TIP_W = 280
+local TIP_PAD = 12
+local TIP_CHARS = 36 -- per line at 14 px in TIP_W minus padding
+local TIP_INK = {
+	Bg = Color3.fromRGB(22, 16, 11),
+	Edge = Color3.fromRGB(176, 136, 76),
+	Title = Color3.fromRGB(240, 214, 160),
+	Body = Color3.fromRGB(228, 218, 200),
+	Foot = Color3.fromRGB(150, 136, 114),
+}
+
+local function wrapHeight(str: string, lineH: number): number
+	return math.max(1, math.ceil(#str / TIP_CHARS)) * lineH
 end
 
-local function TipLabel(props: { tip: string, above: boolean? })
-	return e("TextLabel", {
+local function TipLabel(props: { tip: Tip, above: boolean? })
+	local tip = props.tip
+	local rows: { [string]: any } = {
+		Layout = e("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }),
+		Title = e("TextLabel", {
+			LayoutOrder = 1, Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1,
+			Text = tip.title, FontFace = Style.Font.Heading, TextSize = 16, TextColor3 = TIP_INK.Title,
+			TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 51,
+		}),
+		Rule = e("Frame", {
+			LayoutOrder = 2, Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = TIP_INK.Edge,
+			BackgroundTransparency = 0.55, BorderSizePixel = 0, ZIndex = 51,
+		}),
+	}
+	local height = TIP_PAD * 2 + 20 + 4 + 1 + 4
+	for i, line in ipairs(tip.lines or {}) do
+		local h = wrapHeight(line, 18)
+		height += h + 4
+		rows["L" .. i] = e("TextLabel", {
+			LayoutOrder = 2 + i, Size = UDim2.new(1, 0, 0, h), BackgroundTransparency = 1,
+			Text = line, TextWrapped = true, FontFace = Style.Font.Body, TextSize = 14, TextColor3 = TIP_INK.Body,
+			TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, ZIndex = 51,
+		})
+	end
+	if tip.foot and tip.foot ~= "" then
+		local h = wrapHeight(tip.foot, 17)
+		height += h + 6
+		rows.Foot = e("TextLabel", {
+			LayoutOrder = 100, Size = UDim2.new(1, 0, 0, h + 2), BackgroundTransparency = 1,
+			Text = tip.foot, TextWrapped = true, FontFace = Style.Font.Body, TextSize = 13, TextColor3 = TIP_INK.Foot,
+			TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Bottom, ZIndex = 51,
+		})
+	end
+	return e("Frame", {
 		AnchorPoint = Vector2.new(0.5, props.above and 1 or 0),
-		Position = props.above and UDim2.new(0.5, 0, 0, -6) or UDim2.new(0.5, 0, 1, 6),
-		Size = UDim2.fromOffset(TIP_W, tipHeight(props.tip)),
-		BackgroundColor3 = Color3.fromRGB(16, 12, 9),
-		BackgroundTransparency = 0.04,
+		Position = props.above and UDim2.new(0.5, 0, 0, -8) or UDim2.new(0.5, 0, 1, 8),
+		Size = UDim2.fromOffset(TIP_W, height),
+		BackgroundColor3 = TIP_INK.Bg,
+		BackgroundTransparency = 0.03,
 		BorderSizePixel = 0,
-		Text = props.tip,
-		TextWrapped = true,
-		FontFace = Style.Font.Body,
-		TextSize = 14,
-		LineHeight = 1.05,
-		TextColor3 = Color3.fromRGB(236, 226, 208),
-		TextXAlignment = Enum.TextXAlignment.Left,
-		TextYAlignment = Enum.TextYAlignment.Top,
 		ZIndex = 50,
 	}, {
-		Corner = e("UICorner", { CornerRadius = UDim.new(0, 5) }),
+		Corner = e("UICorner", { CornerRadius = UDim.new(0, 4) }),
+		Edge = e("UIStroke", { Color = TIP_INK.Edge, Thickness = 1.5, Transparency = 0.2, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }),
 		Pad = e("UIPadding", {
-			PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10),
-			PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
+			PaddingLeft = UDim.new(0, TIP_PAD), PaddingRight = UDim.new(0, TIP_PAD),
+			PaddingTop = UDim.new(0, TIP_PAD), PaddingBottom = UDim.new(0, TIP_PAD),
 		}),
-		Edge = e("UIStroke", { Color = Style.Flat.Edge, Transparency = 0.3, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }),
+		Rows = e("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, ZIndex = 51 }, rows),
 	})
 end
 
@@ -169,7 +203,7 @@ end
 local function Hover(props: any)
 	local hovered, setHovered = React.useState(false)
 	local children = table.clone(props.children or {})
-	if hovered and type(props.tip) == "string" and props.tip ~= "" then
+	if hovered and type(props.tip) == "table" then
 		children.Tip = e(TipLabel, { tip = props.tip, above = props.above })
 	end
 	return e("Frame", {
@@ -293,8 +327,9 @@ local function Ribbon(props: { cat: any, selected: boolean, onClick: () -> (), o
 			-- Centred on the part that shows past the cover (the left Style.RIBBON_TUCK is under it).
 			Icon = e("ImageLabel", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.fromScale(0.5 + Style.RIBBON_TUCK / 2 - 0.06, 0.5),
-				Size = UDim2.fromScale(0.5, 0.5 * 445 / 722),
+				-- Centred on what shows: from the cover's edge (RIBBON_TUCK) to where the notch begins.
+				Position = UDim2.fromScale((Style.RIBBON_TUCK + 0.84) / 2, 0.5),
+				Size = UDim2.fromScale(0.52, 0.52 * 445 / 722),
 				BackgroundTransparency = 1,
 				Image = artImage(props.cat.icon) or "",
 				ImageTransparency = (props.selected or hovered) and 0 or 0.2,
@@ -343,7 +378,7 @@ end
 ------------------------------------------------------------------------------------------
 
 
-local function Medallion(props: { attr: string, value: number, lit: boolean, tip: string, order: number })
+local function Medallion(props: { attr: string, value: number, lit: boolean, tip: Tip, order: number })
 	local size = 58
 	local art = Style.Art(props.lit and "nav_medallion_selected" or "nav_medallion")
 	local ring
@@ -444,13 +479,18 @@ local function Portrait(props: { equipped: any })
 	})
 end
 
-local function attributeTip(sheet: any, key: string): string
+local function attributeTip(sheet: any, key: string): Tip
 	local total = sheet.attributes[key]
-	local weapon = sheet.attributeWeapon[key]
-	local stepsNow = math.floor(total / 200) * sheet.perStep
-	return ("%s %d\nBoosts %s damage: +%s for every full 200.\nNow +%s.\n%s"):format(
-		StatsSheet.ATTRIBUTE_LABEL[key], total, string.lower(weapon), pct(sheet.perStep), pct(stepsNow),
-		sources(sheet.attributeSources[key]))
+	local label = StatsSheet.ATTRIBUTE_LABEL[key]
+	local weapon = string.lower(sheet.attributeWeapon[key])
+	return {
+		title = ("%s %d"):format(label, total),
+		lines = {
+			("+%s %s damage"):format(pct(total / 200 * sheet.per200), weapon),
+			("Every 200 %s adds %s, counted point by point."):format(label, pct(sheet.per200)),
+		},
+		foot = sources(sheet.attributeSources[key]),
+	}
 end
 
 local function CharacterSpread(props: { sheet: any, equipped: any })
@@ -480,7 +520,7 @@ local function CharacterSpread(props: { sheet: any, equipped: any })
 	})
 end
 
-local function SummaryRow(props: { icon: string, title: string, value: string, tip: string?, onClick: (() -> ())?, order: number })
+local function SummaryRow(props: { icon: string, title: string, value: string, tip: Tip?, onClick: (() -> ())?, order: number })
 	local hovered, setHovered = React.useState(false)
 	local clickable = props.onClick ~= nil
 	local body = {
@@ -560,7 +600,11 @@ local function SummarySpread(props: { sheet: any, go: (string) -> () })
 		CoinFind = e(SummaryRow, {
 			order = 6, icon = "fx_coinfind", title = "Coin Find",
 			value = "+" .. pct(sheet.coinFind) .. " coins",
-			tip = "Extra coins from every coin drop.\n" .. sources(sheet.coinSources, "%"),
+			tip = {
+				title = "Coin Find +" .. pct(sheet.coinFind),
+				lines = { "Extra coins from every coin drop." },
+				foot = sources(sheet.coinSources, "%"),
+			},
 		}),
 	})
 end
@@ -569,7 +613,7 @@ end
 -- Defense
 ------------------------------------------------------------------------------------------
 
-local function StatBlock(props: { icon: string, value: string, caption: string, tip: string, order: number })
+local function StatBlock(props: { icon: string, value: string, caption: string, tip: Tip, order: number })
 	return e(Hover, {
 		order = props.order,
 		tip = props.tip,
@@ -593,28 +637,47 @@ local function DefenseLeft(props: { sheet: any })
 		}),
 		Health = e(StatBlock, {
 			order = 1, icon = "fx_health", value = tostring(s.maxHp), caption = "Max Health",
-			tip = ("Base %d + gear %d.\nNow at %d."):format(s.base.maxHp, gearHp, s.hp),
+			tip = {
+				title = ("Max Health %d"):format(s.maxHp),
+				lines = { ("Right now: %d."):format(s.hp) },
+				foot = ("Base %d, gear +%d"):format(s.base.maxHp, gearHp),
+			},
 		}),
 		Regen = e(StatBlock, {
 			order = 2, icon = "fx_hpregen", value = num(s.hpRegen) .. " / s", caption = "Health Regen",
-			tip = ("Base %s + gear %s per second."):format(num(s.base.hpRegen), num(s.hpRegen - s.base.hpRegen)),
+			tip = {
+				title = ("Health Regen %s / s"):format(num(s.hpRegen)),
+				lines = { "Health you recover every second." },
+				foot = ("Base %s, gear +%s"):format(num(s.base.hpRegen), num(s.hpRegen - s.base.hpRegen)),
+			},
 		}),
 		Energy = e(StatBlock, {
 			order = 3, icon = "fx_energy", value = num(s.energyRegen, 2) .. " / s", caption = "Energy Regen",
-			tip = ("Base %s + gear %s per second.\nSprinting and swinging spend energy."):format(
-				num(s.base.energyRegen, 2), num(s.energyRegen - s.base.energyRegen, 2)),
+			tip = {
+				title = ("Energy Regen %s / s"):format(num(s.energyRegen, 2)),
+				lines = { "Energy you recover every second. Sprinting and swinging spend it." },
+				foot = ("Base %s, gear +%s"):format(num(s.base.energyRegen, 2), num(s.energyRegen - s.base.energyRegen, 2)),
+			},
 		}),
 		Armor = e(StatBlock, {
 			order = 4, icon = "fx_armor", value = pct(s.reduction * 100), caption = ("Less damage (%d armor)"):format(s.armor),
-			tip = ("Every hit you take is cut to 100 / (100 + armor).\nWith %d armor: %s less damage. More armor always helps, a bit less each time."):format(
-				s.armor, pct(s.reduction * 100)),
+			tip = {
+				title = ("Armor %d"):format(s.armor),
+				lines = {
+					("You take %s less damage from every hit."):format(pct(s.reduction * 100)),
+					"Damage is cut to 100 / (100 + armor). More always helps, a little less each time.",
+				},
+			},
 		}),
 	}
-	local blockTip = ("A %s chance to block a hit entirely, rolled on every hit you take. Caps at %d%%.\n%s"):format(
-		pct(s.block), s.blockCap, sources(s.blockSources, "%"))
+	local blockLines = {
+		"A chance to stop a hit entirely, rolled on every hit you take.",
+		("Caps at %d%%."):format(s.blockCap),
+	}
 	if s.blockRaw > s.blockCap then
-		blockTip ..= ("\nYour gear has %s; the extra does nothing."):format(pct(s.blockRaw))
+		table.insert(blockLines, ("Your gear has %s; the extra does nothing."):format(pct(s.blockRaw)))
 	end
+	local blockTip: Tip = { title = "Block " .. pct(s.block), lines = blockLines, foot = sources(s.blockSources, "%") }
 	return list(10, {
 		Heading = e(Parts.Heading, { text = "Defense", size = 26, order = 1, height = 34 }),
 		Blocks = e("Frame", { LayoutOrder = 2, Size = UDim2.new(1, 0, 0, 212), BackgroundTransparency = 1 }, blocks),
@@ -661,6 +724,9 @@ local function dash(n: number, suffix: string?): string
 	return n > 0 and (num(n, 1) .. (suffix or "")) or "-"
 end
 
+local GEAR_ICON = 50
+local GEAR_ROW_H = 60
+
 local function GearRow(props: { slot: any, order: number })
 	local slot = props.slot
 	local children = GearCells({
@@ -668,22 +734,26 @@ local function GearRow(props: { slot: any, order: number })
 		color = slot.item and Style.Text.Value or Style.Text.Muted,
 	})
 	children.Icon = e(ItemIcon, {
-		item = slot.item, size = 36, dim = slot.item == nil,
+		item = slot.item, size = GEAR_ICON, dim = slot.item == nil,
 		AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
 	})
 	children.Slot = text({
-		text = slot.slot, font = Style.Font.Heading, size = 15, color = Style.Text.Heading,
-		align = Enum.TextXAlignment.Left, Position = UDim2.fromOffset(46, 6), Size = UDim2.new(COLS.name, -50, 0, 20),
+		text = slot.slot, font = Style.Font.Heading, size = 16, color = Style.Text.Heading,
+		align = Enum.TextXAlignment.Left, Position = UDim2.fromOffset(GEAR_ICON + 10, 9), Size = UDim2.new(COLS.name, -(GEAR_ICON + 14), 0, 22),
 	})
 	children.Name = text({
 		text = slot.name or "Empty", size = 13, color = Style.Text.Muted, truncate = true,
-		align = Enum.TextXAlignment.Left, Position = UDim2.fromOffset(46, 26), Size = UDim2.new(COLS.name, -50, 0, 18),
+		align = Enum.TextXAlignment.Left, Position = UDim2.fromOffset(GEAR_ICON + 10, 31), Size = UDim2.new(COLS.name, -(GEAR_ICON + 14), 0, 18),
 	})
-	local tip = slot.item and ("%s\nHP %s, Armor %s, Block %s"):format(
-		slot.name, dash(slot.hp), dash(slot.armor), dash(slot.block, "%"))
-		.. ((slot.hps > 0 or slot.energy > 0) and ("\nHP Regen %s / s, Energy Regen %s / s"):format(num(slot.hps), num(slot.energy, 2)) or "")
-		or nil
-	return e(Hover, { order = props.order, Size = UDim2.new(1, 0, 0, 52), tip = tip, children = children })
+	local tip: Tip? = nil
+	if slot.item then
+		local lines = { ("Health +%s, Armor +%s, Block %s"):format(dash(slot.hp), dash(slot.armor), dash(slot.block, "%")) }
+		if slot.hps > 0 or slot.energy > 0 then
+			table.insert(lines, ("Health Regen +%s / s, Energy Regen +%s / s"):format(num(slot.hps), num(slot.energy, 2)))
+		end
+		tip = { title = slot.name, lines = lines, foot = slot.slot .. " slot" }
+	end
+	return e(Hover, { order = props.order, Size = UDim2.new(1, 0, 0, GEAR_ROW_H), tip = tip, children = children })
 end
 
 local function DefenseRight(props: { sheet: any })
@@ -698,35 +768,36 @@ local function DefenseRight(props: { sheet: any })
 	local header = GearCells({ hp = "HP", armor = "Armor", block = "Block", color = Style.Text.Muted, font = Style.Font.BodyBold, size = 14 })
 	header.Label = text({
 		text = "Slot", font = Style.Font.BodyBold, size = 14, color = Style.Text.Muted,
-		align = Enum.TextXAlignment.Left, Position = UDim2.fromOffset(46, 0), Size = UDim2.new(COLS.name, -46, 1, 0),
+		align = Enum.TextXAlignment.Left, Position = UDim2.fromOffset(GEAR_ICON + 10, 0), Size = UDim2.new(COLS.name, -(GEAR_ICON + 10), 1, 0),
 	})
 	local totals = GearCells({ hp = dash(total.hp), armor = dash(total.armor), block = dash(s.block, "%"), color = Style.Text.Heading })
 	totals.Label = text({
 		text = "Total", font = Style.Font.Heading, size = 16, color = Style.Text.Heading,
-		align = Enum.TextXAlignment.Left, Position = UDim2.fromOffset(46, 0), Size = UDim2.new(COLS.name, -46, 1, 0),
+		align = Enum.TextXAlignment.Left, Position = UDim2.fromOffset(GEAR_ICON + 10, 0), Size = UDim2.new(COLS.name, -(GEAR_ICON + 10), 1, 0),
 	})
 	rows.Heading = e(Parts.Heading, { text = "Gear", size = 26, order = 1, height = 34 })
 	rows.Header = e("Frame", { LayoutOrder = 2, Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1 }, header)
 	rows.Divider = e(Parts.Divider, { order = 20, width = 1 })
 	rows.Totals = e("Frame", { LayoutOrder = 21, Size = UDim2.new(1, 0, 0, 24), BackgroundTransparency = 1 }, totals)
-	return list(4, rows)
+	return list(3, rows)
 end
 
 ------------------------------------------------------------------------------------------
 -- Melee / Ranged
 ------------------------------------------------------------------------------------------
 
-local function damageTip(w: any): string
-	local lines = { ("Weapon damage %s (its roll, enchants included)."):format(range(w.baseLo, w.baseHi)) }
+local function damageTip(w: any): Tip
+	local lines = { ("Weapon roll %s (enchants included)"):format(range(w.baseLo, w.baseHi)) }
 	if w.attrKey then
-		table.insert(lines, ("%s %d: +%s %s damage."):format(
-			StatsSheet.ATTRIBUTE_LABEL[w.attrKey], w.attrTotal, pct(w.attrBonusPct), string.lower(w.weaponType or "weapon")))
+		table.insert(lines, ("%s %d: +%s"):format(StatsSheet.ATTRIBUTE_LABEL[w.attrKey], w.attrTotal, pct(w.attrBonusPct)))
 	end
-	table.insert(lines, ("Per hit: %s, before the target's armor."):format(range(w.lo, w.hi)))
-	if #w.effects > 0 then
-		table.insert(lines, "Effects (right) can add to a hit.")
-	end
-	return table.concat(lines, "\n")
+	if w.pierce > 0 then table.insert(lines, ("Piercing: +%d"):format(math.floor(w.pierce))) end
+	if w.elem > 0 then table.insert(lines, ("Elemental: +%d"):format(math.floor(w.elem))) end
+	return {
+		title = "Damage " .. range(w.lo, w.hi),
+		lines = lines,
+		foot = "Per hit, before the target's armor. Critical, Execute and other procs come on top.",
+	}
 end
 
 local function WeaponLeft(props: { title: string, w: any?, slotName: string })
@@ -756,10 +827,6 @@ local function WeaponLeft(props: { title: string, w: any?, slotName: string })
 				text = (w.rarity and (w.rarity .. " ") or "") .. (w.weaponType or "Weapon"), size = 16, color = Style.Text.Body,
 				align = Enum.TextXAlignment.Left, Position = UDim2.fromOffset(w.rarity and 148 or 122, 44), Size = UDim2.new(1, -160, 0, 22),
 			}),
-			Equipped = text({
-				text = "Currently equipped", size = 14, color = Style.Text.Muted,
-				align = Enum.TextXAlignment.Left, Position = UDim2.fromOffset(122, 70), Size = UDim2.new(1, -130, 0, 20),
-			}),
 		}),
 		Divider = e(Parts.Divider, { order = 3 }),
 		Damage = e(Hover, {
@@ -768,33 +835,22 @@ local function WeaponLeft(props: { title: string, w: any?, slotName: string })
 			tip = damageTip(w),
 			children = {
 				Value = text({ text = range(w.lo, w.hi), font = Style.Font.Number, size = 44, color = Style.Text.Value, height = 52 }),
-				Caption = text({ text = "Damage per hit", size = 15, color = Style.Text.Muted, Position = UDim2.fromOffset(0, 54), height = 20 }),
+				Caption = text({ text = "Damage", size = 15, color = Style.Text.Muted, Position = UDim2.fromOffset(0, 54), height = 20 }),
 			},
 		}),
 	}
 	if w.attrKey then
 		local label = StatsSheet.ATTRIBUTE_LABEL[w.attrKey]
-		local into = w.attrTotal % 200
-		children.Attr = e(Hover, {
-			order = 5,
-			Size = UDim2.new(1, -40, 0, 62),
-			above = true,
-			tip = ("%s on your armor boosts %s damage: +%s for every full 200."):format(
-				label, string.lower(w.weaponType or "weapon"), pct(STEP_PCT)),
-			children = {
-				Line = text({
-					text = ("%s %d: +%s %s damage"):format(label, w.attrTotal, pct(w.attrBonusPct), string.lower(w.weaponType or "weapon")),
-					font = Style.Font.BodyBold, size = 16, color = Style.Text.Heading, height = 22,
-				}),
-				Bar = e(Parts.BarTrough, {
-					fill = into / 200, color = Style.Split.Overworld,
-					Position = UDim2.fromOffset(0, 26), Size = UDim2.new(1, 0, 0, 12),
-				}),
-				Next = text({
-					text = ("%d more %s for the next +%s"):format(200 - into, label, pct(STEP_PCT)),
-					size = 13, color = Style.Text.Muted, Position = UDim2.fromOffset(0, 42), height = 18,
-				}),
-			},
+		local weapon = string.lower(w.weaponType or "weapon")
+		children.Attr = e("Frame", { LayoutOrder = 5, Size = UDim2.new(1, -40, 0, 44), BackgroundTransparency = 1 }, {
+			Line = text({
+				text = ("%s %d: +%s %s damage"):format(label, w.attrTotal, pct(w.attrBonusPct), weapon),
+				font = Style.Font.BodyBold, size = 16, color = Style.Text.Heading, height = 22,
+			}),
+			Rate = text({
+				text = ("Every 200 %s on your armor adds %s"):format(label, pct(PER_200_PCT)),
+				size = 13, color = Style.Text.Muted, Position = UDim2.fromOffset(0, 24), height = 18,
+			}),
 		})
 	end
 	return list(8, children)
@@ -900,8 +956,11 @@ local function MountLeft(props: { sheet: any })
 		Speed = e(Hover, {
 			order = 4,
 			Size = UDim2.fromOffset(260, 74),
-			tip = ("Riding speed %s. On foot you walk at %s and sprint at %s."):format(
-				num(m.speed), num(s.walkSpeed), num(s.sprintSpeed)),
+			tip = {
+				title = "Riding speed " .. num(m.speed),
+				lines = { ("On foot you walk at %s and sprint at %s."):format(num(s.walkSpeed), num(s.sprintSpeed)) },
+				foot = "From " .. m.name,
+			},
 			children = {
 				Value = text({ text = num(m.speed), font = Style.Font.Number, size = 44, color = Style.Text.Value, height = 52 }),
 				Caption = text({ text = ("Riding speed, +%s vs sprinting"):format(pct(faster)), size = 15, color = Style.Text.Muted,

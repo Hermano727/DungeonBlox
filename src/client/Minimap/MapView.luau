@@ -26,6 +26,7 @@ MapView.__index = MapView
 local OUTLINE_PX = 2
 local GLOW_PX = 9
 local ARROW_PX = 22
+local OTHER_ARROW_PX = 17
 local BLACK = Color3.new(0, 0, 0)
 
 -------------------------------------------------------------------------------------------------
@@ -122,7 +123,36 @@ function MapView.new(parent, options)
 	if content then arrow.ImageContent = content else arrow.BackgroundTransparency = 0; arrow.Size = UDim2.fromOffset(8, 8) end
 	arrow.Parent = clip
 	self.arrow = arrow
+	self.others = {} -- pooled arrows for other players
 	return self
+end
+
+-- Other players: plain tinted arrows, no names. `list` = { { x, z, look } } in map cells.
+function MapView:SetOthers(centreX, centreZ, list, colour)
+	local s = self.scale
+	for i, entry in ipairs(list) do
+		local arrow = self.others[i]
+		if not arrow then
+			arrow = Instance.new("ImageLabel")
+			arrow.Name = "OtherArrow"
+			arrow.AnchorPoint = Vector2.new(.5, .5)
+			arrow.Size = UDim2.fromOffset(OTHER_ARROW_PX, OTHER_ARROW_PX)
+			arrow.BackgroundTransparency = 1
+			arrow.ZIndex = 9 -- under your own arrow
+			local content = arrowImage()
+			if content then arrow.ImageContent = content else arrow.BackgroundTransparency = 0; arrow.Size = UDim2.fromOffset(6, 6) end
+			arrow.Parent = self.clip
+			self.others[i] = arrow
+		end
+		arrow.ImageColor3 = colour
+		arrow.BackgroundColor3 = colour
+		arrow.Position = UDim2.new(.5, (entry.x - centreX) * s, .5, (entry.z - centreZ) * s)
+		if entry.look then arrow.Rotation = math.deg(math.atan2(entry.look.X, -entry.look.Z)) end
+		arrow.Visible = true
+	end
+	for i = #list + 1, #self.others do
+		self.others[i].Visible = false
+	end
 end
 
 function MapView:SetBounds(bounds)

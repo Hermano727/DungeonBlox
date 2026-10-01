@@ -635,6 +635,22 @@ end)
 -------------------------------------------------------------------------------------------------
 -- Frame loop
 
+-- Other players near you (Config.OtherPlayerRadius), in map cells. Just positions and facing:
+-- no names on the map.
+local others = {}
+local function collectOthers(rootPosition)
+	table.clear(others)
+	local radius = Config.OtherPlayerRadius
+	for _, other in ipairs(Players:GetPlayers()) do
+		local character = other ~= player and other.Character
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		if root and (root.Position - rootPosition).Magnitude <= radius then
+			table.insert(others, { x = root.Position.X / CELL, z = root.Position.Z / CELL, look = root.CFrame.LookVector })
+		end
+	end
+	return others
+end
+
 local nextReveal = 0
 RunService.RenderStepped:Connect(function()
 	local character = player.Character
@@ -666,9 +682,12 @@ RunService.RenderStepped:Connect(function()
 
 	if inWorld then
 		miniView:Update(px, pz, px, pz, look)
+		local near = collectOthers(root.Position)
+		miniView:SetOthers(px, pz, near, Config.OtherPlayerColor)
 		if isOpen then
 			local cx, cz = panX or px, panZ or pz
 			bigView:Update(cx, cz, px, pz, look)
+			bigView:SetOthers(cx, cz, near, Config.OtherPlayerColor)
 			if pin then
 				local s = bigView.scale
 				local at = UDim2.new(.5, (pin.x - cx) * s, .5, (pin.z - cz) * s)

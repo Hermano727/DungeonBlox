@@ -9,11 +9,12 @@
 	Mirrors the combat maths so the numbers match what happens in a fight:
 	  armor        DamageService.ComputeFinal: damage * 100 / (100 + armor)
 	  block        summed over all equipped gear, capped at ItemConfig.BLOCK_CHANCE_CAP_PCT
-	  attributes   STR / INT / DEX / VIT summed over ItemConfig.ARMOR_SLOTS; each full 200 of
-	               the one matching the weapon type (ARMOR_SUBSTAT_WEAPON_MAP) adds
-	               ARMOR_SUBSTAT_DMG_PER_200 (MobCombat.armorSubstatMultiplier)
+	  attributes   STR / INT / DEX / VIT summed over ItemConfig.ARMOR_SLOTS; the one matching the
+	               weapon type (ARMOR_SUBSTAT_WEAPON_MAP) adds ARMOR_SUBSTAT_DMG_PER_200 per 200
+	               points, smoothly (MobCombat.armorSubstatMultiplier)
 	  weapon dmg   item.subStats.dmgMin/dmgMax (catalog weapons: WeaponData Damage), times the
-	               attribute multiplier, floored
+	               attribute multiplier, floored, plus the flat Piercing and Elemental damage
+	               every hit carries (DamageService.ComputeWeaponFinal), before armor and procs
 	  effects      the weapon's own substats, explained from ItemConfig / ArmorEnchantConfig /
 	               CombatEnchantConfig (live effects only: Dodge, Reflect, Elemental
 	               Resistance and Accuracy do nothing in combat yet and are left out)
@@ -54,7 +55,7 @@ local EXPLAIN = {
 		return ("About 1 hit in %d deals +50%% damage"):format(every)
 	end,
 	execute = function() return "Bonus damage on wounded foes, up to +25% the lower their health" end,
-	pierce = function(v) return ("Every hit deals %s more damage"):format(pct(v)) end,
+	pierce = function(v) return ("+%d damage on every hit (included in the damage range)"):format(math.floor(v)) end,
 	crushing = function()
 		return ("Chance to ignore %d%% of the target's armor on that hit"):format(round(ArmorEnchantConfig.CrushingArmorIgnore * 100))
 	end,
@@ -69,7 +70,7 @@ local EXPLAIN = {
 	lifesteal = function(v) return ("Heals %s of the damage you deal"):format(pct(v)) end,
 	vsMon = function(v) return ("%s more damage to monsters"):format(pct(v)) end,
 	vsPly = function(v) return ("%s more damage to players"):format(pct(v)) end,
-	elemDmg = function(v) return ("+%d elemental damage on every hit"):format(math.floor(v)) end,
+	elemDmg = function(v) return ("+%d elemental damage on every hit (included in the damage range)"):format(math.floor(v)) end,
 	bleeding = function()
 		return ("Chance to make the target bleed for %d%% of the hit over %ds"):format(
 			round(CombatEnchantConfig.BleedDamageFraction * 100), CombatEnchantConfig.BleedTicks * CombatEnchantConfig.BleedInterval)
@@ -137,11 +138,13 @@ local function weaponSheet(item, attributes)
 	for key, wt in pairs(ItemConfig.ARMOR_SUBSTAT_WEAPON_MAP) do
 		if wt == weaponType then attrKey = key end
 	end
-	local stacks = attrKey and math.floor(attributes[attrKey] / 200) or 0
-	local mult = 1 + stacks * ItemConfig.ARMOR_SUBSTAT_DMG_PER_200
+	local mult = 1 + (attrKey and attributes[attrKey] / 200 or 0) * ItemConfig.ARMOR_SUBSTAT_DMG_PER_200
 
 	local effects = {}
 	local subs = type(item.subStats) == "table" and item.subStats or {}
+	local pierce = math.max(0, tonumber(subs.pierce) or 0)
+	local elem = math.max(0, tonumber(subs.elemDmg) or 0)
+	local rollLo, rollHi = math.floor(lo * mult), math.floor(hi * mult)
 	for _, effect in ipairs(ItemConfig.WEAPON_EFFECTS or {}) do
 		local v = tonumber(subs[effect.id])
 		if v and v > 0 and EXPLAIN[effect.id] then
@@ -163,12 +166,13 @@ local function weaponSheet(item, attributes)
 		rarity = item.rarity,
 		enchant = tonumber(item.enchantLevel) or 0,
 		weaponType = weaponType,
-		baseLo = lo, baseHi = hi,
-		lo = math.floor(lo * mult), hi = math.floor(hi * mult),
+		baseLo = lo, baseHi = hi,        -- the weapon's own roll
+		rollLo = rollLo, rollHi = rollHi, -- after the attribute bonus
+		pierce = pierce, elem = elem,     -- flat, added to every hit
+		lo = math.floor(rollLo + pierce + elem), hi = math.floor(rollHi + pierce + elem),
 		attrKey = attrKey,
 		attrTotal = attrKey and attributes[attrKey] or 0,
 		attrBonusPct = (mult - 1) * 100,
-		attrNext = attrKey and ((stacks + 1) * 200) or nil, -- the total that unlocks the next step
 		effects = effects,
 	}
 end
@@ -261,7 +265,7 @@ function StatsSheet.Compute(snap)
 		attributes = attributes,
 		attributeSources = attributeSources,
 		attributeWeapon = ItemConfig.ARMOR_SUBSTAT_WEAPON_MAP, -- str -> "Axe", ...
-		perStep = ItemConfig.ARMOR_SUBSTAT_DMG_PER_200 * 100,  -- % per full 200
+		per200 = ItemConfig.ARMOR_SUBSTAT_DMG_PER_200 * 100,  -- damage % per 200 points (smooth)
 		coinFind = coinFind,
 		coinSources = coinSources,
 		melee = melee,

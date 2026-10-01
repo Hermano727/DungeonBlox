@@ -27,6 +27,9 @@ local React = require(ReplicatedStorage.Packages.React)
 local e = React.createElement
 
 local CharacterAnimProfiles = require(ReplicatedStorage:WaitForChild("CharacterAnimProfiles"))
+-- Face + hair: drawn by FacePlates outside the character model, so a clone has none of them
+-- until it's attached (inside this viewport's WorldModel).
+local FacePlates = require(script.Parent.Parent.Parent:WaitForChild("FacePlates"))
 
 local FOV = 30
 local FRAME_PADDING = 1.15 -- 15% headroom above/below the bounding box
@@ -191,11 +194,16 @@ local function CharacterViewport(props: CharacterViewportProps)
 		end
 
 		local characterAddedConn: RBXScriptConnection? = nil
+		local detachFace: (() -> ())? = nil
 
 		local function teardown()
 			if characterAddedConn then
 				characterAddedConn:Disconnect()
 				characterAddedConn = nil
+			end
+			if detachFace then
+				detachFace()
+				detachFace = nil
 			end
 			if cloneRef.current then
 				cloneRef.current:Destroy()
@@ -240,6 +248,9 @@ local function CharacterViewport(props: CharacterViewportProps)
 			cleanClone(clone)
 			clone.Parent = worldModel
 			cloneRef.current = clone
+			-- The wardrobe choices: skin rides along (body colour), face + hair need attaching.
+			-- The Appearance_* attributes came across with the clone.
+			detachFace = FacePlates.Attach(clone, worldModel)
 
 			local camera, orbit = buildCamera(viewport, clone)
 			cameraRef.current, orbitRef.current = camera, orbit

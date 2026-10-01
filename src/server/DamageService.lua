@@ -111,8 +111,9 @@ end
 function DamageService.ComputeWeaponFinal(roll, subStats, hpFrac, targetType)
 	local subs = subStats or {}
 
-	local piercePct = (tonumber(subs.pierce)   or 0) / 100
-	local base      = roll * (1 + piercePct)
+	-- Piercing is flat damage on every hit (2026-09-30; it used to be a percent).
+	local pierce = tonumber(subs.pierce) or 0
+	local base   = roll + pierce
 
 	local isCrit  = math.random() < ((tonumber(subs.critical) or 0) / 100)
 	local critMod = isCrit and (base * 0.5) or 0
@@ -131,7 +132,7 @@ function DamageService.ComputeWeaponFinal(roll, subStats, hpFrac, targetType)
 	local elem = tonumber(subs.elemDmg) or 0
 	return math.floor(phys + elem), {
 		isCrit = isCrit, isExe = isExe, executeBonus = exeMod,
-		isPiercing = piercePct > 0 and roll > 0,
+		isPiercing = pierce > 0 and roll > 0,
 		elementalDamage = elem,
 	}
 end

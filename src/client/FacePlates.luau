@@ -2,6 +2,8 @@
 	FacePlates -- draws faces (eyes / nose / mouth) on the skinned player characters (client).
 
 		local detach = FacePlates.Attach(model)   -- any Hero_Character rig (players, wardrobe clone)
+		FacePlates.Attach(clone, worldModel)      -- a rig inside a ViewportFrame's WorldModel: the
+		                                          -- plate + hair go in there too (menu portraits)
 		FacePlates.Start()                        -- auto-attach every player's character
 
 	The head is part of ONE skinned mesh (Hero_Character), so a face can't be a Decal on the
@@ -97,7 +99,7 @@ local function refreshHair(state)
 			hair.Massless = true
 			state.hairOffset = state.bone.WorldCFrame:Inverse() * (state.body.CFrame * CFrame.new(option.Offset or Vector3.zero))
 			hair.CFrame = state.bone.TransformedWorldCFrame * state.hairOffset
-			hair.Parent = folder
+			hair.Parent = state.container
 			state.hair = hair
 		end
 	end
@@ -109,13 +111,21 @@ local function refreshHair(state)
 end
 
 local function step()
-	local parts, cframes = {}, {}
+	-- Grouped by world: BulkMoveTo only moves parts in the world it's called on (Workspace, or a
+	-- portrait's WorldModel).
+	local byWorld = {}
 	local now = os.clock()
 	for model, state in pairs(active) do
 		if not model.Parent or not state.bone.Parent then
 			FacePlates.Detach(model)
 		else
 			local head = state.bone.TransformedWorldCFrame
+			local batch = byWorld[state.world]
+			if not batch then
+				batch = { parts = {}, cframes = {} }
+				byWorld[state.world] = batch
+			end
+			local parts, cframes = batch.parts, batch.cframes
 			table.insert(parts, state.plate)
 			table.insert(cframes, head * state.offset)
 			if state.hair then
@@ -131,21 +141,27 @@ local function step()
 			if state.hidden ~= firstPerson then refreshDecals(state); refreshHair(state) end
 		end
 	end
-	if #parts > 0 then Workspace:BulkMoveTo(parts, cframes, Enum.BulkMoveMode.FireCFrameChanged) end
+	for world, batch in pairs(byWorld) do
+		world:BulkMoveTo(batch.parts, batch.cframes, Enum.BulkMoveMode.FireCFrameChanged)
+	end
 end
 
-function FacePlates.Attach(model)
+-- `container` (optional): where the plate and hair live. Default: one shared Workspace folder.
+-- Pass a ViewportFrame's WorldModel (or a folder inside one) for a rig rendered there.
+function FacePlates.Attach(model, container: Instance?)
 	if typeof(model) ~= "Instance" or active[model] then return function() FacePlates.Detach(model) end end
 	local source = template()
 	local body = model:FindFirstChild("Hero_Character")
 	local bone = body and body:FindFirstChild(HEAD_BONE, true)
 	if not source or not body or not bone or not bone:IsA("Bone") then return nil end
 
-	if not folder or not folder.Parent then
+	if not container and (not folder or not folder.Parent) then
 		folder = Instance.new("Folder")
 		folder.Name = "FacePlates"
 		folder.Parent = Workspace
 	end
+	local parent: Instance = container or folder
+	local world = parent:IsA("WorldRoot") and parent or parent:FindFirstAncestorWhichIsA("WorldRoot") or Workspace
 	local plate = source:Clone()
 	plate.Name = "FacePlate_" .. model.Name
 	plate.Anchored, plate.CanCollide, plate.CanQuery, plate.CanTouch = true, false, false, false
@@ -174,9 +190,12 @@ function FacePlates.Attach(model)
 	-- Rest-pose placement relative to the head bone (Bone.WorldCFrame is the un-animated pose).
 	local offset = bone.WorldCFrame:Inverse() * (body.CFrame * PLATE_FROM_BODY)
 	plate.CFrame = bone.TransformedWorldCFrame * offset
-	plate.Parent = folder
+	plate.Parent = parent
 
-	local state = { model = model, body = body, plate = plate, bone = bone, offset = offset, decals = decals }
+	local state = {
+		model = model, body = body, plate = plate, bone = bone, offset = offset, decals = decals,
+		container = parent, world = world,
+	}
 	state.helmet = model:FindFirstChild(HELM_PART, true) ~= nil
 	state.attrConn = model.AttributeChanged:Connect(function(name)
 		if name:sub(1, #AppearanceApply.ATTRIBUTE_PREFIX) == AppearanceApply.ATTRIBUTE_PREFIX then

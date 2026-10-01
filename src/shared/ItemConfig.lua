@@ -177,7 +177,7 @@ ItemConfig.ARMOR_BONUS_EFFECTS = {
 ItemConfig.BLOCK_CHANCE_CAP_PCT = 30
 
 ItemConfig.ARMOR_SUBSTAT_ROLL_CHANCE = { 0.50, 0.25 }
-ItemConfig.ARMOR_SUBSTAT_DMG_PER_200 = 0.05  -- 5% damage per 200 stat
+ItemConfig.ARMOR_SUBSTAT_DMG_PER_200 = 0.05  -- 5% damage per 200 stat, scaled smoothly (no steps)
 ItemConfig.ARMOR_SUBSTAT_WEAPON_MAP = { vit="Mace", str="Axe", int="Scythe", dex="Sword" }
 
 ------------------------------------------------------------------------
@@ -218,7 +218,8 @@ ItemConfig.WEAPON_EFFECTS = {
       ranges={ {2,3},{3,4},{4,6},{5,8},{6,10} } },
     { id="crushing", label="Crushing",       baseWeight=10, valueType="pct", meleeOnly=true,
       ranges={ {2,3},{3,4},{4,6},{5,8},{6,10} } },
-    { id="pierce",   label="Piercing",       baseWeight=10, valueType="pct",
+    -- Flat damage added to every hit (was a percent until 2026-09-30, see DamageService).
+    { id="pierce",   label="Piercing",       baseWeight=10, valueType="flat",
       ranges={ {3,4},{4,6},{5,8},{6,10},{8,12} } },
     { id="shatter",  label="Shatter",        baseWeight=10, valueType="pct", meleeOnly=true,
       ranges={ {2,3},{3,4},{4,6},{5,8},{6,10} } },

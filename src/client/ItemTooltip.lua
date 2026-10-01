@@ -43,7 +43,7 @@ local LABELS = {
     execute   = "Execute",
     bleed     = "Bleed",
     bleeding  = "Bleeding",
-    pierce    = "Armor Pierce",
+    pierce    = "Piercing",
     cleave    = "Cleave",
     shatter   = "Shatter",
     glowing   = "Glowing",
@@ -60,7 +60,7 @@ local PRIMARY_STATS = { dmgMin=true, dmgMax=true, hp=true, hps=true, armor=true,
 local PRIMARY_ORDER = { "dmgMin", "dmgMax", "hp", "hps", "armor", "dmgRed", "energy" }
 local PCT_STATS     = {
     vsMon=true, vsPly=true, accuracy=true, lifesteal=true,
-    crushing=true, critical=true, execute=true, pierce=true,
+    crushing=true, critical=true, execute=true,
     coinFind=true, block=true, reflect=true, dodge=true, elemRes=true,
 }
 
