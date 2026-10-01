@@ -104,6 +104,13 @@ function InteractionLock.MenuClosed(name: string)
 	end
 end
 
+-- Closes whichever switchable menu is open (e.g. after a hearthstone teleport from the Tab
+-- menu): it runs that menu's own close callback, which reports back through MenuClosed.
+function InteractionLock.CloseMenu()
+	local close = currentClose
+	if close then task.spawn(close) end
+end
+
 function InteractionLock.Subscribe(fn: (boolean) -> ()): () -> ()
 	listeners[fn] = true
 	return function()

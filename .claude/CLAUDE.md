@@ -190,7 +190,8 @@ The newer React-lua UI — separate from the legacy `DungeonMenuUI` system above
   - Per-tier counters live in `profile.stats.tracking`: `scoreByTier` (total), `dungeonScoreByTier`, `runsClearedByTier`, all written through `ProfileTypes.AddTierCount`.
   - Activity history: `profile.activity` via `RS/JournalActivity` (not pushed; `GameEvents/JournalRequest` serves one window). Dry streaks come from the same request (`SSS/JournalService`).
 - `Inventory/init.lua` — the Tab menu fills the screen: the nav column on the right, `ContentArea` to its left (`CONTENT_TOP` clear of Roblox's top-left buttons). Non-inventory panels get `PANEL_HEIGHT` of it, centred.
-- `PanelShell.lua` — shared wrapper every tab panel (`PartyPanel`, `StatsPanel`, `HearthstonePanel`, the inventory tab) renders through; each panel just fills whatever `ContentArea` gives it, so a "gap" or "too small" symptom across multiple tabs is almost always one root-cause fix in `Inventory/init.lua`'s `ContentArea` sizing, not four separate panel bugs.
+- `HearthstonePanel.lua` / `PartyPanel.lua` (2026-10-01): Journal-style books (`Journal/Book`, `Parts.Medallion/Text/List`), no new art. Hearthstone: bound town, resting countdown, Return (closes the menu via `InteractionLock.CloseMenu`), locations with Bind. Party: members + open seats, loot boost, Leave / Create, players here with Invite.
+- `PanelShell.lua` — older shared wrapper (SkillsPanel still renders through it); each panel just fills whatever `ContentArea` gives it, so a "gap" or "too small" symptom across multiple tabs is almost always one root-cause fix in `Inventory/init.lua`'s `ContentArea` sizing, not four separate panel bugs.
 - `RS/ProfileMenusState.lua` — shared open/closed state, plus (2026-09-13) the carousel's live screen-position broadcast, see pattern below.
 - `src/client/XpHud/XpHud.luau` — separate system (XP bars + kill orb-burst effect), see its own entry below.
 

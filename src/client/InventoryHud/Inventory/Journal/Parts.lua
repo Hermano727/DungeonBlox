@@ -11,6 +11,8 @@
 --    Gem          rarity gem, bigger and brighter up the rarities; Epic/Legendary glow pulses
 --    BarTrough    thin recessed track with a coloured fill (0..1)
 --    SplitBar     one bar split between two shares (overworld moss / dungeon iron)
+--    Text / List  plain page text, and a centred vertical stack
+--    Medallion    a picture in the carved bronze ring (avatars, glyphs)
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
@@ -391,6 +393,89 @@ function Parts.BarTrough(props: { fill: number, color: Color3, Size: UDim2?, Pos
 				}),
 			}),
 		},
+	})
+end
+
+-- Plain text on a page (ink colours from Style). props: text, order, Position, AnchorPoint,
+-- Size (or height), size, font, color, align, alignY, wrap, rich, truncate, ZIndex.
+function Parts.Text(props: any)
+	return e("TextLabel", {
+		LayoutOrder = props.order,
+		Position = props.Position,
+		AnchorPoint = props.AnchorPoint,
+		Size = props.Size or UDim2.new(1, 0, 0, props.height or 22),
+		BackgroundTransparency = 1,
+		Text = props.text,
+		RichText = props.rich == true,
+		TextWrapped = props.wrap == true,
+		TextTruncate = props.truncate and Enum.TextTruncate.AtEnd or nil,
+		FontFace = props.font or Style.Font.Body,
+		TextSize = props.size or 16,
+		TextColor3 = props.color or Style.Text.Body,
+		TextXAlignment = props.align or Enum.TextXAlignment.Center,
+		TextYAlignment = props.alignY or Enum.TextYAlignment.Center,
+		ZIndex = props.ZIndex,
+	})
+end
+
+-- A page-filling vertical stack, centred (short pages sit mid-page, not top-heavy).
+function Parts.List(padding: number, children: { [string]: any }, valign: Enum.VerticalAlignment?)
+	children.Layout = e("UIListLayout", {
+		Padding = UDim.new(0, padding),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		HorizontalAlignment = Enum.HorizontalAlignment.Center,
+		VerticalAlignment = valign or Enum.VerticalAlignment.Center,
+	})
+	return e("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1 }, children)
+end
+
+-- A picture in a carved bronze ring (nav_medallion; nav_medallion_selected when lit): player
+-- avatars (round = true crops the picture to a circle), the hearthstone / party glyphs.
+function Parts.Medallion(props: { image: string?, size: number, lit: boolean?, round: boolean?, imageScale: number?,
+	order: number?, Position: UDim2?, AnchorPoint: Vector2?, dim: boolean? })
+	local art = Style.Art(props.lit and "nav_medallion_selected" or "nav_medallion")
+	local ring
+	if art and art.Pad and art.Width then
+		local w, h = art.Width, art.Width / art.Aspect
+		local l, t, r, b = art.Pad[1], art.Pad[2], art.Pad[3], art.Pad[4]
+		local iw, ih = w - l - r, h - t - b
+		ring = e("ImageLabel", {
+			Position = UDim2.fromScale(-l / iw, -t / ih), Size = UDim2.fromScale(w / iw, h / ih),
+			BackgroundTransparency = 1, Image = art.Image, ImageTransparency = props.dim and 0.35 or 0, ZIndex = 2,
+		})
+	elseif art then
+		ring = e("ImageLabel", {
+			Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Image = art.Image,
+			ImageTransparency = props.dim and 0.35 or 0, ZIndex = 2,
+		})
+	else
+		ring = e("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, ZIndex = 2 }, {
+			Corner = e("UICorner", { CornerRadius = UDim.new(1, 0) }),
+			Edge = e("UIStroke", { Color = Style.Flat.Edge, Thickness = 2 }),
+		})
+	end
+	local inner = props.imageScale or (props.round and 0.7 or 0.52)
+	return e("Frame", {
+		LayoutOrder = props.order,
+		Position = props.Position,
+		AnchorPoint = props.AnchorPoint,
+		Size = UDim2.fromOffset(props.size, props.size),
+		BackgroundTransparency = 1,
+	}, {
+		Picture = (props.image and props.image ~= "") and e("ImageLabel", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromScale(inner, inner),
+			BackgroundColor3 = Style.Flat.Trough,
+			BackgroundTransparency = props.round and 0 or 1,
+			Image = props.image,
+			ImageTransparency = props.dim and 0.4 or 0,
+			ScaleType = props.round and Enum.ScaleType.Crop or Enum.ScaleType.Fit,
+			ZIndex = props.round and 1 or 3,
+		}, {
+			Corner = props.round and e("UICorner", { CornerRadius = UDim.new(1, 0) }) or nil,
+		}) or nil,
+		Ring = ring,
 	})
 end
 
