@@ -372,13 +372,14 @@ local function Activity(props: { tier: number, window: string, tabs: any, side: 
 		})
 	end
 
-	local muted = Style.Text.Muted:ToHex()
 	local left = list(7, {
 		Chips = e("Frame", { LayoutOrder = 1, Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1 }, chips),
-		Heading = e(Parts.Heading, { text = WINDOW_TITLE[props.window], size = 27, order = 2, height = 34 }),
+		-- "Score: Last 24 Hours": the heading names the number, so the blocks under the
+		-- bar read as its parts (Overworld / Dungeon) and companions (Kills / Runs).
+		Heading = e(Parts.Heading, { text = "Score: " .. WINDOW_TITLE[props.window], size = 27, order = 2, height = 34 }),
 		Score = text({
-			text = cur and string.format('%s <font size="17" color="#%s">score</font>', formatCount(score), muted) or "...",
-			rich = true, font = Style.Font.Number, size = 42, color = Style.Text.Value, height = 46, order = 3,
+			text = cur and formatCount(score) or "...",
+			font = Style.Font.Number, size = 42, color = Style.Text.Value, height = 46, order = 3,
 		}),
 		Split = e(Parts.SplitBar, { a = cur and cur.o or 0, b = cur and cur.d or 0, height = 14, order = 4 }),
 		Stats = e("Frame", { LayoutOrder = 5, Size = UDim2.new(1, 0, 0, 44), BackgroundTransparency = 1 }, {
@@ -388,10 +389,10 @@ local function Activity(props: { tier: number, window: string, tabs: any, side: 
 				Padding = UDim.new(0, 8),
 				SortOrder = Enum.SortOrder.LayoutOrder,
 			}),
-			Overworld = e(StatBlock, { value = cur and cur.o or 0, caption = "overworld", color = moss, order = 1 }),
-			Dungeon = e(StatBlock, { value = cur and cur.d or 0, caption = "dungeon", color = iron, order = 2 }),
-			Kills = e(StatBlock, { value = cur and cur.k or 0, caption = "kills", order = 3 }),
-			Runs = e(StatBlock, { value = cur and cur.r or 0, caption = "runs", order = 4 }),
+			Overworld = e(StatBlock, { value = cur and cur.o or 0, caption = "Overworld", color = moss, order = 1 }),
+			Dungeon = e(StatBlock, { value = cur and cur.d or 0, caption = "Dungeon", color = iron, order = 2 }),
+			Kills = e(StatBlock, { value = cur and cur.k or 0, caption = "Kills", order = 3 }),
+			Runs = e(StatBlock, { value = cur and cur.r or 0, caption = "Runs", order = 4 }),
 		}),
 		Drops = e("Frame", { LayoutOrder = 6, Size = UDim2.new(1, 0, 0, 32), BackgroundTransparency = 1 }, dropGems),
 		ChartTitle = text({ text = CHART_TITLE[props.window], font = Style.Font.BodyBold, size = 14,
