@@ -502,14 +502,23 @@ local rfHSSwap     = ensureRemoteFunction("HearthstoneSwap")
 local rfHSSync     = ensureRemoteFunction("HearthstoneSync")
 local rfHSPurchase = ensureRemoteFunction("HearthstonePurchase")
 local rfHSAdmin    = ensureRemoteFunction("HearthstoneAdminAdd")
+local rfHSCancel   = ensureRemoteFunction("HearthstoneCancel")
 
 --[[
-  HearthstoneTeleport: teleport player to their active hearthstone (5-min cooldown).
-  Returns: ok, cooldownUntil? | ok=false, err, remainingSecs?
+  HearthstoneTeleport: START the hearthstone channel (out of combat only; Lawful 10 /
+  Neutral 20 / Chaotic 30 s, broken by any hit), which teleports when it completes.
+  Returns: ok, channelSeconds | ok=false, err ("in_combat", "cooldown", "already_channeling"...)
 ]]
 rfHSTele.OnServerInvoke = function(player)
 	if not throttle(player.UserId) then return false, "throttled" end
-	return HearthstoneService.Teleport(player)
+	return HearthstoneService.StartChannel(player)
+end
+
+--[[
+  HearthstoneCancel: stop your own channel in progress. Returns: ok (false = none running).
+]]
+rfHSCancel.OnServerInvoke = function(player)
+	return HearthstoneService.CancelChannel(player)
 end
 
 --[[

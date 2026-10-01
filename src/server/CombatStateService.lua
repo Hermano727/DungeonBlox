@@ -35,7 +35,19 @@ function CombatStateService.IsInCombat(player)
 	return t ~= nil and t > 0
 end
 
+-- Called with (player) on every hit a player takes (every damage path ends in
+-- OnPlayerDamaged below). For things a hit must interrupt: the hearthstone channel, the
+-- shard-hop channel. Returns a disconnect function.
+local hitListeners = {}
+function CombatStateService.OnHit(fn)
+	hitListeners[fn] = true
+	return function() hitListeners[fn] = nil end
+end
+
 function CombatStateService.OnPlayerDamaged(player)
+	for fn in pairs(hitListeners) do
+		task.spawn(fn, player)
+	end
 	local uid = player.UserId
 	local wasOut = not (timers[uid] and timers[uid] > 0)
 	timers[uid] = COMBAT_TIMEOUT

@@ -2,6 +2,15 @@
     HearthstoneService  (server-only)
     Handles teleport, location swap, and Innkeeper purchase logic.
     All functions are server-authoritative and push profile snapshots on success.
+
+    Using the hearthstone is a CHANNEL (2026-10-01): StartChannel(player) checks you're out of
+    combat (CombatStateService.IsInCombat) and off cooldown, then counts down
+    HearthstoneConfig.CHANNEL_SECONDS[alignment] (Lawful 10 / Neutral 20 / Chaotic 30) before
+    Teleport() fires. Any hit taken breaks it (CombatStateService.OnHit), as do death and
+    respawn; CancelChannel(player) for the player's own cancel. The client sees it through two
+    player attributes: HearthChannelEnd (workspace:GetServerTimeNow() it completes at) and
+    HearthChannelLength (seconds), cleared when it ends; an interruption is also flashed
+    (GameEvents/CenterFlashNotify).
 ]]
 
 local CollectionService   = game:GetService("CollectionService")
@@ -11,6 +20,8 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local HearthstoneConfig   = require(ReplicatedStorage:WaitForChild("HearthstoneConfig"))
 local HearthstoneRegistry = require(ServerScriptService:WaitForChild("HearthstoneRegistry"))
 local DungeonProfile      = require(ServerScriptService:WaitForChild("ProfileService"))
+local CombatStateService  = require(ServerScriptService:WaitForChild("CombatStateService"))
+local Players             = game:GetService("Players")
 
 local HearthstoneService = {}
 
@@ -92,6 +103,94 @@ function HearthstoneService.Teleport(player)
     DungeonProfile.PushProfile(player)
     return true, hs.cooldownUntil
 end
+
+-- ---------------------------------------------------------------------------
+-- The channel
+-- ---------------------------------------------------------------------------
+
+local channels = {} -- [userId] = { thread, conns }
+
+local function flash(player, text)
+    local ge = ReplicatedStorage:FindFirstChild("GameEvents")
+    local ev = ge and ge:FindFirstChild("CenterFlashNotify")
+    if ev and ev:IsA("RemoteEvent") then
+        pcall(ev.FireClient, ev, player, text)
+    end
+end
+
+local function clearChannel(player)
+    local ch = channels[player.UserId]
+    if not ch then return nil end
+    channels[player.UserId] = nil
+    for _, conn in ipairs(ch.conns) do conn:Disconnect() end
+    player:SetAttribute("HearthChannelEnd", nil)
+    player:SetAttribute("HearthChannelLength", nil)
+    return ch
+end
+
+-- Stops a channel in progress (no-op without one). `reason` nil = the player's own cancel.
+function HearthstoneService.CancelChannel(player, reason)
+    local ch = clearChannel(player)
+    if not ch then return false end
+    if coroutine.running() ~= ch.thread then pcall(task.cancel, ch.thread) end
+    if reason == "combat" then
+        flash(player, "Hearthstone interrupted!")
+    end
+    return true
+end
+
+function HearthstoneService.IsChanneling(player)
+    return channels[player.UserId] ~= nil
+end
+
+-- Returns ok, seconds | false, reason ("in_combat", "cooldown", "already_channeling", ...).
+function HearthstoneService.StartChannel(player)
+    if channels[player.UserId] then return false, "already_channeling" end
+    local profile = getProfile(player)
+    if not profile then return false, "no_profile" end
+    local hs = profile.hearthstone
+    local now = os.time()
+    if now < (hs.cooldownUntil or 0) then
+        return false, "cooldown", hs.cooldownUntil - now
+    end
+    if CombatStateService.IsInCombat(player) then return false, "in_combat" end
+    if not HearthstoneRegistry.GetLocation(hs.active or "oakhaven") then return false, "invalid_location" end
+    local char = player.Character
+    local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return false, "no_character" end
+
+    local alignment = DungeonProfile.GetAlignment(player)
+    local seconds = HearthstoneConfig.CHANNEL_SECONDS[alignment] or HearthstoneConfig.CHANNEL_SECONDS.Neutral
+
+    local ch = { conns = {} }
+    channels[player.UserId] = ch
+    table.insert(ch.conns, humanoid.Died:Connect(function() HearthstoneService.CancelChannel(player, "died") end))
+    table.insert(ch.conns, player.CharacterRemoving:Connect(function() HearthstoneService.CancelChannel(player, "died") end))
+    player:SetAttribute("HearthChannelLength", seconds)
+    player:SetAttribute("HearthChannelEnd", workspace:GetServerTimeNow() + seconds)
+
+    ch.thread = task.delay(seconds, function()
+        if channels[player.UserId] ~= ch then return end
+        clearChannel(player)
+        if not player.Parent then return end
+        -- Defensive: combat could have started the same frame the timer ran out.
+        if CombatStateService.IsInCombat(player) then
+            flash(player, "Hearthstone interrupted!")
+            return
+        end
+        local ok = HearthstoneService.Teleport(player)
+        if not ok then flash(player, "Your hearthstone fizzles.") end
+    end)
+    return true, seconds
+end
+
+-- A hit breaks the channel (it only works out of combat).
+CombatStateService.OnHit(function(player)
+    HearthstoneService.CancelChannel(player, "combat")
+end)
+Players.PlayerRemoving:Connect(function(player)
+    HearthstoneService.CancelChannel(player, "left")
+end)
 
 -- Swap the player's active hearthstone to a location they already own.
 function HearthstoneService.SwapLocation(player, locationId)

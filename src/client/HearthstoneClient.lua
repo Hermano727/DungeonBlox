@@ -528,9 +528,9 @@ function HearthstoneClient.init(refs)
             return rfTele:InvokeServer()
         end)
         if ok and success then
-            cooldownUntil = type(cdVal) == "number"
-                and cdVal
-                or (os.time() + HearthstoneConfig.COOLDOWN)
+            -- The server now starts a channel (cdVal = its seconds); the cooldown arrives
+            -- with the profile push when the teleport actually happens.
+            DungeonMenuNet.requestSync()
         else
             warn("[Hearthstone] Teleport failed:", success)
         end

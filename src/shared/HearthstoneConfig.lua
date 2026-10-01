@@ -7,6 +7,15 @@
 local HearthstoneConfig = {}
 
 HearthstoneConfig.COOLDOWN     = 300   -- seconds between teleports (5 minutes)
+
+-- Using it is a channel (cast time) you can only START out of combat; taking a hit during it
+-- breaks it (SSS/HearthstoneService). Length by the player's OWN alignment
+-- (ProfileService.GetAlignment), same idea as the shard hop's ShardConfig.CHANNEL_SECONDS.
+HearthstoneConfig.CHANNEL_SECONDS = {
+    Lawful = 10,
+    Neutral = 20,
+    Chaotic = 30,
+}
 HearthstoneConfig.DATASTORE_KEY = "HearthstoneLocations_v1"
 
 -- Replace with your Roblox UserId for admin access to the dev panel.

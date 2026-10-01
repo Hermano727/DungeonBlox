@@ -148,7 +148,7 @@ NpcId convention: tutorial copy = `<type>_tutorial`, else first match = canonica
 - `SSS/NPCService` — `NPCRequest` RF, `npcIndex` (by NpcId), `HANDLERS` dispatch, validates via `NPCRegistry.AllowsAction`.
 - `RS/NPCRegistry` — pure data: `NpcType -> {Interactions, ShopCatalog, TradeRates, ...}`. Catalog data itself lives in `RS/ShopCatalogConfig` (one file, all NPC prices) — NPCRegistry just assigns `ShopCatalog = ShopCatalogConfig.<Type>.ShopCatalog`.
 - `RS/DialogModule` — indexes `UIStroke` directly (not FindFirstChild) on name/arrow/dialog labels; calls `ensureNpcBillboardStrokes` first to backfill on old pre-UIStroke `Head.gui`s. Don't remove.
-- Innkeeper is NOT a merchant-shop type (`SHOP_NPC_TYPES`) — routes through `HearthstoneClient.openInnkeeperShop()` like Blacksmith routes to `BlacksmithClient`, both via `MerchantShopClient`'s ProximityPromptService hook. Hearthstone remotes: `HearthstoneSync/Purchase/Teleport/Swap` + admin Add/Delete.
+- Innkeeper is NOT a merchant-shop type (`SHOP_NPC_TYPES`) — routes through `HearthstoneClient.openInnkeeperShop()` like Blacksmith routes to `BlacksmithClient`, both via `MerchantShopClient`'s ProximityPromptService hook. Hearthstone remotes: `HearthstoneSync/Purchase/Teleport/Swap` + admin Add/Delete. **Using it is a channel (2026-10-01):** `HearthstoneTeleport` starts `HearthstoneService.StartChannel` (out of combat only; `HearthstoneConfig.CHANNEL_SECONDS` Lawful 10 / Neutral 20 / Chaotic 30, by the player's own alignment), any hit breaks it (`CombatStateService.OnHit`, which the shard hop now uses too), `HearthstoneCancel` stops it. The client cast bar (`HearthstoneChannelClient`) reads the `HearthChannelEnd`/`HearthChannelLength` player attributes.
 
 ## Combat & animation
 | File | Purpose |

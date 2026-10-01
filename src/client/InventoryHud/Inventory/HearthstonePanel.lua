@@ -6,15 +6,19 @@
 --           filling back up over HearthstoneConfig.COOLDOWN), and "Return to <town>"
 --    right  Locations: every waystone, Bound / Owned (Bind) / sold by the Innkeeper
 --
---  Server side is unchanged (SSS/HearthstoneService via ProfileBootstrap's remotes):
+--  Server side (SSS/HearthstoneService via ProfileBootstrap's remotes):
 --    HearthstoneSync      the location catalog (fetched once, cached for the session)
---    HearthstoneTeleport  -> ok, cooldownUntil | false, reason
+--    HearthstoneTeleport  STARTS the channel -> ok, seconds | false, reason. Out of combat only;
+--                         Lawful 10 / Neutral 20 / Chaotic 30 s (HearthstoneConfig), a hit
+--                         breaks it. The cast bar is HearthstoneChannelClient.
+--    HearthstoneCancel    stops your channel
 --    HearthstoneSwap(id)  -> ok | false, reason
 --  State comes from the profile snapshot (profile.hearthstone: active, unlocked, cooldownUntil);
 --  after an action it calls DungeonMenuNet.requestSync() (the push can race, see CLAUDE.md).
---  A successful teleport closes the Tab menu (InteractionLock.CloseMenu).
+--  Starting the channel closes the Tab menu (InteractionLock.CloseMenu) so you see the cast bar.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
 local React = require(ReplicatedStorage.Packages.React)
 local HearthstoneConfig = require(ReplicatedStorage:WaitForChild("HearthstoneConfig"))
 local HearthstoneIcons = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Icons"):WaitForChild("Hearthstones"):WaitForChild("HearthstoneIcons"))
@@ -34,6 +38,8 @@ local LOCATIONS_HELP = "Buy new locations from the Innkeeper in any town. Bind o
 
 local REASONS = {
 	cooldown = "Your hearthstone is still resting.",
+	in_combat = "You can't use it in combat.",
+	already_channeling = "It's already channeling.",
 	no_character = "You need to be standing somewhere first.",
 	invalid_location = "That place can't be reached right now.",
 	not_owned = "You don't own that location.",
@@ -154,19 +160,26 @@ local function HearthstonePanel()
 	local boundLoc = byId[active] or { id = active, name = active }
 	local remaining = math.max(0, (tonumber(hs.cooldownUntil) or 0) - now)
 	local ready = remaining <= 0
+	local channelEnd = Players.LocalPlayer:GetAttribute("HearthChannelEnd")
+	local channeling = type(channelEnd) == "number"
+	local channelLeft = channeling and math.max(0, math.ceil(channelEnd - workspace:GetServerTimeNow())) or 0
 
 	local function teleport()
 		if busy or not ready then return end
 		setBusy(true)
 		local ok, reason = invoke("HearthstoneTeleport")
 		setBusy(false)
-		DungeonMenuNet.requestSync()
 		if ok then
 			setStatus("")
-			InteractionLock.CloseMenu()
+			InteractionLock.CloseMenu() -- the cast bar takes over (HearthstoneChannelClient)
 		else
 			setStatus(REASONS[reason] or "Couldn't travel.")
 		end
+	end
+
+	local function cancel()
+		invoke("HearthstoneCancel")
+		setStatus("")
 	end
 
 	local function bind(id: string)
@@ -195,7 +208,12 @@ local function HearthstonePanel()
 				Position = UDim2.fromOffset(0, 26), Size = UDim2.new(1, 0, 0, 12),
 			}),
 		}),
-		Go = e(Parts.ChromeButton, {
+		Go = channeling and e(Parts.ChromeButton, {
+			text = ("Channeling, %ds  (cancel)"):format(channelLeft),
+			art = "chip", artSelected = "chip_selected",
+			Size = UDim2.fromOffset(280, 46), LayoutOrder = 6, textSize = 17,
+			onClick = cancel,
+		}) or e(Parts.ChromeButton, {
 			text = "Return to " .. (boundLoc.name or active),
 			art = "chip", artSelected = "chip_selected", selected = ready,
 			disabled = not ready or busy,
@@ -204,8 +222,10 @@ local function HearthstonePanel()
 		}),
 		Status = text({ text = status, size = 14, color = Style.Text.Bad, height = 20, order = 7 }),
 		Note = text({
-			text = ("Takes you back to the town it's bound to, then rests for %d minutes."):format(math.floor(HearthstoneConfig.COOLDOWN / 60)),
-			size = 13, color = Style.Text.Muted, wrap = true, height = 36, order = 8,
+			text = ("Out of combat only. Channels %ds Lawful, %ds Neutral, %ds Chaotic; a hit breaks it. Then it rests for %d minutes."):format(
+				HearthstoneConfig.CHANNEL_SECONDS.Lawful, HearthstoneConfig.CHANNEL_SECONDS.Neutral, HearthstoneConfig.CHANNEL_SECONDS.Chaotic,
+				math.floor(HearthstoneConfig.COOLDOWN / 60)),
+			size = 13, color = Style.Text.Muted, wrap = true, height = 52, order = 8,
 		}),
 	})
 

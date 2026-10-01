@@ -31,9 +31,8 @@
 	    (Lawful/Neutral/Chaotic -- ProfileService.GetAlignment, NOT zone
 	    alignment). Blocked from starting at all while in combat
 	    (CombatStateService.IsInCombat), and cancelled the instant the player
-	    takes damage (DamageService.ApplyToPlayer calls ShardService.CancelChannel
-	    directly -- see that file's hook, added alongside its existing
-	    CombatStateService.OnPlayerDamaged call).
+	    takes damage (CombatStateService.OnHit, wired at the bottom of the channel
+	    section below; the DamageService hook this used to describe never existed).
 
 	Profile continuity: right before firing the actual teleport we force an
 	immediate ProfileService.SaveProfile(player) call so the destination
@@ -231,6 +230,11 @@ function ShardService.CancelChannel(player, reason)
 	channels[player.UserId] = nil
 	fireStatus(player, "cancelled", reason)
 end
+
+-- Taking any hit breaks a channel in progress.
+CombatStateService.OnHit(function(player)
+	ShardService.CancelChannel(player, "damaged")
+end)
 
 local function completeHop(player, targetShardIndex)
 	channels[player.UserId] = nil
