@@ -99,7 +99,7 @@ local PANELS: { [string]: any } = {
 -- content area to its left, CONTENT_TOP below the screen's top edge (Roblox's own buttons sit
 -- there). Panels other than the Inventory get PANEL_HEIGHT of it, centred, so they keep roughly
 -- the size they had under the old top row; the Inventory uses all of it.
-local NAV_W = 190
+local NAV_W = 160
 local NAV_MARGIN = 16
 local NAV_TOP = 0.05
 local NAV_BOTTOM = 0.05
@@ -107,6 +107,7 @@ local CONTENT_TOP = 60
 local CONTENT_BOTTOM = 20
 local CONTENT_LEFT = 24
 local PANEL_HEIGHT = 0.86
+local FULL_HEIGHT = { journal = true } -- these panels get the whole content height (the Journal's book)
 
 -- The Inventory tab (courtyard layout): the character + gear sockets (PlayerPreview) fill the
 -- left of the content area at full height (STAGE_ASPECT = its DESIGN canvas, width / height;
@@ -658,7 +659,7 @@ local function renderBody(key: string)
 	return PanelComponent and e("Frame", {
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromScale(1, PANEL_HEIGHT),
+		Size = UDim2.fromScale(1, FULL_HEIGHT[key] and 1 or PANEL_HEIGHT),
 		BackgroundTransparency = 1,
 	}, {
 		Panel = e(PanelComponent, {}),

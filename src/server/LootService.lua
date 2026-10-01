@@ -19,6 +19,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local Config         = require(ReplicatedStorage:WaitForChild("ItemConfig"))
 local Types          = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
 local JournalActivity = require(ReplicatedStorage:WaitForChild("JournalActivity"))
+local LeaderboardService = require(game:GetService("ServerScriptService"):WaitForChild("LeaderboardService"))
 local ItemIdentity   = require(ReplicatedStorage:WaitForChild("ItemIdentity"))
 local ItemGenerator  = require(ServerScriptService:WaitForChild("ItemGenerator"))
 local DungeonProfile = require(ServerScriptService:WaitForChild("ProfileService"))
@@ -344,6 +345,8 @@ local function tryDropGearByScore(mob, tier, level, killingBlowPlayer, deathPos,
         if profile then
             Types.AddTierScore(profile, tier, gained)
         end
+        -- Cross-server kill + score boards (Journal > Leaderboards); batched, memory only here.
+        LeaderboardService.Add(killingBlowPlayer, tier, 1, gained)
     end
 
     -- In a dungeon the score is banked, not spent.

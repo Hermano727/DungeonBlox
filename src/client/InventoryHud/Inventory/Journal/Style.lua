@@ -82,8 +82,8 @@ Style.Font = {
 
 -- The spread's shape (the blueprint's book is about twice as wide as tall).
 Style.BOOK_ASPECT = 2.0
-Style.BOOK_MAX = Vector2.new(1500, 750)
-Style.SIDEBAR_W = 190
+Style.BOOK_MAX = Vector2.new(1800, 900)
+Style.SIDEBAR_W = 230
 Style.PAGE_PAD = 34 -- inside each page, before content
 -- Each page's content is laid out on this fixed design canvas (px) and scaled to fit the page
 -- (Journal/Book), so it never overflows on a small window and grows on a large one.

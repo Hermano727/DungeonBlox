@@ -108,7 +108,10 @@ return {
 	-- a radial falloff, see docs/ui-and-networking.md)
 	gem_glow        = piece({ Image = "rbxassetid://124669614530343", Aspect = 1 }),
 	icon_loot_score = piece({ Image = "rbxassetid://111981563075790", Aspect = 502 / 458 }), -- coin pouch
-	icon_records    = piece({ Image = "rbxassetid://111678186607517", Aspect = 611 / 384 }), -- sealed scroll
+	-- 2026-10-01: the page-of-notes art (same asset as icon_cat_overview) replaced the sealed
+	-- scroll (rbxassetid://111678186607517).
+	icon_records    = piece({ Image = "rbxassetid://114756755504191", Aspect = 264 / 340 }),
+	icon_leaderboards = piece({ Image = "rbxassetid://137764770279274", Aspect = 1024 / 516 }), -- gold 1-2-3 podium
 
 	-- Per-tier page illustration: bottom of the Activity page's right side (LootScorePage).
 	-- Faint ink-and-wash scene on transparent ground so the parchment shows through.

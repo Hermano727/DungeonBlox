@@ -27,6 +27,7 @@ Roblox first-person Looter-ARPG (DungeonRealms-like). 5-tier progression (lvl 1/
 | [Mob & NPC System](./docs/mob-and-npc-system.md) | spawners, mob AI/heartbeat, NPC bootstrap, shops, dialog |
 | [Character & Rigging Pipeline](./docs/character-pipeline.md) | Blender/Tripo asset creation, weapon Grip tuning, R15 rigging, retopo |
 | [UI & Networking](./docs/ui-and-networking.md) | menu UI, fonts, remotes, zone theming (design goal) |
+| [UI Development Process](./docs/ui-development-process.md) | how UI gets made: who generates art, prompt rules, the mockup -> pieces -> build -> play-test loop |
 | [World Map & Minimap](./docs/minimap.md) | the minimap / M map, fog of war (explored cells), region discovery, map colours (`MapColor`) |
 | [Studio & Tooling Gotchas](./docs/studio-tooling.md) | command bar, MCP `multi_edit`/`execute_luau` quirks, Luau syntax traps |
 | [Dev Tools](./docs/dev-tools.md) | F8 DevPlacer (spawners/zones/time/item spawning), F7/F10/F6 dev menus, DevRoster gating, dev DataStores |

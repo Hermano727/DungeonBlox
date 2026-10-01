@@ -55,7 +55,7 @@ local XP_BORDER_PAD_X, XP_BORDER_PAD_Y = 30, 12 -- base overhang at Border.Scale
 -- Combat bar only (2026-09-07, per direct request): replaces the "COMBAT" text
 -- label with this icon, level number to its right, above the bar. The XP
 -- amount moves from below the bar to centered inside it, HP-bar style.
-local COMBAT_ICON_IMAGE = "rbxassetid://71642300678008"
+local COMBAT_ICON_IMAGE = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Icons"):WaitForChild("Hud"):WaitForChild("HudIcons")).COMBAT
 
 local XpBorderTuning = UIDevTuning.Register("XpBar", {
     -- Approved 2026-09-07 via UIDevTool (F6) snapshot was Scale=2.130,

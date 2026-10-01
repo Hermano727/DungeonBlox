@@ -3,6 +3,8 @@
 
 	GameEvents/JournalRequest (RemoteFunction), client -> server:
 		"lootScore"                 -> { streaks = { Common = n, Uncommon = n, ... } }
+		"leaderboard", board, a, b  -> SSS/LeaderboardService.Read (skill boards; kills / score
+		                               by period and tier)
 		"activity", tier, window    -> RS/JournalActivity.Summary for that tier and window
 		                               ("1H" | "24H" | "7D" | "30D"): current totals, chart
 		                               points, and the average window (nil until enough history)
@@ -20,6 +22,8 @@ local RemoteUtils = require(ReplicatedStorage:WaitForChild("RemoteUtils"))
 local LootPityService = require(ServerScriptService:WaitForChild("LootPityService"))
 local ProfileService = require(ServerScriptService:WaitForChild("ProfileService"))
 local JournalActivity = require(ReplicatedStorage:WaitForChild("JournalActivity"))
+local LeaderboardService = require(ServerScriptService:WaitForChild("LeaderboardService"))
+LeaderboardService.Start()
 
 local VALID_WINDOWS = {}
 for _, w in ipairs(JournalActivity.WINDOWS) do VALID_WINDOWS[w] = true end
@@ -27,7 +31,7 @@ for _, w in ipairs(JournalActivity.WINDOWS) do VALID_WINDOWS[w] = true end
 local gameEvents = RemoteUtils.EnsureFolder(ReplicatedStorage, "GameEvents")
 local journalRequest = RemoteUtils.EnsureRemoteFunction(gameEvents, "JournalRequest")
 
-journalRequest.OnServerInvoke = function(player, page, tier, window)
+journalRequest.OnServerInvoke = function(player, page, tier, window, ...)
 	if page == "lootScore" then
 		return { streaks = LootPityService.GetStreaks(player) or {} }
 	elseif page == "activity" then
@@ -36,6 +40,10 @@ journalRequest.OnServerInvoke = function(player, page, tier, window)
 		if not profile then return nil end
 		tier = math.clamp(math.floor(tonumber(tier) or 1), 1, 5)
 		return JournalActivity.Summary(profile, tier, window)
+	elseif page == "leaderboard" then
+		-- tier = the board ("skill" | "kills" | "score"), window = its first filter (skill name
+		-- or period), and a 4th arg the tier (kills / score). See LeaderboardService.Read.
+		return LeaderboardService.Read(player, tier, window, select(1, ...))
 	end
 	return nil
 end
