@@ -13,6 +13,7 @@ local UserInputService = game:GetService("UserInputService")
 local MenuMouse = require(ReplicatedStorage:WaitForChild("CursorUtils"))
 local PartyConfig = require(ReplicatedStorage:WaitForChild("PartyConfig"))
 local PartyRequestUtil = require(ReplicatedStorage:WaitForChild("PartyRequestUtil"))
+local QuickNav = require(ReplicatedStorage:WaitForChild("HudQuickNav"))
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -41,7 +42,7 @@ end
 local hudGui = Instance.new("ScreenGui")
 hudGui.Name = "PartyHUD"
 hudGui.ResetOnSpawn = false
-hudGui.IgnoreGuiInset = false
+hudGui.IgnoreGuiInset = true -- screen space, like the quick-nav row it hangs under
 hudGui.DisplayOrder = 125
 hudGui.Enabled = false
 hudGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
@@ -50,7 +51,7 @@ hudGui.Parent = playerGui
 local hudPanel = Instance.new("Frame")
 hudPanel.Name = "Panel"
 hudPanel.AnchorPoint = Vector2.new(1, 0)
-hudPanel.Position = UDim2.new(1, -8, 0.20, 0)
+hudPanel.Position = UDim2.new(1, -8, 0.20, 0) -- until the row reports where it ends (below)
 hudPanel.Size = UDim2.new(0, 220, 0, 0)
 hudPanel.AutomaticSize = Enum.AutomaticSize.Y
 hudPanel.BackgroundColor3 = Color3.fromRGB(18, 13, 13)
@@ -58,6 +59,11 @@ hudPanel.BackgroundTransparency = 0.10
 hudPanel.BorderSizePixel = 0
 hudPanel.ZIndex = 1
 hudPanel.Parent = hudGui
+-- Hang under the minimap and its button row, wherever they end (they grew 30% on 2026-10-06
+-- and would have run into a fixed 20%-down panel).
+QuickNav.OnBottomChanged(function(y)
+	hudPanel.Position = UDim2.new(1, -8, 0, y + 10)
+end)
 Instance.new("UICorner", hudPanel).CornerRadius = UDim.new(0, 8)
 local hudStroke = Instance.new("UIStroke", hudPanel)
 hudStroke.Color = Color3.fromRGB(90, 65, 40)

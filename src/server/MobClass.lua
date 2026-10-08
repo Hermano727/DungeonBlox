@@ -1055,7 +1055,8 @@ function MobClass:UpdateAI(deltaTime, players, activeMobs)
     if not self.Model or self.CurrentHealth <= 0 then
         return
     end
-    if self.IsSpawnStunned then
+    -- Spawn stun, or a tutorial spotlight pausing the player's private copy (TutorialPaused).
+    if self.IsSpawnStunned or self.TutorialPaused then
         MobAnimController.setWalking(self, false)
         return
     end

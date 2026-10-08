@@ -13,8 +13,17 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
+local ItemConfig = require(ReplicatedStorage:WaitForChild("ItemConfig"))
 
 local EnchantScrollApply = {}
+
+-- A failed enchant (+4 and up) BREAKS the item: it drops BREAK_LEVEL_LOSS enchant levels
+-- (never below +0), its durability goes to 0 and it needs a repair (3x cost while broken). An
+-- item that wears down to 0 durability breaks the same way (SSS/DurabilityService).
+-- A protection scroll on the item stops the break for attempts up to PROTECTION_MAX_LEVEL:
+-- the failed attempt just costs the scroll and the protection.
+EnchantScrollApply.BREAK_LEVEL_LOSS = 3
+EnchantScrollApply.PROTECTION_MAX_LEVEL = 8
 
 EnchantScrollApply.SUCCESS_CHANCE_AT_TARGET_LEVEL = {
 	[4] = 0.80,
@@ -283,6 +292,66 @@ function EnchantScrollApply.GetSuccessChanceForNextLevel(currentEnchantLevel)
 	return EnchantScrollApply.SUCCESS_CHANCE_AT_TARGET_LEVEL[nextLevel]
 end
 
+--[[
+	The enchant's share of an item's stats, rebuilt: replays `level` successful enchants on top
+	of `base` (the pre-enchant stats) and writes only the stats the enchant owns (weapons
+	dmgMin/dmgMax; armor hp + energy, shields hp + hps) into `subs`. Every other substat (orb
+	rolls) is left alone. Pure: mutates only `subs`. Used when the levels drop (a break) and
+	when the base itself changes underneath the enchant (a Wisdom orb's level up).
+]]
+function EnchantScrollApply.RebuildEnchantOwned(item, base, level, subs)
+	if type(item) ~= "table" or type(base) ~= "table" or type(subs) ~= "table" then return false end
+	local rebuilt = {}
+	for k, v in pairs(base) do rebuilt[k] = v end
+	for _ = 1, math.max(0, math.floor(tonumber(level) or 0)) do
+		local ok, _err, nextSubs = computeBonusSubStats(item, rebuilt, nil)
+		if not ok then return false end
+		rebuilt = nextSubs
+	end
+	local owned
+	if item.type == "Weapon" then
+		owned = { "dmgMin", "dmgMax" }
+	elseif isShield(item, base) then
+		owned = { "hp", "hps" }
+	else
+		owned = { "hp", "energy" }
+	end
+	for _, key in ipairs(owned) do
+		subs[key] = rebuilt[key]
+	end
+	return true
+end
+
+--[[
+	Takes `levels` enchant levels off an item (never below +0) and rebuilds the stats the enchant
+	owns from the pre-enchant snapshot (baseSubStats, see RebuildEnchantOwned). Items without a
+	snapshot just lose the levels. Pure item mutation.
+]]
+function EnchantScrollApply.DropEnchantLevels(item, levels)
+	if type(item) ~= "table" then return end
+	local cur = math.floor(tonumber(item.enchantLevel) or 0)
+	local newLevel = math.max(0, cur - math.max(0, math.floor(tonumber(levels) or 0)))
+	if newLevel == cur then return end
+	item.enchantLevel = newLevel
+	if not EnchantScrollApply.RebuildEnchantOwned(item, item.baseSubStats, newLevel, item.subStats) then return end
+	if newLevel == 0 then
+		item.baseSubStats = nil -- the next first enchant snapshots afresh
+	end
+end
+
+-- Breaks an item: durability 0, `broken`, BREAK_LEVEL_LOSS enchant levels gone. Pure item
+-- mutation; the server side (unequip, notify) is SSS/DurabilityService.OnBroken.
+function EnchantScrollApply.BreakItem(item)
+	if type(item) ~= "table" then return end
+	if type(item.maxDurability) ~= "number" then
+		local tier = math.clamp(math.floor(tonumber(item.tier) or 1), 1, 5)
+		item.maxDurability = ItemConfig.MAX_DURABILITY_BY_TIER[tier]
+	end
+	item.durability = 0
+	item.broken = true
+	EnchantScrollApply.DropEnchantLevels(item, EnchantScrollApply.BREAK_LEVEL_LOSS)
+end
+
 function EnchantScrollApply.ApplyFromAct(profile, act, rng)
 	if type(profile) ~= "table" then
 		return false, "bad_profile", nil
@@ -314,6 +383,9 @@ function EnchantScrollApply.ApplyFromAct(profile, act, rng)
 		return false, "tier_mismatch", nil
 	end
 
+	if targetItem.broken == true then
+		return false, "item_broken", nil -- repair it first
+	end
 	local curEnch = math.floor(tonumber(targetItem.enchantLevel) or 0)
 	if curEnch >= 9 then
 		return false, "max_enchant", nil
@@ -330,9 +402,9 @@ function EnchantScrollApply.ApplyFromAct(profile, act, rng)
 		end
 	end
 
-	-- T1 enchant scroll on Protected gear: failed roll keeps enchant (no wipe) and strips protection;
-	-- successful roll applies enchant and strips protection.
-	local tier1Protected = (math.floor(tonumber(scrollDef.Tier) or 1) == 1) and targetItem.scrollProtected
+	-- Protected gear (a protection scroll of its tier, ProtectionScrollApply): a failed roll at or
+	-- below PROTECTION_MAX_LEVEL breaks nothing. Either way the attempt uses the protection up.
+	local protected = targetItem.scrollProtected == true and nextEnch <= EnchantScrollApply.PROTECTION_MAX_LEVEL
 
 	if not consumeOneFromBag(profile, scrollUuid) then
 		return false, "scroll_not_in_bag", nil
@@ -340,22 +412,10 @@ function EnchantScrollApply.ApplyFromAct(profile, act, rng)
 
 	local success = EnchantScrollApply.RollEnchantSuccess(nextEnch, rng)
 	if not success then
-		if tier1Protected then
-			targetItem.scrollProtected = nil
-		else
-			targetItem.enchantLevel = 0
-			local base = targetItem.baseSubStats
-			if type(base) == "table" then
-				local subs = targetItem.subStats
-				if type(subs) ~= "table" then
-					subs = {}
-					targetItem.subStats = subs
-				end
-				for k in pairs(subs) do subs[k] = nil end
-				for k, v in pairs(base) do subs[k] = v end
-				targetItem.baseSubStats = nil
-			end
+		if not protected then
+			EnchantScrollApply.BreakItem(targetItem)
 		end
+		targetItem.scrollProtected = nil
 		bumpSnapSeq(profile)
 		return true, nil, { profile = profile, _seq = profile.__snapSeq }
 	end
@@ -368,9 +428,7 @@ function EnchantScrollApply.ApplyFromAct(profile, act, rng)
 		return false, errStat or "stat_apply_failed", nil
 	end
 
-	if tier1Protected then
-		targetItem.scrollProtected = nil
-	end
+	targetItem.scrollProtected = nil
 
 	bumpSnapSeq(profile)
 	return true, nil, { profile = profile, _seq = profile.__snapSeq }

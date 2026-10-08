@@ -113,6 +113,38 @@ function DevProfileTab.Build(ctx)
 	local clearBtn = mkB(sec, "Clear activity", 12 + half + 8, y4 + 20, half, 32, Color3.fromRGB(110, 60, 50))
 	clearBtn.Activated:Connect(function() act("clearActivity", nil, "Activity history cleared") end)
 
+	-- The tutorial (SSS/TutorialService). Reset WIPES your whole profile (ProfileService.
+	-- WipeProfile: items, coins, skills, map) and starts the tutorial as a new player. Skip ends
+	-- it here; Jump starts at a step by its id (TutorialSteps).
+	local y5 = y4 + 64
+	lbl(sec, "TUTORIAL", 12, y5, 200, 16, 11, ctx.acc, true)
+	-- Two clicks within 3 s: it wipes everything.
+	local resetBtn = mkB(sec, "Wipe + restart", 12, y5 + 20, half, 32, Color3.fromRGB(130, 50, 40))
+	local armedAt = 0
+	resetBtn.Activated:Connect(function()
+		if os.clock() - armedAt > 3 then
+			armedAt = os.clock()
+			resetBtn.Text = "Click again to wipe"
+			status("This wipes your whole profile. Click again to confirm.", true)
+			task.delay(3, function() resetBtn.Text = "Wipe + restart" end)
+			return
+		end
+		armedAt = 0
+		resetBtn.Text = "Wipe + restart"
+		act("tutorialReset", nil, "Profile wiped, tutorial restarted")
+	end)
+	local skipBtn = mkB(sec, "Skip tutorial", 12 + half + 8, y5 + 20, half, 32, Color3.fromRGB(110, 60, 50))
+	skipBtn.Activated:Connect(function() act("tutorialSkip", nil, "Tutorial skipped") end)
+	local stepBox = mkI(sec, "step id", 12, y5 + 60, W - 24 - 90, 28, "")
+	local stepBtn = mkB(sec, "Jump", W - 12 - 82, y5 + 60, 82, 28, Color3.fromRGB(60, 80, 110))
+	local function jump()
+		local id = stepBox.Text:match("^%s*(.-)%s*$")
+		if id == "" then status("Enter a step id", true) return end
+		act("tutorialStep", { step = id }, "Jumped to " .. id)
+	end
+	stepBtn.Activated:Connect(jump)
+	stepBox.FocusLost:Connect(function(enter) if enter then jump() end end)
+
 	return sec
 end
 

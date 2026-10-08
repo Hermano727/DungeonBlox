@@ -21,6 +21,9 @@
 
 local CollectionService = game:GetService("CollectionService")
 local ServerStorage     = game:GetService("ServerStorage")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local NPCRegistry = require(ReplicatedStorage:WaitForChild("NPCRegistry"))
 
 local function waitForMobSystem(timeout)
     local t = 0
@@ -89,9 +92,10 @@ local function setupNpcModel(model, npcName)
         humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
     end
 
-    -- Add BillboardGui to Head if missing (DialogModule reads from Head.gui)
+    -- Add BillboardGui to Head if missing (DialogModule reads from Head.gui). Types with an
+    -- NPCRegistry Nametag get the client-drawn tag (NpcNametags) instead.
     local head = model:FindFirstChild("Head")
-    if head and not head:FindFirstChild("gui") then
+    if head and not head:FindFirstChild("gui") and not NPCRegistry.GetNametag(model:GetAttribute("NpcType")) then
         local bb = Instance.new("BillboardGui")
         bb.Name = "gui"
         bb.Size = UDim2.new(8, 0, 1.5, 0)

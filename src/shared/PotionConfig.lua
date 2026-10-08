@@ -1,23 +1,10 @@
---[[
-	PotionConfig
-	Single source of truth for potion tiers, matching the Config/Service split already used by
-	MiningExcavationConfig, EnergyConfig and HungerConfig (tuned numbers + display metadata live
-	in shared/, the runtime logic that reads them lives in the server script). Previously these
-	values lived as a local table inline in PotionService.server.luau, and PotionClient had its
-	own hand-copied list of the same itemIds + display labels for its charge HUD -- meaning a new
-	potion tier had to be added in two disconnected places to actually show up client-side.
-	PotionClient now reads Order/displayName from here instead of keeping its own copy.
-
-	2026-09-10 rework (direct request: "the pot system right now allows for using 3 minor
-	potions in addition to 3 medium potions, it should be 3 potions IN GENERAL"): maxCharges/
-	regenInterval used to live PER TIER, so a player could drink 3 Minor AND 3 Medium potions
-	back to back -- 6 total heals, not 3. Charges are now tracked as ONE shared pool across
-	every tier (see SharedCharges below) -- drinking any potion, of any tier, consumes from the
-	same count. healPerSecond/duration are unchanged and still per-tier, since different tiers
-	still heal for different amounts.
-]]
+-- Shared charges, total healing per potion, and the ten-second healing schedule.
+-- Drinking duration and animation timings live in PotionDrinkConfig.
 
 return {
+	-- A completed drink starts ten independent one-second healing ticks.
+	HealTicks = 10,
+	HealTickInterval = 1,
 	-- Canonical display order for HUD rows; also acts as the canonical list of known potion
 	-- itemIds (PotionService seeds a charge entry for each one on join).
 	Order = { "MinorPotion", "MediumPotion" },
@@ -30,17 +17,19 @@ return {
 		regenInterval = 40, -- seconds per charge regenerated
 	},
 
-	-- itemId -> { healPerSecond, duration (seconds healed), displayName (short label) }.
+	-- itemId -> total healAmount, colour/model and short displayName.
 	-- maxCharges/regenInterval used to live here per-tier -- moved to SharedCharges above.
 	Tiers = {
 		MinorPotion = {
-			healPerSecond = 30,
-			duration = 5,
+			drinkColor = Color3.fromRGB(150, 18, 24),
+			visualModel = "T1_MinorPotion",
+			healAmount = 150, -- preserves the previous 30/s for 5s total
 			displayName = "Minor",
 		},
 		MediumPotion = {
-			healPerSecond = 60,
-			duration = 5,
+			drinkColor = Color3.fromRGB(150, 18, 24), -- independently tunable when its art is ready
+			visualModel = "T1_MinorPotion",
+			healAmount = 300, -- preserves the previous 60/s for 5s total
 			displayName = "Medium",
 		},
 	},

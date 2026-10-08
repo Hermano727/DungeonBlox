@@ -20,7 +20,7 @@
 --  nav_medallion_selected), bronze glyphs (nav_glyph_<id>) and a name plaque (nav_plaque) from
 --  RS/Assets/Images/JournalUI. Any piece missing falls back to the older art below.
 --
---  Adding a destination: one entry in ICONS (plus its panel in Inventory/init.lua's PANELS),
+--  Adding a destination: one entry in ALL_ICONS (plus its panel in Inventory/init.lua's PANELS),
 --  and a nav_glyph_<id> registry entry for its glyph.
 --  Tuning: the constants below.
 
@@ -30,6 +30,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local React = require(ReplicatedStorage.Packages.React)
 local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
 local ProfileMenusState = require(ReplicatedStorage:WaitForChild("ProfileMenusState"))
+local DungeonMenuNet = require(script.Parent.Parent.Parent:WaitForChild("DungeonMenuNet"))
 local JournalUI = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Images"):WaitForChild("JournalUI"))
 local e = React.createElement
 
@@ -47,17 +48,29 @@ local BACKING_SELECTED = "rbxassetid://79091640085978"
 -- Older glyph for the Journal (the Stats one), used only if nav_glyph_journal is missing.
 local JOURNAL_ICON_PLACEHOLDER = "rbxassetid://113519481797233"
 
-local ICONS = {
+local ALL_ICONS = {
 	{ id = "inventory",   image = "rbxassetid://124308421822604", label = "Inventory" },
 	{ id = "journal",     image = JOURNAL_ICON_PLACEHOLDER,       label = "Journal" },
-	{ id = "hearthstone", image = "rbxassetid://92412859018068",  label = "Hearthstone" },
+	-- Hidden until the player has unlocked it (profile.flags.hearthstoneUnlocked, the
+	-- tutorial's totem; the server refuses to use it before then anyway).
+	{ id = "hearthstone", image = "rbxassetid://92412859018068",  label = "Hearthstone", unlockFlag = "hearthstoneUnlocked" },
 	{ id = "party",       image = "rbxassetid://80729608864109",  label = "Party" },
 }
-for _, icon in ipairs(ICONS) do
+for _, icon in ipairs(ALL_ICONS) do
 	local glyph = art("nav_glyph_" .. icon.id)
 	if glyph then icon.image = glyph.Image end
 end
-local ICON_COUNT = #ICONS
+
+-- The destinations this profile can see.
+local function visibleIcons(flags)
+	local out = {}
+	for _, icon in ipairs(ALL_ICONS) do
+		if not icon.unlockFlag or (type(flags) == "table" and flags[icon.unlockFlag] == true) then
+			table.insert(out, icon)
+		end
+	end
+	return out
+end
 
 local TILE_MAX = 118         -- px, largest a tile gets (the row fits itself to the header)
 local TILE_GAP = 26          -- MINIMUM px between tiles (the column spreads them further)
@@ -76,6 +89,7 @@ local LABEL_EDGE = Color3.fromRGB(10, 8, 8)
 local TWEEN = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 local function NavTile(props: {
+	id: string?,
 	image: string,
 	label: string,
 	selected: boolean,
@@ -114,6 +128,10 @@ local function NavTile(props: {
 			[React.Event.Activated] = props.onClick,
 			[React.Event.MouseEnter] = function() setHovered(true) end,
 			[React.Event.MouseLeave] = function() setHovered(false) end,
+			-- The tutorial can point at a destination ("nav_journal", ...).
+			ref = function(rbx)
+				if rbx and props.id then rbx:SetAttribute("TutorialTarget", "nav_" .. props.id) end
+			end,
 		}, {
 			Scale = e("UIScale", { ref = scaleRef, Scale = 1 }),
 			-- The selected medallion carries its glow outside the ring: draw it bigger by that
@@ -174,12 +192,28 @@ local function NavTile(props: {
 	})
 end
 
-local function QuickNav(props: { onSelect: (string, number) -> (), resetKey: number? })
+local function QuickNav(props: { onSelect: (string, number) -> (), resetKey: number?, openTo: any? })
 	local containerRef = React.useRef(nil :: Frame?)
 	local rowRef = React.useRef(nil :: Frame?)
 	local tileSize, setTileSize = React.useState(TILE_MAX)
 	local selectedIndex, setSelectedIndex = React.useState(1)
 	local prevIndexRef = React.useRef(1)
+	local ICONS, setIcons = React.useState(function()
+		local snap = DungeonMenuNet.getLastSnapshot()
+		return visibleIcons(snap and snap.profile and snap.profile.flags)
+	end)
+	local ICON_COUNT = #ICONS
+	local countRef = React.useRef(ICON_COUNT)
+	countRef.current = ICON_COUNT
+	React.useEffect(function()
+		return DungeonMenuNet.addSnapshotListener(function(snapshot)
+			local nextIcons = visibleIcons(snapshot and snapshot.profile and snapshot.profile.flags)
+			setIcons(function(prev)
+				if #prev == #nextIcons then return prev end -- unchanged (it only ever grows)
+				return nextIcons
+			end)
+		end)
+	end, {})
 
 	-- Fit the row to the header: as large as TILE_MAX, smaller if the header is short or narrow.
 	React.useEffect(function()
@@ -195,7 +229,7 @@ local function QuickNav(props: { onSelect: (string, number) -> (), resetKey: num
 		recompute()
 		local conn = container:GetPropertyChangedSignal("AbsoluteSize"):Connect(recompute)
 		return function() conn:Disconnect() end
-	end, {})
+	end, { ICON_COUNT })
 
 	-- The row's real bottom-centre in screen pixels, for the vitals that hang beneath it.
 
@@ -204,7 +238,21 @@ local function QuickNav(props: { onSelect: (string, number) -> (), resetKey: num
 		prevIndexRef.current = selectedIndex
 		local direction = selectedIndex > prev and 1 or (selectedIndex < prev and -1 or 0)
 		props.onSelect(ICONS[selectedIndex].id, direction)
+		ProfileMenusState.SetDestination(ICONS[selectedIndex].id)
 	end, { selectedIndex })
+
+	-- Opened straight at a destination (ProfileMenusState.RequestOpen). A request re-renders
+	-- with a new openTo only (resetKey unchanged), so the close-time reset below doesn't undo it.
+	local openSeq = props.openTo and props.openTo.seq
+	React.useEffect(function()
+		if not props.openTo then return end
+		for i, icon in ipairs(ICONS) do
+			if icon.id == props.openTo.id then
+				setSelectedIndex(i)
+				return
+			end
+		end
+	end, { openSeq, ICON_COUNT } :: { any })
 
 	-- The menu closed: reopen on Inventory.
 	React.useEffect(function()
@@ -217,9 +265,9 @@ local function QuickNav(props: { onSelect: (string, number) -> (), resetKey: num
 		local conn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
 			if gameProcessed or not ProfileMenusState.IsOpen() then return end
 			if input.KeyCode == Enum.KeyCode.Left or input.KeyCode == Enum.KeyCode.Up then
-				setSelectedIndex(function(i) return ((i - 2) % ICON_COUNT) + 1 end)
+				setSelectedIndex(function(i) return ((i - 2) % countRef.current) + 1 end)
 			elseif input.KeyCode == Enum.KeyCode.Right or input.KeyCode == Enum.KeyCode.Down then
-				setSelectedIndex(function(i) return (i % ICON_COUNT) + 1 end)
+				setSelectedIndex(function(i) return (i % countRef.current) + 1 end)
 			end
 		end)
 		return function() conn:Disconnect() end
@@ -238,6 +286,7 @@ local function QuickNav(props: { onSelect: (string, number) -> (), resetKey: num
 	}
 	for i, icon in ipairs(ICONS) do
 		tiles[icon.id] = e(NavTile, {
+			id = icon.id,
 			image = icon.image,
 			label = icon.label,
 			selected = i == selectedIndex,

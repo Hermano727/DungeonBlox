@@ -9,7 +9,10 @@ aliases: [Damage, Death-drop]
 ## Energy / combat loop
 
 - Energy bar regens 8/s. 0 energy = "Low Energy Mode" (3s lockout).
-- Walk regens energy; sprint/swing drains it.
+- **Panting (2026-10-04):** at 0 energy the server sets the player's `EnergyPanting` attribute: slower walk, no swings or dash. Everyone near sees it (made to be readable in PvP): a hunched, heaving pose (`MovementPresentation`), a dull crimson drain at the feet, grey breath puffs and a faint dark-red outline (`PantingEffects`), plus breathing (sound key `Panting`, empty for now).
+- **Dash (Q):** 25 energy, 4 s cooldown (`EnergyServer` RequestDash). Works in the air once per jump, 1.5x further with the fall held off, so a jump plus dash crosses a gap; stops short of walls (`DashClient`). Its cooldown is the Q slot in the vitals row (see [UI & Networking](./ui-and-networking.md)).
+- **Death and gear:** every EQUIPPED piece loses 30% of its max durability; at 0 it breaks (-3 enchant levels, unequipped, repair at a Blacksmith for 3x). See [Items, Loot & Progression](./items-and-progression.md).
+- Energy always regenerates, sprinting included: sprint drains SPRINT_COST on top of regen, so gear that raises regen to SPRINT_COST or more allows endless sprint (by design). Swings drain per swing.
 
 ## Alignment & PvP
 

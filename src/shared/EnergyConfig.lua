@@ -2,8 +2,9 @@
 -- Change a value here and it automatically updates everywhere.
 return {
 	MAX_ENERGY         = 100,   -- Maximum energy a player can have
-	REGEN_RATE         = 10,     -- Energy restored per second (when not in lockout)
-	SPRINT_COST        = 15,    -- Energy drained per second while sprinting
+	REGEN_RATE         = 10,     -- Fallback only, until the profile loads. The real base is profile.stats.combat.energyRegen (8)
+	                             -- plus armor's Energy substat, pushed by ProfileService -> EnergyData.setRegenRate
+	SPRINT_COST        = 25,    -- Energy drained per second while sprinting (on top of regen: 8 base + armor must reach 25 to sprint forever)
 	DASH_COST          = 25,    -- Energy consumed per dash (requires at least this much)
 	DASH_COOLDOWN      = 4.0,   -- Seconds between dashes
 	SWING_COST         = 10,    -- Energy drained per swing (Sword baseline)

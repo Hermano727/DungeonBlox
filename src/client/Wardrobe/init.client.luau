@@ -21,9 +21,22 @@ local CursorUtils = require(ReplicatedStorage:WaitForChild("CursorUtils"))
 local HudHider = require(script.Parent:WaitForChild("HudHider"))
 local WardrobeStage = require(script:WaitForChild("WardrobeStage"))
 local WardrobeMenu = require(script:WaitForChild("WardrobeMenu"))
+local PromptEmblem = require(script.Parent:WaitForChild("PromptEmblem"))
+local JournalUI = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Images"):WaitForChild("JournalUI"))
 
 local player = Players.LocalPlayer
 local PROMPT_NAME = "WardrobePrompt"
+
+-- The floating E prompt (shared with the bank): WARDROBE over the figure glyph, pale silver.
+-- The glyph is a placeholder until the wardrobe has its own icon.
+PromptEmblem.Register({
+	match = function(prompt) return prompt.Name == PROMPT_NAME end,
+	title = "WARDROBE",
+	verb = "customize",
+	icon = JournalUI.nav_glyph_party and JournalUI.nav_glyph_party.Image or "",
+	accent = Color3.fromRGB(196, 202, 212),
+	bright = Color3.fromRGB(240, 244, 250),
+})
 local FREEZE_ACTION = "WardrobeFreeze"
 local FADE_IN, FADE_OUT = .3, .45
 

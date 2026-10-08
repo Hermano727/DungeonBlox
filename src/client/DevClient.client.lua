@@ -504,6 +504,7 @@ local MODES={
     { key="Mythic", label="MYTHIC", color=Color3.fromRGB(255,85,0), colorOff=Color3.fromRGB(110,40,10), immediate=true },
     { key="Profile", label="PROFILE", color=Color3.fromRGB(70,120,170), colorOff=Color3.fromRGB(35,55,80), immediate=true },
     { key="Map", label="MAP", color=Color3.fromRGB(150,130,60), colorOff=Color3.fromRGB(70,60,30), immediate=true },
+    { key="Capture", label="CAPTURE", color=Color3.fromRGB(170,60,90), colorOff=Color3.fromRGB(80,30,45), immediate=true },
 }
 local modeButtons={}
 local function layoutModeButtons()
@@ -1041,6 +1042,14 @@ Prof.mapSec=require(script.Parent:WaitForChild("DevMapTab")).Build({
     parent=pnl, y=sectionY, w=W, h=SECTION_H, lbl=lbl, mkB=mkB, mkI=mkI, acc=ACC, gold=GOLD,
     status=function(msg,isErr) showStatus(msg,isErr) end,
 })
+-- CAPTURE tab (clean screen + cinematic camera for recording clips), same pattern. While it
+-- runs, F8 ends it (see the F8 handler) instead of reopening this panel.
+Prof.capture=require(script.Parent:WaitForChild("DevCaptureMode"))
+Prof.captureSec=Prof.capture.Build({
+    parent=pnl, y=sectionY, w=W, h=SECTION_H, lbl=lbl, mkB=mkB, mkI=mkI, acc=ACC, gold=GOLD,
+    status=function(msg,isErr) showStatus(msg,isErr) end,
+    onStart=function() setPanelOpen(false) end,
+})
 
 -- MYTHIC tab.
 -- Mythic is deliberately absent from ItemConfig.RARITY_ORDER (so it can never roll from
@@ -1226,17 +1235,17 @@ local function refreshMode()
     for _,m in ipairs(MODES) do
         modeButtons[m.key].BackgroundColor3 = (mode==m.key) and m.color or m.colorOff
     end
-    mobSec.Visible=mode=="Mob";npcSec.Visible=mode=="NPC";zoneSec.Visible=mode=="Zone";timeSec.Visible=mode=="Time";itemSec.Visible=mode=="Gear";itemsSec.Visible=mode=="Items";mythicSec.Visible=mode=="Mythic";eliteSec.Visible=mode=="Elite";Prof.sec.Visible=mode=="Profile";Prof.mapSec.Visible=mode=="Map"
+    mobSec.Visible=mode=="Mob";npcSec.Visible=mode=="NPC";zoneSec.Visible=mode=="Zone";timeSec.Visible=mode=="Time";itemSec.Visible=mode=="Gear";itemsSec.Visible=mode=="Items";mythicSec.Visible=mode=="Mythic";eliteSec.Visible=mode=="Elite";Prof.sec.Visible=mode=="Profile";Prof.mapSec.Visible=mode=="Map";Prof.captureSec.Visible=mode=="Capture"
     if mode~="Zone" then exploreMode=false end
     if mode=="Zone" then
         zoneSec.CanvasPosition=Vector2.new(0,0)
         updateGhost()
-    elseif mode=="Time" or mode=="Gear" or mode=="Items" or mode=="Mythic" or mode=="Elite" or mode=="Profile" or mode=="Map" then updateGhost()
+    elseif mode=="Time" or mode=="Gear" or mode=="Items" or mode=="Mythic" or mode=="Elite" or mode=="Profile" or mode=="Map" or mode=="Capture" then updateGhost()
     else updateGhost(tonumber(boxRadius.Text)) end
     -- placeBtn is the panel's one shared "confirm" button; ITEMS deliberately has no use
     -- for it (each icon grants itself), so it's hidden rather than left pointing at Gear's
     -- spawn action -- that mismatch was the original bug (see the note above MODES).
-    placeBtn.Visible = mode~="Items" and mode~="Profile" and mode~="Map"
+    placeBtn.Visible = mode~="Items" and mode~="Profile" and mode~="Map" and mode~="Capture"
     if mode=="Zone" then
         placeBtn.Text=placingMode and "Drawing... (E or click)" or "Draw Zone"
     elseif mode=="Elite" then
@@ -1609,6 +1618,11 @@ UIS.InputBegan:Connect(function(inp,gp)
         if panelOpen then setPanelOpen(false);return end
     end
     if inp.KeyCode==Keys.DevPlacer and not gp then
+        -- Capture mode on: F8 ends it (and leaves the panel closed).
+        if Prof.capture.IsActive() then
+            Prof.capture.Stop()
+            return
+        end
         if exploreMode then
             -- Panel was hidden via Hide Panel (still logically open): bring it back.
             setExploreMode(false)

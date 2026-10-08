@@ -9,6 +9,7 @@
 		view:SetScale(pixelsPerCell)
 		view:Update(centreCellX, centreCellZ, playerCellX, playerCellZ, lookVector)
 		view:Glow(zoneId)                         -- the "region discovered" pulse
+		view:SetNpcMarkers(list)                  -- NPC crests (RS/NpcMapMarkers), see below
 
 	North is up (world -Z), east is right (+X). Positions are in map cells (world / CELL).
 ]]
@@ -19,6 +20,9 @@ local AssetService = game:GetService("AssetService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ZoneConfig = require(ReplicatedStorage:WaitForChild("ZoneConfig"))
 local Config = require(ReplicatedStorage:WaitForChild("MinimapConfig"))
+local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
+local NametagArt = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Images"):WaitForChild("NpcNametagArt"))
+local HudArt = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Images"):WaitForChild("HudArt"))
 
 local MapView = {}
 MapView.__index = MapView
@@ -28,6 +32,15 @@ local GLOW_PX = 9
 local ARROW_PX = 22
 local OTHER_ARROW_PX = 17
 local BLACK = Color3.new(0, 0, 0)
+local NPC_GREEN = Color3.fromHex("28462C")
+local NPC_BRONZE = Color3.fromHex("AC966C")
+local NPC_NAME = Color3.fromHex("EEE6CE")
+local NPC_INK = Color3.fromHex("120C08")
+-- An NPC crest reads over bright ground thanks to a dark ring (NPC_RING x its size) and a soft
+-- shadow under it (NPC_SHADOW x its size, dropped NPC_SHADOW_DROP of its size).
+local NPC_RING = 1.16
+local NPC_SHADOW = 1.75
+local NPC_SHADOW_DROP = .1
 
 -------------------------------------------------------------------------------------------------
 -- The player arrow, drawn once into a small EditableImage (no uploaded asset needed).
@@ -112,6 +125,15 @@ function MapView.new(parent, options)
 	self.tileLayer = layer("Tiles", 1)
 	self.outlineLayer = layer("Outlines", 2)
 	self.labelLayer = layer("Labels", 3)
+	self.npcLayer = layer("NpcMarkers", 4)
+	self.npcMarkers = {} -- [id] = { holder, name, x, z }
+	-- NPC crest size: a fixed npcMarkerPx, or npcMarkerPerCell * scale clamped to
+	-- npcMarkerMin..npcMarkerMax. Names show from npcNameScale up (nil = never).
+	self.npcMarkerPx = options.npcMarkerPx
+	self.npcMarkerPerCell = options.npcMarkerPerCell or 8
+	self.npcMarkerMin = options.npcMarkerMin or 16
+	self.npcMarkerMax = options.npcMarkerMax or 30
+	self.npcNameScale = options.npcNameScale
 
 	local arrow = Instance.new("ImageLabel")
 	arrow.Name = "PlayerArrow"
@@ -152,6 +174,131 @@ function MapView:SetOthers(centreX, centreZ, list, colour)
 	end
 	for i = #list + 1, #self.others do
 		self.others[i].Visible = false
+	end
+end
+
+-- NPC markers: the floating nametag's crest + role icon, and the role name under it once
+-- zoomed in to npcNameScale. `list` = { { id, x, z, name, icon, npcType } }, x/z in map cells,
+-- icon = an NpcNametagArt.ICONS entry or nil. Lives on the canvas, so panning costs nothing.
+function MapView:SetNpcMarkers(list)
+	local keep = {}
+	for _, entry in ipairs(list) do
+		keep[entry.id] = true
+		local marker = self.npcMarkers[entry.id]
+		if not marker then
+			local holder = Instance.new("Frame")
+			holder.Name = entry.id
+			holder.AnchorPoint = Vector2.new(.5, .5)
+			holder.BackgroundTransparency = 1
+			holder.Parent = self.npcLayer
+
+			-- ZIndex 5..8 sits above the map layers (1..4) and under the player arrows (9, 10)
+			-- whether this ScreenGui layers by sibling or globally.
+			if HudArt.GLOW_SOFT ~= "" then
+				local shadow = Instance.new("ImageLabel")
+				shadow.Name = "Shadow"
+				shadow.AnchorPoint = Vector2.new(.5, .5)
+				shadow.Position = UDim2.fromScale(.5, .5 + NPC_SHADOW_DROP)
+				shadow.Size = UDim2.fromScale(NPC_SHADOW, NPC_SHADOW)
+				shadow.BackgroundTransparency = 1
+				shadow.Image = HudArt.GLOW_SOFT
+				shadow.ImageColor3 = BLACK
+				shadow.ImageTransparency = .15
+				shadow.ZIndex = 5
+				shadow.Parent = holder
+			end
+
+			local ring = Instance.new("Frame")
+			ring.Name = "Ring"
+			ring.AnchorPoint = Vector2.new(.5, .5)
+			ring.Position = UDim2.fromScale(.5, .5)
+			ring.Size = UDim2.fromScale(NPC_RING, NPC_RING)
+			ring.BackgroundColor3 = NPC_INK
+			ring.BorderSizePixel = 0
+			ring.ZIndex = 6
+			ring.Parent = holder
+			local ringCorner = Instance.new("UICorner")
+			ringCorner.CornerRadius = UDim.new(1, 0)
+			ringCorner.Parent = ring
+
+			local crest = Instance.new("ImageLabel")
+			crest.Name = "Crest"
+			crest.Size = UDim2.fromScale(1, 1)
+			crest.BackgroundTransparency = 1
+			crest.ZIndex = 7
+			crest.Parent = holder
+			if NametagArt.CREST.Image ~= "" then
+				crest.Image = NametagArt.CREST.Image
+			else
+				crest.BackgroundTransparency = 0
+				crest.BackgroundColor3 = NPC_GREEN
+				local corner = Instance.new("UICorner")
+				corner.CornerRadius = UDim.new(1, 0)
+				corner.Parent = crest
+				local edge = Instance.new("UIStroke")
+				edge.Color = NPC_BRONZE
+				edge.Thickness = 2
+				edge.Parent = crest
+			end
+
+			if entry.icon and entry.icon.Image ~= "" then
+				local hole = NametagArt.CREST.HOLE
+				local icon = Instance.new("ImageLabel")
+				icon.Name = "Icon"
+				icon.AnchorPoint = Vector2.new(.5, .5)
+				icon.Position = UDim2.fromScale(hole.X, hole.Y)
+				icon.Size = UDim2.fromScale(hole.D * 1.15, hole.D * 1.15) -- over the inner rim: these draw small
+				icon.BackgroundTransparency = 1
+				icon.Image = entry.icon.Image
+				icon.ImageRectOffset = entry.icon.Offset
+				icon.ImageRectSize = entry.icon.Size
+				icon.ZIndex = 8
+				icon.Parent = crest
+			end
+
+			local name = Instance.new("TextLabel")
+			name.Name = "NameLabel"
+			name.AnchorPoint = Vector2.new(.5, 0)
+			name.Position = UDim2.new(.5, 0, (1 + NPC_RING) / 2, 1)
+			name.Size = UDim2.fromOffset(0, 16)
+			name.AutomaticSize = Enum.AutomaticSize.X
+			name.BackgroundTransparency = 1
+			name.FontFace = UIFonts.GetNPCFont(entry.npcType, "Tag")
+			name.TextSize = 13
+			name.TextColor3 = NPC_NAME
+			name.ZIndex = 8
+			name.Visible = false
+			name.Parent = holder
+			local nameStroke = Instance.new("UIStroke")
+			nameStroke.Color = NPC_INK
+			nameStroke.Thickness = 1.5
+			nameStroke.Parent = name
+
+			marker = { holder = holder, name = name }
+			self.npcMarkers[entry.id] = marker
+		end
+		marker.x, marker.z = entry.x, entry.z
+		marker.name.Text = entry.name or ""
+	end
+	for id, marker in pairs(self.npcMarkers) do
+		if not keep[id] then
+			marker.holder:Destroy()
+			self.npcMarkers[id] = nil
+		end
+	end
+	self:_layoutNpcMarkers()
+end
+
+function MapView:_layoutNpcMarkers()
+	local b = self.bounds
+	if not b then return end
+	local s = self.scale
+	local px = self.npcMarkerPx or math.clamp(math.floor(s * self.npcMarkerPerCell + .5), self.npcMarkerMin, self.npcMarkerMax)
+	local named = self.npcNameScale ~= nil and s >= self.npcNameScale
+	for _, marker in pairs(self.npcMarkers) do
+		marker.holder.Size = UDim2.fromOffset(px, px)
+		marker.holder.Position = UDim2.fromOffset((marker.x - b.x0) * s, (marker.z - b.z0) * s)
+		marker.name.Visible = named and marker.name.Text ~= ""
 	end
 end
 
@@ -293,6 +440,7 @@ function MapView:Layout()
 		entry.label.Position = UDim2.fromOffset((entry.x - b.x0) * s, (entry.z - b.z0) * s)
 		entry.label.TextSize = textSize
 	end
+	self:_layoutNpcMarkers()
 end
 
 -- centre*: the map cell at the middle of the view; player*: where the arrow goes.

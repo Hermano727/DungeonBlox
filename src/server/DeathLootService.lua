@@ -87,8 +87,9 @@ function DeathLootService.applyToPlayer(player, deathPosition, keepInventory)
 		return
 	end
 
-	-- Apply durability death penalty before dropping loot
-	DurabilityService.applyDeathPenalty(profile, player)
+	-- Apply durability death penalty before dropping loot (anything it breaks stays equipped,
+	-- so it's kept, and comes off after the drop below).
+	local brokeOnDeath = DurabilityService.applyDeathPenalty(profile, player)
 
 	local droppedItems = {}
 	local inv = profile.inventory
@@ -118,6 +119,10 @@ function DeathLootService.applyToPlayer(player, deathPosition, keepInventory)
 
 	if #droppedItems > 0 then
 		WorldLoot.SpawnDeathLoot(deathPosition, droppedItems)
+	end
+
+	for _, uuid in ipairs(brokeOnDeath) do
+		DurabilityService.OnBroken(player, profile, uuid)
 	end
 
 	local StatsService = require(ServerScriptService:WaitForChild("StatsService"))
@@ -168,7 +173,11 @@ local function hookCharacter(player, char)
 		end
 		-- Decided ONCE, before anything below can end the run and flip it.
 		local inRun = isInDungeonRun(player)
-		DeathLootService.applyToPlayer(player, deathPosition, inRun)
+		-- A tutorial death (server-side flag) keeps the bag too: the lesson is the durability,
+		-- not losing your first items.
+		local okRigs, Rigs = pcall(require, ServerScriptService:WaitForChild("ScriptedRigs"))
+		local inTutorial = okRigs and Rigs.TutorialActive(player)
+		DeathLootService.applyToPlayer(player, deathPosition, inRun or inTutorial)
 		if inRun then
 			cashOutDungeonRun(player)
 		end

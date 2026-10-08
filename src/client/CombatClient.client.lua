@@ -20,6 +20,7 @@ local CombatAnimConfig = require(ReplicatedStorage:WaitForChild("CombatAnimConfi
 local SfxService       = require(ReplicatedStorage:WaitForChild("SfxService"))
 local SwordSlashSfx    = require(script.Parent:WaitForChild("SwordSlashSfx"))
 local AimRay           = require(ReplicatedStorage:WaitForChild("AimRay"))
+local PotionAction = require(ReplicatedStorage:WaitForChild("PotionAction"))
 
 local partyMemberUserIds = {}
 task.defer(function()
@@ -73,6 +74,7 @@ local function canPresentSwing(character, tool)
         and tool ~= nil and ActiveEquipment.GetTool(character) == tool
         and WeaponData.ShouldUseClientHitDetection(WeaponData.GetWeaponIdFromTool(tool))
         and Player:GetAttribute("EnergyPanting") ~= true
+        and not PotionAction.IsLocked(character)
         and not ProfileMenusState.IsOpen()
         and not UserInputService:GetFocusedTextBox()
         and not (menu and menu:IsA("ScreenGui") and menu.Enabled)
@@ -168,7 +170,7 @@ local function bindAttackCharacter(character)
     end)
     task.spawn(function()
         local hum = character:WaitForChild("Humanoid", 10)
-        local animator = hum and hum:WaitForChild("Animator", 10)
+        local animator = hum and (hum:FindFirstChildOfClass("Animator") or hum:WaitForChild("Animator", 10))
         if generation ~= characterGeneration or character ~= Player.Character then return end
         if not animator then warn("[CombatClient] Replicated Animator missing"); return end
         table.insert(characterConnections, hum.Died:Connect(resetSwing))
@@ -340,10 +342,14 @@ local function PerformHitboxAttack(character, attackRange)
 end
 
 local function OnAttackInput()
-    if ProfileMenusState.IsOpen() or UserInputService:GetFocusedTextBox() then return end
+    Player:SetAttribute("LastMeleeInputAt", workspace:GetServerTimeNow())
+    if PotionAction.IsLocked(Player.Character) then Player:SetAttribute("MeleeInputStatus", "Drinking"); return end
+    if ProfileMenusState.IsOpen() or UserInputService:GetFocusedTextBox() then
+        Player:SetAttribute("MeleeInputStatus", "MenuOrTextFocus"); return
+    end
     local gui = Player:FindFirstChildOfClass("PlayerGui")
     local menu = gui and gui:FindFirstChild("SkillsPopupUI", true)
-    if menu and menu:IsA("ScreenGui") and menu.Enabled then return end
+    if menu and menu:IsA("ScreenGui") and menu.Enabled then Player:SetAttribute("MeleeInputStatus", "SkillsMenu"); return end
     local character = Player.Character
     if not character then 
         warn("[CombatClient] No character")
@@ -352,6 +358,7 @@ local function OnAttackInput()
 
     local tool = GetEquippedTool(character)
     if not tool then 
+        Player:SetAttribute("MeleeInputStatus", "NoActiveTool")
         warn("[CombatClient] No tool equipped")
         return 
     end
@@ -364,11 +371,13 @@ local function OnAttackInput()
     -- Gate: only registered combat weapons drain energy and hit mobs.
     -- Pickaxe, fishing rod, etc. return nil from GetWeaponIdFromTool → skipped here.
     if not weaponId or not WeaponData.Weapons or not WeaponData.Weapons[weaponId] then 
+        Player:SetAttribute("MeleeInputStatus", "UnregisteredWeapon")
         warn("[CombatClient] Weapon not registered: " .. tool.Name)
         return 
     end
 
     if Player:GetAttribute("EnergyPanting") == true then
+        Player:SetAttribute("MeleeInputStatus", "EnergyPanting")
         return
     end
 
@@ -377,15 +386,19 @@ local function OnAttackInput()
     local swingMult = tool:GetAttribute("WeaponSwingMult") or 1
     local effectiveCost = Config.SWING_COST * swingMult
     if energyValue and energyValue.Value < effectiveCost then 
+        Player:SetAttribute("MeleeInputStatus", "InsufficientEnergy")
         warn("[CombatClient] Not enough energy: " .. tostring(energyValue.Value) .. " / " .. tostring(effectiveCost) .. " — triggering pant")
         TrySwing:FireServer(weaponId)  -- notify server so it can trigger depletion/pant
         return  -- still skip animation and hit detection
     end
 
     -- Visual timing follows eligible melee clicks; hit/energy timing is unchanged.
-    if WeaponData.ShouldUseClientHitDetection(weaponId) then
-        PlayAttackAnimation(character, tool)
-    end
+    -- Cosmetic failures cannot abort energy/hit requests or leave the weapon unusable.
+    local presented, presentationError = pcall(function()
+        if WeaponData.ShouldUseClientHitDetection(weaponId) then PlayAttackAnimation(character, tool) end
+    end)
+    Player:SetAttribute("MeleeInputStatus", presented and "AttackSent" or "AttackSentVisualError")
+    if not presented then warn("[CombatClient] Attack presentation failed:", presentationError) end
 
     -- Deduct energy server-side
     TrySwing:FireServer(weaponId)

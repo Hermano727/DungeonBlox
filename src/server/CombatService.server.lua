@@ -1,3 +1,4 @@
+local PotionAction = require(game:GetService("ReplicatedStorage"):WaitForChild("PotionAction"))
 local RS=game:GetService("ReplicatedStorage")
 local SSS=game:GetService("ServerScriptService")
 local EnergyData=require(SSS:WaitForChild("EnergyData"))
@@ -25,6 +26,7 @@ local function getWeaponSwingMult(player)
 end
 
 TrySwing.OnServerEvent:Connect(function(p,weaponId)
+	if PotionAction.IsLocked(p.Character) then SwingResult:FireClient(p, false); return end
 	MountService.dismount(p)
 	local mult=getWeaponSwingMult(p)
 	local allowed=EnergyData.trySwing(p,mult)

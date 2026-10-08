@@ -18,20 +18,30 @@ local NPCBootstrapKit = require(ReplicatedStorage:WaitForChild("NPCBootstrapKit"
 local NPC_ID_BASE = "blacksmith_01"
 local NPC_TYPE    = "Blacksmith"
 local NPC_NAME    = "Blacksmith"
--- Previously "Blacksmith" (game.Workspace.T1REGION.T1Towns.OakHaven.Blacksmith).
--- Repointed to the new R15-rigged model; NPC_TYPE/NPC_NAME above are unaffected
--- since they key NPCRegistry/dialog trees/quests, not this Workspace lookup.
-local MODEL_NAME  = "T1_Blacksmith_R15"
+-- Workspace model names to wire. NPC_TYPE/NPC_NAME above are unaffected: they key
+-- NPCRegistry/dialog trees/quests, not this lookup.
+--   T1_Blacksmith      the town smith in OakHaven, custom skinned rig (2026-10-07,
+--                      assets/models/npcs/oakhaven blacksmith/rig)
+--   T1_Blacksmith_R15  the older R15 model, still the tutorial template's copy
+--                      (TutorialSteps highlights it by this name)
+local MODEL_NAMES = { T1_Blacksmith = true, T1_Blacksmith_R15 = true }
 
 local HEAD_COLORS = {
 	text   = Color3.fromRGB(255, 230, 200),
 	stroke = Color3.fromRGB(60, 40, 25),
 }
 
--- Wires every Model named MODEL_NAME anywhere in Workspace, not just the first one found.
+-- Wires every Model with one of MODEL_NAMES anywhere in Workspace, not just the first one found.
 -- Sorted by full path so id assignment (blacksmith_01, blacksmith_02, ...) stays stable across restarts.
 local function findAllModels()
-	return NPCBootstrapKit.FindAllModelsByName(MODEL_NAME)
+	local found = {}
+	for name in pairs(MODEL_NAMES) do
+		for _, m in ipairs(NPCBootstrapKit.FindAllModelsByName(name)) do
+			table.insert(found, m)
+		end
+	end
+	table.sort(found, function(a, b) return a:GetFullName() < b:GetFullName() end)
+	return found
 end
 
 local function setupProximity(root)
@@ -78,13 +88,13 @@ end
 NPCBootstrapKit.ScheduleRetries(tryBootstrap, {0, 1.0, 3.0})
 
 workspace.ChildAdded:Connect(function(ch)
-	if ch.Name == MODEL_NAME and ch:IsA("Model") then
+	if MODEL_NAMES[ch.Name] and ch:IsA("Model") then
 		task.defer(tryBootstrap)
 	end
 end)
 
 workspace.DescendantAdded:Connect(function(inst)
-	if inst:IsA("Model") and inst.Name == MODEL_NAME then
+	if inst:IsA("Model") and MODEL_NAMES[inst.Name] then
 		task.defer(tryBootstrap)
 	end
 end)

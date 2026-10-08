@@ -81,7 +81,7 @@ local function usePlayers(): { Player }
 	return players
 end
 
-local function MemberRow(props: { userId: number?, name: string?, leader: boolean?, you: boolean?, order: number })
+local function MemberRow(props: { userId: number?, name: string?, leader: boolean?, you: boolean?, order: number, headshotUserId: number? })
 	if not props.userId then
 		return e("Frame", { LayoutOrder = props.order, Size = UDim2.new(1, 0, 0, MEMBER_ROW_H), BackgroundTransparency = 1 }, {
 			Ring = e(Parts.Medallion, { size = 40, dim = true, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 4, 0.5, 0) }),
@@ -94,7 +94,7 @@ local function MemberRow(props: { userId: number?, name: string?, leader: boolea
 	local level = levelOf(props.userId)
 	return e("Frame", { LayoutOrder = props.order, Size = UDim2.new(1, 0, 0, MEMBER_ROW_H), BackgroundTransparency = 1 }, {
 		Portrait = e(Parts.Medallion, {
-			image = headshot(props.userId), round = true, size = 44, lit = props.leader,
+			image = headshot(props.headshotUserId or props.userId), round = true, size = 44, lit = props.leader,
 			AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 2, 0.5, 0),
 		}),
 		Name = text({
@@ -183,6 +183,7 @@ local function PartyPanel()
 			order += 1
 			rows["m" .. m.userId] = e(MemberRow, {
 				userId = m.userId, name = m.name, leader = m.userId == myParty.leaderUserId,
+				headshotUserId = m.headshotUserId, -- a companion wears its owner's face
 				you = m.userId == player.UserId, order = m.userId == myParty.leaderUserId and 0 or order,
 			})
 		end

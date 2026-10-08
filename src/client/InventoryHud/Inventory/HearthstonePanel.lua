@@ -38,6 +38,7 @@ local LOCATIONS_HELP = "Buy new locations from the Innkeeper in any town. Bind o
 
 local REASONS = {
 	cooldown = "Your hearthstone is still resting.",
+	locked = "You haven't found your hearthstone yet.",
 	in_combat = "You can't use it in combat.",
 	already_channeling = "It's already channeling.",
 	no_character = "You need to be standing somewhere first.",
@@ -219,6 +220,7 @@ local function HearthstonePanel()
 			disabled = not ready or busy,
 			Size = UDim2.fromOffset(280, 46), LayoutOrder = 6, textSize = 17,
 			onClick = teleport,
+			tutorialTarget = "hearth_return",
 		}),
 		Status = text({ text = status, size = 14, color = Style.Text.Bad, height = 20, order = 7 }),
 		Note = text({

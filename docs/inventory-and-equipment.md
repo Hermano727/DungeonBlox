@@ -48,11 +48,15 @@ Both gestures end at the same `performDrop`/`performHotbarToHotbarSwap`/`perform
 
 `DungeonMenuUI` bag render reads `profile.bagSlots[i]` directly (no client-side sorting). Every bag button gets `BagSlot` attr (even empty ones — valid drop targets).
 
-## Inventory item borders: ItemSlot vs PlayerPreview (recurring drift)
+## Inventory item borders
 
-`RarityBorder` (`src/client/InventoryHud/Inventory/RarityBorder.lua`) is the one shared stroke component, but it's called from **two separate, independently-maintained sites** that must be tuned to match by hand — nothing enforces parity:
+`RarityBorder` (`src/client/InventoryHud/Inventory/RarityBorder.lua`) is the one shared stroke component. `ItemSlot.lua` draws the bag slots, the shop rows and the Enchanting Station slots with it.
 
-- `ItemSlot.lua` — bag/inventory grid slots (used by `InvSlots`).
-- `PlayerPreview.lua`'s `EquipmentSlot` — the 8 equipped-gear boxes. Despite `ItemSlot.lua`'s own header comment claiming it's "used by both InvSlots (bag) and PlayerPreview (equip boxes)", `PlayerPreview` actually reimplements the same icon/border/legendary-glow logic itself rather than rendering `ItemSlot` — that comment is aspirational, not current fact.
+**The bag passes its own numbers (2026-10-03).** `InvSlots` lays the bag out on a big design canvas (508-unit slots) and contain-fits it down to about 0.17x. `UIScale` shrinks a `UIStroke`'s thickness too, so the default 8-unit outline came out about 1.4 px on screen and rarity was hard to read. `InvSlots` now passes `ItemSlot`:
+- `borderThickness = 22`, about 4 px on screen; a held item gets about 25% more.
+- `iconScale = 0.8`, down from 0.92, so the outline has room.
+- `cornerRadius = 36`, so the outline follows the rounded pocket.
 
-This has drifted at least twice: equipped items rendered with a bold border while the same item sitting in the bag looked borderless/thin. Both times the fix was bumping `ItemSlot`'s `RarityBorder` `thickness` props to match `PlayerPreview`'s (currently **8**, with the `selected`/currently-held state a level above that at **10**). If you touch either file's border thickness, update the other one too, and check both still visually match in Studio.
+The pocket also leans 20% toward the item's rarity colour (`RARITY_WASH`), so rarity reads at a glance. Other callers keep the defaults (8 / 0.92 / square).
+
+`PlayerPreview`'s equip sockets draw their own round rarity rings, so there's no square-box copy of these numbers to keep in step any more (that drift used to bite twice).

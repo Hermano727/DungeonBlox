@@ -55,8 +55,8 @@ MinimapConfig.Peek = {
 }
 
 -- Views. Scale = screen pixels per map cell.
-MinimapConfig.MiniSize = 190          -- corner minimap, square, pixels
-MinimapConfig.MiniScale = 2           -- 95 cells = 380 studs across
+MinimapConfig.MiniSize = 247          -- corner minimap, square, pixels (190 until 2026-10-06, +30%)
+MinimapConfig.MiniScale = 2.6         -- 95 cells = 380 studs across (scaled with MiniSize)
 -- Other players show as plain arrows (no names) within this many studs of you, on both views:
 -- about what the corner map shows. Never further, so the M map can't be used to hunt people.
 MinimapConfig.OtherPlayerRadius = 190
@@ -64,6 +64,14 @@ MinimapConfig.OtherPlayerColor = Color3.fromRGB(214, 92, 72)
 MinimapConfig.BigMinScale = .5
 MinimapConfig.BigMaxScale = 8
 MinimapConfig.ZoomStep = 1.25         -- per scroll notch / key press
+-- NPC markers (RS/NpcMapMarkers: every NPC with an NPCRegistry Nametag, as its nametag crest),
+-- only on uncovered ground. Corner map: fixed size, never named. M map: grows with zoom
+-- (NpcMarkerPerCell px per map cell, clamped), and shows the role name from NpcNameScale up.
+MinimapConfig.NpcMarkerMiniPx = 21
+MinimapConfig.NpcMarkerPerCell = 8
+MinimapConfig.NpcMarkerBigMin = 18
+MinimapConfig.NpcMarkerBigMax = 32
+MinimapConfig.NpcNameScale = 5        -- px per cell (default view is ~2, max 8)
 
 MinimapConfig.BYTES_PER_CHUNK = MinimapConfig.CHUNK * MinimapConfig.CHUNK / 8
 

@@ -1,3 +1,4 @@
+local PotionAction = require(game:GetService("ReplicatedStorage"):WaitForChild("PotionAction"))
 local ReplicatedStorage   = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
@@ -7,6 +8,7 @@ local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"
 local EnergyConfig = require(ReplicatedStorage:WaitForChild("EnergyConfig"))
 local CombatAnimConfig = require(ReplicatedStorage:WaitForChild("CombatAnimConfig"))
 local DamageService = require(ServerScriptService:WaitForChild("DamageService"))
+local ScriptedRigs = require(ServerScriptService:WaitForChild("ScriptedRigs"))
 local EnchantHitFeedback = require(ServerScriptService:WaitForChild("EnchantHitFeedback"))
 local EnchantStatus = require(ServerScriptService:WaitForChild("CombatEnchantStatus"))
 local EnchantConfig = require(ReplicatedStorage:WaitForChild("CombatEnchantConfig"))
@@ -292,7 +294,9 @@ local function applyDamage(player, mob, baseDamage, weaponId, weapSubs, swingMul
     if not EnchantStatus.CanHit(player.Character) then return false end
     local hpFrac = (mob.MaxHealth and mob.MaxHealth > 0)
         and (mob.CurrentHealth / mob.MaxHealth) or 1
-    local weaponFinal, hitInfo = DamageService.ComputeWeaponFinal(baseDamage, weapSubs, hpFrac, "Mob")
+    -- A tutorial-scripted crit (server-queued, tutorial-only; see ScriptedRigs).
+    local forceCrit = ScriptedRigs.Take(player, "crit") == true
+    local weaponFinal, hitInfo = DamageService.ComputeWeaponFinal(baseDamage, weapSubs, hpFrac, "Mob", forceCrit)
     local isCrit = hitInfo and hitInfo.isCrit or false
     -- A "special" hit -- crit today, an on-hit enchant proc later -- plays its
     -- own dedicated sound client-side, so it should suppress the mob's own
@@ -431,7 +435,15 @@ local function applyDamage(player, mob, baseDamage, weaponId, weapSubs, swingMul
     return true
 end
 
-function MobCombat.ApplyWeaponDamage(player, mobUID, weaponId, hitPosition)
+-- damageScale (optional, default 1): multiplies the weapon's rolled base damage. The bow's
+-- draw charge uses it (BowConfig.DamageScale); melee never passes it.
+local function scaleBase(base, damageScale)
+	if type(damageScale) ~= "number" or damageScale == 1 then return base end
+	return math.max(1, math.floor(base * math.clamp(damageScale, 0, 1) + 0.5))
+end
+
+function MobCombat.ApplyWeaponDamage(player, mobUID, weaponId, hitPosition, damageScale)
+	if not damageScale and PotionAction.IsLocked(player.Character) then return false end
     local mob = activeMobs[mobUID]
     if not mob or not mob:IsAlive() then
         return false
@@ -486,6 +498,7 @@ function MobCombat.ApplyWeaponDamage(player, mobUID, weaponId, hitPosition)
     if base == nil then
         base = stats.Damage
     end
+    base = scaleBase(base, damageScale)
     local hit = applyDamage(player, mob, base, weaponId, weapSubs or {}, swingMult or 1, hitPosition)
     if hit and mob:IsAlive() then
         mob:ApplyKnockback(playerRoot.Position)
@@ -516,7 +529,8 @@ local function getZoneSvc()
 	return _zoneSvc
 end
 
-function MobCombat.ApplyPvPDamage(attacker, target, weaponId, hitPosition)
+function MobCombat.ApplyPvPDamage(attacker, target, weaponId, hitPosition, damageScale)
+	if not damageScale and PotionAction.IsLocked(attacker.Character) then return false end
 	if not attacker or not target or attacker == target then
 		return false
 	end
@@ -570,6 +584,7 @@ function MobCombat.ApplyPvPDamage(attacker, target, weaponId, hitPosition)
 
 	local base, weapSubs = damageRollFromEquippedWeapon(attacker, weaponId)
 	if base == nil then base = stats.Damage end
+	base = scaleBase(base, damageScale)
 
 	local maxHP = (tgtHum.MaxHealth and tgtHum.MaxHealth > 0) and tgtHum.MaxHealth or 100
 	local hpFrac = math.clamp(tgtHum.Health / maxHP, 0, 1)

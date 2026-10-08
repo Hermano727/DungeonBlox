@@ -255,6 +255,17 @@ local function resolveVisualEntry(kind, dropSpec)
 				return LootDropVisuals.ByGearTag[slot]
 			end
 		end
+		-- Catalog weapons (the Training Sword) have neither a weapon-kind tag nor a slot the
+		-- table knows ("Weapon"): find their kind by the tool prefab they hold
+		-- (ItemConfig.WEAPON_DROP_PREFAB_BY_TYPE, e.g. Sword -> TrainingSword).
+		local prefab = template.toolPrefabName or (def and def.ToolPrefabName)
+		if type(prefab) == "string" then
+			for kind, kindPrefab in pairs(ItemConfig.WEAPON_DROP_PREFAB_BY_TYPE) do
+				if kindPrefab == prefab and LootDropVisuals.ByGearTag[kind] then
+					return LootDropVisuals.ByGearTag[kind]
+				end
+			end
+		end
 	end
 	return nil
 end

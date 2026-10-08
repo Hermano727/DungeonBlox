@@ -1,6 +1,9 @@
 --[[
 	ProtectionScrollApply
-	Authoritative rules for ApplyProtectionScroll (consumes scroll, sets scrollProtected on T1 gear).
+	Authoritative rules for ApplyProtectionScroll: consumes the scroll and sets scrollProtected on
+	gear of the scroll's tier. Always succeeds. While protected, a failed enchant up to
+	EnchantScrollApply.PROTECTION_MAX_LEVEL doesn't break the item (the attempt uses the
+	protection up either way). Sold by the Dungeoneer; applied at the Enchanting Station.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -95,6 +98,13 @@ function ProtectionScrollApply.ApplyFromAct(profile, act)
 
 	if targetItem.scrollProtected == true then
 		return false, "already_protected", nil
+	end
+	if targetItem.broken == true then
+		return false, "item_broken", nil
+	end
+	-- Pointless past the cap: the next attempt would be above what protection covers.
+	if math.floor(tonumber(targetItem.enchantLevel) or 0) >= EnchantScrollApply.PROTECTION_MAX_LEVEL then
+		return false, "protection_cap", nil
 	end
 
 	local okTarget, targetErr = EnchantScrollApply.ValidateEnchantTargetItem(targetItem)

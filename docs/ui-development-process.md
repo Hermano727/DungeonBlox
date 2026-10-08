@@ -38,6 +38,7 @@ Every piece prompt follows the same rules (each one learned from a failed image)
 - **For frames and panels:** "Flat 2D game interface element, not a real object". Without it, asking for "a satchel" produced a photo-real purse.
 - **Edges stay plain where the frame will stretch.** 9-sliced art needs ornaments in the corners only; anything in the middle of an edge (a buckle, a vine, a notch) stretches badly. Say "the edges are straight and even along their whole length".
 - **Variants of an image:** "Edit the attached image. Keep the exact same composition, camera, framing, objects and art style: change ONLY ...". That's how the dawn, afternoon and dusk courtyards line up.
+- **To avoid the "AI-generated" look** (learned on the XP wreath, 2026-10-01): ask for two-tone cel shading (one base colour and ONE shadow shape per object that follows its form), light from one direction, and a fixed palette given as hex codes. Without the hex palette, colours drift muddy; asking for "faceted" shading gives random triangle facets.
 - **Name the file** in the prompt instructions so it lands in `incoming/` under the right registry key.
 
 ## Iterating on a result

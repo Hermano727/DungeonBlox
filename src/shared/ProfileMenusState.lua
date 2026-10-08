@@ -73,4 +73,25 @@ function ProfileMenusState.GetCarouselAnchor(): Vector2?
 	return carouselAnchor
 end
 
+-- Open the Tab menu straight at a destination ("inventory", "journal", "hearthstone", "party")
+-- -- the quick buttons under the minimap (MenuShortcuts, for touch players) and the tutorial use
+-- it. InventoryHud listens; a destination the player hasn't unlocked is ignored. Calling it for
+-- the tab that's already showing closes the menu (the buttons toggle).
+local openRequests = Instance.new("BindableEvent")
+ProfileMenusState.OpenRequested = openRequests.Event
+local currentDestination = "inventory"
+
+function ProfileMenusState.RequestOpen(destination: string)
+	openRequests:Fire(destination)
+end
+
+-- The tab showing right now (QuickNav reports it).
+function ProfileMenusState.SetDestination(destination: string)
+	currentDestination = destination
+end
+
+function ProfileMenusState.GetDestination(): string
+	return currentDestination
+end
+
 return ProfileMenusState

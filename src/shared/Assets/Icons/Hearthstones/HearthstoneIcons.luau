@@ -10,5 +10,4 @@
 
 return {
     oakhaven = "rbxassetid://83746968337101",
-    cyren    = "",   -- no icon assigned yet
 }

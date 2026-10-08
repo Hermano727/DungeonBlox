@@ -259,7 +259,7 @@ function DungeonMenuUI.createLayout(panel, skillRows)
 	local hsLoc=Instance.new("TextLabel",hsBox); hsLoc.Name="HSLocation"
 	hsLoc.BackgroundTransparency=1; hsLoc.Font=Enum.Font.GothamMedium; hsLoc.TextSize=17
 	hsLoc.TextColor3=Color3.fromRGB(230,218,195); hsLoc.TextXAlignment=Enum.TextXAlignment.Left
-	hsLoc.Text="Cyren"; hsLoc.Size=UDim2.new(1,0,0,22); hsLoc.Position=UDim2.new(0,0,0,20); hsLoc.ZIndex=5
+	hsLoc.Text=""; hsLoc.Size=UDim2.new(1,0,0,22); hsLoc.Position=UDim2.new(0,0,0,20); hsLoc.ZIndex=5
 	qsFont(hsLoc, Enum.FontWeight.SemiBold)
 
 	local hsBR=Instance.new("Frame",hsBox); hsBR.Name="HSBtnRow"

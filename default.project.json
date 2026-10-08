@@ -8,6 +8,11 @@
         "$path": "Packages"
       }
     },
+    "ReplicatedFirst": {
+      "LoadingScreen": {
+        "$path": "src/replicatedfirst/LoadingScreen"
+      }
+    },
     "ServerScriptService": {
       "CanPlayerAct": {
         "$className": "BindableFunction"

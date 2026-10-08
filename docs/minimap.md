@@ -15,6 +15,10 @@ The top-down map of the overworld: a corner minimap, an expanded map on **M**, f
   - ground the player has walked near (within `REVEAL_RADIUS` studs), saved to the profile;
   - zones in `DefaultRevealed` (Oakhaven), shown in full from the start;
   - **safe zones:** a discovered zone whose alignment is in `AutoRevealAlignments` (Lawful) shows in full the moment it's discovered. Towns are never gated behind exploring them. This is derived on the client from the discovered set; the server saves no cells for it.
+- **NPCs:** every NPC whose type has an `NPCRegistry` `Nametag` entry shows as its nametag crest and role icon, on uncovered ground only (an unexplored town keeps its NPCs hidden).
+  - Each crest has a dark ring and a soft drop shadow (`MapView` `NPC_RING` / `NPC_SHADOW`) so it reads over bright ground.
+  - Corner minimap: small fixed-size crests, never named.
+  - Expanded map: the crests grow with zoom, and the role name (`DisplayName`, e.g. "Auctioneer", never a personal name) appears under each from `NpcNameScale`.
 - **Discovered zones:** zones entered at least once, plus Oakhaven by default, show their outline in the alignment colour and their name at the zone's visual centre. The name shows even while the inside is still dark, and it scales with zoom.
 - **First entry into a zone:**
   - The zone banner becomes a three-line REGION DISCOVERED banner: the header, the zone name, and its alignment.
@@ -34,6 +38,8 @@ The top-down map of the overworld: a corner minimap, an expanded map on **M**, f
 | `SSS/MinimapService` (Script) | Saves exploration and discovery, and raycasts chunk colours |
 | `client/Minimap/init.client` | Controller: UI frames, input, local reveal, chunk images, remotes |
 | `client/Minimap/MapView` | One rendering of the map in a frame; the corner and expanded maps are two MapViews over the same chunk images |
+| `SSS/NpcLocations` | Publishes every registered NPC (one Folder per NpcId with `NpcType` / `Position` attributes) under `RS.NpcLocations.Markers`, tutorial copies left out; the client never needs the model streamed in |
+| `RS/NpcMapMarkers` | The middle man: maps those folders onto map markers from `NPCRegistry` (name, `Nametag`) and `NpcNametagArt` (icon); `List()` + `Changed` |
 | `client/Minimap/DiscoveryPeek` | The in-world see-through outline that rises and fades on a first discovery |
 | `client/DevMapTab` | F8 dev panel MAP tab: reset your own map |
 | `SSS/ZoneService` | `SetDiscoveryHandler` hook; puts `discovered = true` on `ZoneEntryNotify` |
@@ -83,6 +89,7 @@ The top-down map of the overworld: a corner minimap, an expanded map on **M**, f
 - Unexplored pixels are transparent over the black map background.
 - Zone outlines are thin rotated Frames per polygon edge, and names are TextLabels. All positions are in map cells, re-laid out on zoom.
 - The player arrow is drawn once into a small EditableImage, so no uploaded asset is needed.
+- NPC markers (`MapView:SetNpcMarkers`) live on the canvas like the zone names, so panning costs nothing. The controller filters them to uncovered cells on every reveal tick and only re-sends them when the visible set changes.
 
 ## Remotes (ReplicatedStorage.GameEvents)
 
@@ -105,10 +112,13 @@ The top-down map of the overworld: a corner minimap, an expanded map on **M**, f
 | `CHUNK` | 64 | Cells per chunk side. **Same warning.** |
 | `BOUNDS_MARGIN` | 200 | Map beyond the zones' bounding box |
 | `DefaultDiscovered` / `DefaultRevealed` | `{ Oakhaven = true }` | By zone name |
-| `MiniSize` / `MiniScale` | 190 px / 2 | Corner minimap size, and pixels per cell (about 380 studs across) |
+| `MiniSize` / `MiniScale` | 247 px / 2.6 | Corner minimap size, and pixels per cell (about 380 studs across). Grown 30% on 2026-10-06 (was 190 / 2) |
 | `BigMinScale` / `BigMaxScale` / `ZoomStep` | 0.5 / 8 / 1.25 | Expanded-map zoom |
+| `NpcMarkerMiniPx` | 21 | NPC crest size on the corner map |
+| `NpcMarkerPerCell` / `NpcMarkerBigMin` / `NpcMarkerBigMax` | 8 / 18 / 32 | NPC crest size on the expanded map: px per cell, clamped |
+| `NpcNameScale` | 5 | Expanded-map zoom (px per cell) from which NPC names show; with `ZoomStep` 1.25 from the default 2 that's the fifth notch (6.1). Lower it and close NPCs' names (the Merchant and Auctioneer) start to touch |
 
-The corner minimap's screen position is `mini.Position` in `client/Minimap/init.client`, top right just below the top bar. The party panel sits at 20% down the right side, so move one of them if they crowd each other.
+The corner minimap's screen position is `mini.Position` in `client/Minimap/init.client`, top right just below the top bar. The quick-nav buttons under it are drawn 1.3x (`HudQuickNav.SCALE`), and the party panel hangs under that row through `HudQuickNav.OnBottomChanged`, so resizing the map moves both.
 
 ## Testing: F8 MAP tab
 

@@ -51,6 +51,17 @@ The tab row is data-driven. Add a `{ key, label, color, colorOff }` entry to `MO
 | **MYTHIC** | immediate | Grants the real hand-authored mythic from `MythicItemDefs` with its fixed substats, not a random roll labeled Mythic. |
 | **PROFILE** | immediate | Sets your Combat / Mining / Fishing level exactly and refills HP / energy / hunger (`client/DevProfileTab`). |
 | **MAP** | immediate | **Reset My Map** (click twice): forgets your discovered regions and explored ground, then re-discovers the region you're in, which replays the discovery banner and peek (`client/DevMapTab`, `MinimapDevAction`). See [World Map & Minimap](./minimap.md). |
+| **CAPTURE** | immediate | **Capture mode** for recording clips: a clean screen and a cinematic camera. See *Capture mode* below. |
+
+**Capture mode** (`client/DevCaptureMode`, the CAPTURE tab):
+- **Screen:** hides every ScreenGui and the Roblox core UI (`HudHider`), plus the crosshair and cursor, and shows your own character fully (first person hides your accessories and face locally).
+- **G cycles the camera:**
+  - FREE: fly anywhere, smoothed. WASD, Q / E down / up, Shift fast, Ctrl slow; your character stays put.
+  - ORBIT: a slow automatic circle round you.
+  - FOLLOW: a smooth third-person camera while you play normally.
+- **Other keys:** **H** slow motion (every ParticleEmitter at 0.3x), **[ ]** field of view, scroll = fly speed (FREE) or distance (ORBIT / FOLLOW).
+- **On screen:** the key help shows for 3.5 s, then the screen is clean.
+- **Exiting:** **F8 exits** (DevClient routes F8 to it while it's on), and everything is restored: camera handed back facing the same way, FOV, HUD, cursor, particle speeds, your character's local transparency.
 
 **MOB only lists fully modeled mobs.** `MOB_ID_WHITELIST` in `DevClient` (currently `PlainsSlime`, `SmallSkeleton`) filters the placement list. `MobData` isn't changed, and existing spawners still use every MobID. Add a mob to the whitelist once it has a real model.
 

@@ -35,6 +35,10 @@ ItemConfig.WEAPON_DROP_PREFAB_BY_TYPE = {
 	Bow = "WoodenBow",
 }
 ItemConfig.ARMOR_SLOTS         = { "Helm", "Chest", "Legs", "Boots", "Shield" }
+-- Gear that wears (and can break). Max durability by item tier; every weapon and armor piece
+-- carries durability / maxDurability (SSS/DurabilityService). Profession tools wear too but are
+-- immune to the death penalty.
+ItemConfig.MAX_DURABILITY_BY_TIER = { 1500, 1750, 2000, 2250, 2500 }
 
 ------------------------------------------------------------------------
 -- Weapon kind -> equip-panel slot. Every weapon kind shares the single

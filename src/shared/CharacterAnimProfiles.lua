@@ -20,6 +20,8 @@
 	the clip assumed.
 ]]
 
+local BowConfig = require(script.Parent:WaitForChild("BowConfig"))
+
 local CharacterAnimProfiles = {}
 
 CharacterAnimProfiles.Profiles = {
@@ -141,7 +143,9 @@ end
 -- Long-axis factor is 0.735; preserve the grip point rather than mesh center.
 local HANDLE_PIVOT_OFFSET = CFrame.new(0, -0.951825, 0)
 
-local function buildGripOffset()
+-- The grip frame in Hand_R's local space: origin in the palm, +Y along the blade, +X along
+-- the sword's edge (TrainingSword's handle is wide in X, thin in Z).
+local GRIP_FRAME_HAND_R_LOCAL do
 	local up = BLADE_AXIS_HAND_R_LOCAL.Unit
 	local seedRight = Vector3.new(1, 0, 0)
 	if math.abs(up:Dot(seedRight)) > 0.9 then
@@ -150,10 +154,62 @@ local function buildGripOffset()
 	-- Supply an orthonormal basis explicitly; seedRight is not perpendicular
 	-- to the measured blade axis and must not be passed through unchanged.
 	local right = (seedRight - up * seedRight:Dot(up)).Unit
-	local gripLocalCFrame = CFrame.fromMatrix(GRIP_POSITION_HAND_R_LOCAL, right, up, right:Cross(up))
-	return gripLocalCFrame * HANDLE_PIVOT_OFFSET:Inverse()
+	GRIP_FRAME_HAND_R_LOCAL = CFrame.fromMatrix(GRIP_POSITION_HAND_R_LOCAL, right, up, right:Cross(up))
 end
 
-CharacterAnimProfiles.SWORD_GRIP_OFFSET = buildGripOffset()
+CharacterAnimProfiles.SWORD_GRIP_OFFSET = GRIP_FRAME_HAND_R_LOCAL * HANDLE_PIVOT_OFFSET:Inverse()
+
+-- Any other one-handed tool held like the sword: give the grip point, the shaft direction (toward
+-- the business end) and the striking side, all in the tool Handle's own space. The shaft lands
+-- where the sword's blade does and the striking side where its edge does.
+local function handGripOffset(gripPoint, shaftDir, strikeDir)
+	local up = shaftDir.Unit
+	local right = (strikeDir - up * strikeDir:Dot(up)).Unit
+	local gripInHandle = CFrame.fromMatrix(gripPoint, right, up, right:Cross(up))
+	return GRIP_FRAME_HAND_R_LOCAL * gripInHandle:Inverse()
+end
+
+-- WoodenPickaxe (2026-10-03, measured from its mesh in Handle space): the shaft runs from its
+-- butt at (0, -1.05, 0.77) up and slightly back to the head, which lies across X with the
+-- pick spike on +X. Held 0.45 studs up from the butt. Starting values: tune live.
+CharacterAnimProfiles.PICKAXE_GRIP_OFFSET = handGripOffset(
+	Vector3.new(0.04, -0.62, 0.64), Vector3.new(0.108, 0.952, -0.285), Vector3.new(1, 0, 0))
+
+-- WoodenSpear: a 7.5-stud union along Handle X with its blade at -X (flat in Z). Held a little
+-- behind the middle, tip forward like the sword's blade.
+CharacterAnimProfiles.SPEAR_GRIP_OFFSET = handGripOffset(
+	Vector3.new(1.2, 0, 0), Vector3.new(-1, 0, 0), Vector3.new(0, 0, 1))
+
+local function isPickaxeTool(tool)
+	return tool:GetAttribute("DungeonEquipSlot") == "Pickaxe" or string.find(tool.Name, "Pickaxe", 1, true) ~= nil
+end
+
+local function isSpearTool(tool)
+	return tool:GetAttribute("DungeonEquipSlot") == "FishingSpear" or string.find(tool.Name, "Spear", 1, true) ~= nil
+end
+
+-- Which hand bone a held weapon's visual follows, and its offset from that bone
+-- (WeaponAttachClient; EquippedHotbar secures the physical parts of exactly these tools).
+-- nil = not a bone-held weapon. Pickaxes and spears ride Hand_R like the sword. Bows ride the LEFT hand (right-handed archer); their
+-- locomotion stays Unarmed, with BowController's arm clips layered on top.
+function CharacterAnimProfiles.GetAttachForTool(tool)
+	if not tool then
+		return nil
+	end
+	if BowConfig.IsBow(tool) then
+		return { kind = "Bow", bone = "Hand_L", offset = BowConfig.BOW_GRIP }
+	end
+	if CharacterAnimProfiles.GetProfileForTool(tool) == "Sword" then
+		return { kind = "Sword", bone = "Hand_R", offset = CharacterAnimProfiles.SWORD_GRIP_OFFSET }
+	end
+	-- Profession tools: this rig has no RightHand part for Humanoid:EquipTool to weld to.
+	if isPickaxeTool(tool) then
+		return { kind = "Pickaxe", bone = "Hand_R", offset = CharacterAnimProfiles.PICKAXE_GRIP_OFFSET }
+	end
+	if isSpearTool(tool) then
+		return { kind = "Spear", bone = "Hand_R", offset = CharacterAnimProfiles.SPEAR_GRIP_OFFSET }
+	end
+	return nil
+end
 
 return CharacterAnimProfiles

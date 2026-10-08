@@ -55,7 +55,8 @@ end
 
 -- key is a name from the SoundEffects registry (e.g. "ItemPickup"), not a
 -- raw asset id -- keeps every call site free of hardcoded rbxassetid strings.
-function SfxService.PlayEffect(key)
+-- Optional world Position plus Volume/PlaybackSpeed/rolloff; existing UI calls stay 2D.
+function SfxService.PlayEffect(key, options)
 	if not RunService:IsClient() then
 		return
 	end
@@ -72,11 +73,30 @@ function SfxService.PlayEffect(key)
 		return
 	end
 
+	local emitter
+	if options and typeof(options.Position) == "Vector3" then
+		emitter = Instance.new("Part")
+		emitter.Name = "EffectSoundOrigin"
+		emitter.Size = Vector3.new(0.1, 0.1, 0.1)
+		emitter.Transparency = 1
+		emitter.Anchored = true
+		emitter.CanCollide = false
+		emitter.CanTouch = false
+		emitter.CanQuery = false
+		emitter.Position = options.Position
+		emitter.Parent = workspace
+	end
 	local sound = Instance.new("Sound")
 	sound.Name = "Sfx_" .. tostring(key)
 	sound.SoundId = assetId
 	sound.SoundGroup = SfxService.GetEffectsGroup() -- nil is a valid, harmless value here
-	sound.Parent = SoundService
+	if options then
+		sound.Volume = options.Volume or sound.Volume
+		sound.PlaybackSpeed = options.PlaybackSpeed or sound.PlaybackSpeed
+		sound.RollOffMinDistance = options.RollOffMinDistance or sound.RollOffMinDistance
+		sound.RollOffMaxDistance = options.RollOffMaxDistance or sound.RollOffMaxDistance
+	end
+	sound.Parent = emitter or SoundService
 
 	local destroyed = false
 	local function cleanup()
@@ -85,6 +105,7 @@ function SfxService.PlayEffect(key)
 		end
 		destroyed = true
 		sound:Destroy()
+		if emitter then emitter:Destroy() end
 	end
 
 	sound.Ended:Connect(cleanup)

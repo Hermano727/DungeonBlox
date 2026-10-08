@@ -4,7 +4,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config        = require(ReplicatedStorage:WaitForChild("EnergyConfig"))
 local UIFonts       = require(ReplicatedStorage:WaitForChild("UIFonts"))
-local UIDevTuning   = require(ReplicatedStorage:WaitForChild("UIDevTuning"))
+local HudBarStyle   = require(ReplicatedStorage:WaitForChild("HudBarStyle"))
 local States        = require(ReplicatedStorage:WaitForChild("PlayerStateEnum"))
 local ProfileMenusState = require(ReplicatedStorage:WaitForChild("ProfileMenusState"))
 local EnergyEvents  = ReplicatedStorage:WaitForChild("EnergyEvents")
@@ -25,6 +25,7 @@ local energyBarGui  = playerGui:WaitForChild("EnergyBarGui")
 -- means it still shows normally in an actual game session, just not while idly editing.
 energyBarGui.Enabled = true
 local barBackground = energyBarGui:WaitForChild("BarBackground")
+barBackground:SetAttribute("TutorialTarget", "hud_energy") -- the tutorial's spotlight finds it
 local barFill       = barBackground:WaitForChild("BarFill")
 -- Use FindFirstChild with fallback so script never freezes if label is missing
 local lowEnergyLabel = barBackground:FindFirstChild("LowEnergyLabel")
@@ -47,14 +48,6 @@ if energyLabel then
 	energyLabel = nil
 end
 
--- Imported "energy bar border" art -- same live-tunable-via-UIDevTool (F6)
--- treatment as HealthClient's HP bar border. Parented INSIDE BarBackground
--- and sized as parent-size-plus-padding (UDim2 offset component), so it
--- automatically tracks BarBackground's own dynamic viewport-based width --
--- no resize listener needed.
-local ENERGY_BORDER_IMAGE = "rbxassetid://93122523117889" -- recreated (v2), shorter proportions
-local ENERGY_BORDER_PAD_X, ENERGY_BORDER_PAD_Y = 26, 10 -- base overhang at Border.Scale == 1, tune via F6
-
 -- BarBackground's base footprint, Position and UISizeConstraint are baked
 -- Studio-side properties on this hand-built instance (outside Rojo's synced
 -- tree), so this Rojo-synced script overrides them at runtime instead.
@@ -70,7 +63,7 @@ local BAR_SIZE_MULTIPLIER = 1.33 * 0.67 -- ~0.8911
 local BAR_WIDTH_SCALE = 0.22 * BAR_SIZE_MULTIPLIER -- ~0.1960
 local BAR_WIDTH_MIN = 260 * BAR_SIZE_MULTIPLIER    -- ~231.7
 local BAR_WIDTH_MAX = 460 * BAR_SIZE_MULTIPLIER    -- ~409.9
-local BAR_HEIGHT = 15 * BAR_SIZE_MULTIPLIER        -- ~13.37
+local BAR_HEIGHT = 7 -- thin hairline bar since 2026-10-01 (HudBarStyle); HealthClient ENERGY_HEIGHT
 local BAR_BOTTOM_OFFSET = -145                     -- was -96, then -111, shifted up again 2026-09-10
                                                     -- to clear the Hotbar diamond slots below (keep in
                                                     -- sync with HealthClient.client.lua's ENERGY_BOTTOM_OFFSET)
@@ -85,73 +78,36 @@ if energySizeConstraint then
 	energySizeConstraint.MaxSize = Vector2.new(BAR_WIDTH_MAX, BAR_HEIGHT)
 end
 
--- ScaleType.Slice (9-slice) was tried here to keep the end-cap hooks crisp,
--- but with THIS asset it rendered fully invisible at our actual small bar
--- size (worked fine in an oversized debug test, so the asset/SliceCenter
--- guess wasn't simply wrong -- something about Slice + this image + a
--- SliceScale this tiny just didn't draw). Reverted to plain Stretch, which
--- does render -- back to the earlier known blur-at-small-size tradeoff
--- (see chat history), but visible beats invisible. Revisit Slice later with
--- a verified SliceCenter if the blur needs fixing again.
-local barBorder = Instance.new("ImageLabel")
-barBorder.Name                   = "BarBorder"
-barBorder.AnchorPoint             = Vector2.new(0.5, 0.5)
-barBorder.BackgroundTransparency = 1
-barBorder.Image                  = ENERGY_BORDER_IMAGE
-barBorder.ScaleType               = Enum.ScaleType.Stretch
-barBorder.ZIndex                  = 5 -- above BarFill (2), below EnergyLabel (10)
-barBorder.Parent                  = barBackground
-
-local EnergyBarTuning = UIDevTuning.Register("EnergyBar", {
-	-- Approved 2026-09-07 via UIDevTool (F6) snapshot.
-	Border = { Scale = 2.250, OffsetX = -1, OffsetY = 3, Rotation = 0 },
-})
-
-local function applyEnergyBorderTuning()
-	local b = EnergyBarTuning:Get().Border
-	local padX = ENERGY_BORDER_PAD_X * b.Scale
-	local padY = ENERGY_BORDER_PAD_Y * b.Scale
-	barBorder.Size = UDim2.new(1, padX * 2, 1, padY * 2)
-	barBorder.Position = UDim2.new(0.5, b.OffsetX, 0.5, b.OffsetY)
-	barBorder.Rotation = b.Rotation
-end
-
-applyEnergyBorderTuning()
-EnergyBarTuning:Subscribe(applyEnergyBorderTuning)
-
 -- Changed 2026-09-09 (direct request, alongside making the HP bar green):
 -- a soft, muted gold instead of the old green -- reads clearly as "not the
 -- HP bar" without being a harsh/neon yellow.
-local COLOR_NORMAL  = Color3.fromRGB(224, 186, 74)
-local COLOR_LOCKOUT = Color3.fromRGB(220, 50, 50)
+-- Muted further for the thin bars (2026-10-01): tarnished gold, and a dark red lockout.
+local COLOR_NORMAL  = Color3.fromRGB(190, 150, 64)
+local COLOR_LOCKOUT = Color3.fromRGB(170, 40, 36)
 local barTweenInfo   = TweenInfo.new(0.08, Enum.EasingStyle.Linear)
 local flashTweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true)
 local flashTween     = TweenService:Create(barFill, flashTweenInfo, {BackgroundTransparency=0.6})
 
--- Slight live UIGradient (lighter near the top, darker toward the bottom) --
--- same lightweight top/bottom-shift trick HealthClient uses for the HP bar,
--- just a gentler shift since this is meant to read as a subtle sheen, not a
--- strong gradient. Re-tinted (not replaced) on lockout so the gradient
--- carries through the red flash too.
-local function shiftColor(c, amt)
-	return Color3.new(
-		math.clamp(c.R + amt, 0, 1),
-		math.clamp(c.G + amt, 0, 1),
-		math.clamp(c.B + amt, 0, 1)
-	)
-end
-
-local function gradientForColor(baseColor)
-	return ColorSequence.new({
-		ColorSequenceKeypoint.new(0, shiftColor(baseColor, 0.15)),
-		ColorSequenceKeypoint.new(1, shiftColor(baseColor, -0.15)),
-	})
-end
+-- The same gentle top-light/bottom-dark sheen as the HP bar (HudBarStyle). Re-tinted (not
+-- replaced) on lockout so it carries through the red flash too.
+local gradientForColor = HudBarStyle.GradientFor
 
 local barFillGradient = Instance.new("UIGradient")
 barFillGradient.Rotation = 90
 barFillGradient.Color = gradientForColor(COLOR_NORMAL)
 barFillGradient.Parent = barFill
+
+-- Trough, bronze hairline, end caps and the drifting grain (shared with the HP bar).
+HudBarStyle.Apply(barBackground, barFill)
+
+-- "Panting..." is too tall to sit above the thin bar (it would land on the HP bar): it goes
+-- left of the bar, mirroring the number on the right (HudBarStyle.PlaceReadout).
+if lowEnergyLabel and lowEnergyLabel:IsA("TextLabel") then
+	lowEnergyLabel.AnchorPoint = Vector2.new(1, 0.5)
+	lowEnergyLabel.Position = UDim2.new(0, -HudBarStyle.SideOffset(barBackground), 0.5, 0)
+	lowEnergyLabel.Size = UDim2.fromOffset(120, 16)
+	lowEnergyLabel.TextXAlignment = Enum.TextXAlignment.Right
+end
 
 -- Numeric energy readout (2026-09-08, per direct request: "add a numeric to
 -- the energy bar ... just display that number", not a fraction -- Energy is
@@ -180,6 +136,7 @@ energyTextShadow.TextTransparency = 0.5
 energyTextShadow.TextStrokeTransparency = 1
 energyTextShadow.ZIndex = 6
 energyTextShadow.Parent = barBackground
+HudBarStyle.PlaceReadout(barBackground, energyText, energyTextShadow)
 
 local function setLabelVisible(v)
 	if not lowEnergyLabel then return end
@@ -242,8 +199,8 @@ local MENU_PAD_TOP = 0
 local MENU_DROP_SCALE = 0
 local MENU_MOVE_TWEEN = TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
-local MIRROR_HP_HEIGHT = 15 * 1.33 -- HealthClient's BASE_HEIGHT * HP_SIZE_MULTIPLIER
-local MIRROR_GAP_HP_TO_ENERGY = 24
+local MIRROR_HP_HEIGHT = 10 -- HealthClient's HP_HEIGHT
+local MIRROR_GAP_HP_TO_ENERGY = 8 -- HealthClient's GAP_HP_TO_ENERGY
 
 -- Valve-puzzle layout: mirrors HealthClient's (MAZE_TOP_LEFT + the HP->Energy stacking MUST
 -- match that file). While the Miasma valve maze is open the bars sit top-left, off the puzzle.

@@ -2,8 +2,9 @@
 	CraftingOrbApply
 	Authoritative rules for ApplyCraftingOrb.
 
-	Wisdom Orb: increments item.level by 1 (cap = tier*20) and rescales
-	  dmgMin/dmgMax (weapons) or hp/hps (armor).
+	Wisdom Orb: increments item.level by 1 (cap = tier*20) and rescales the BASE stats from the
+	  raw rolled base: dmgMin/dmgMax (weapons) or hp (+ hps on shields). Enchanted items get the
+	  level on their pre-enchant snapshot and the enchant replayed on top (applyWisdom).
 
 	Alteration Orb (Weapon):
 	  50/50 win/lose -> count from WIN_SUBSTAT_DIST (win) or LOSE_SUBSTAT_RANGE (lose).
@@ -95,10 +96,21 @@ end
 -- Alteration helpers
 ------------------------------------------------------------------------
 
-local function rollWeighted(dist)
+-- Every roll goes through the Random the caller passes (ProfileService: Random.new()), so a
+-- seeded one reproduces a roll exactly; math.random only when none is given.
+local function randFloat(rng)
+	if rng and type(rng.NextNumber) == "function" then return rng:NextNumber() end
+	return math.random()
+end
+local function randInt(rng, lo, hi)
+	if rng and type(rng.NextInteger) == "function" then return rng:NextInteger(lo, hi) end
+	return math.random(lo, hi)
+end
+
+local function rollWeighted(dist, rng)
 	local total = 0
 	for _, e in ipairs(dist) do total = total + e[2] end
-	local r = math.random() * total
+	local r = randFloat(rng) * total
 	local cum = 0
 	for _, e in ipairs(dist) do
 		cum = cum + e[2]
@@ -107,12 +119,12 @@ local function rollWeighted(dist)
 	return dist[#dist][1]
 end
 
-local function pickWeightedEffect(available, typeOverrides)
+local function pickWeightedEffect(available, typeOverrides, rng)
 	local total = 0
 	for _, eff in ipairs(available) do
 		total = total + eff.baseWeight * (typeOverrides[eff.id] or 1)
 	end
-	local r = math.random() * total
+	local r = randFloat(rng) * total
 	local cum = 0
 	for _, eff in ipairs(available) do
 		cum = cum + eff.baseWeight * (typeOverrides[eff.id] or 1)
@@ -122,7 +134,7 @@ local function pickWeightedEffect(available, typeOverrides)
 end
 
 -- Weapon alteration: unchanged from before.
-local function rollWeaponAlterationSubstats(targetItem, tier, count)
+local function rollWeaponAlterationSubstats(targetItem, tier, count, rng)
 	local rarityMult = ItemConfig.RARITY_SUBSTAT_MULT[targetItem.rarity] or 1.0
 	local weaponType, weaponMult, isMelee = nil, 1.0, true
 	if type(targetItem.tags) == "table" then
@@ -140,12 +152,12 @@ local function rollWeaponAlterationSubstats(targetItem, tier, count)
 	local usedIds, results, remaining = {}, {}, count
 
 	-- 75% guaranteed elemental slot
-	if math.random() < ELEMENTAL_CHANCE then
+	if randFloat(rng) < ELEMENTAL_CHANCE then
 		for _, eff in ipairs(pool) do
 			if eff.id == "elemDmg" then
 				usedIds.elemDmg = true
 				local range = eff.ranges[tier]
-				local val = math.floor(math.random(range[1], range[2]) * rarityMult * weaponMult)
+				local val = math.floor(randInt(rng, range[1], range[2]) * rarityMult * weaponMult)
 				table.insert(results, {id="elemDmg", value=val})
 				remaining = remaining - 1
 				break
@@ -163,10 +175,10 @@ local function rollWeaponAlterationSubstats(targetItem, tier, count)
 			end
 		end
 		if #available == 0 then break end
-		local picked = pickWeightedEffect(available, typeOverrides)
+		local picked = pickWeightedEffect(available, typeOverrides, rng)
 		usedIds[picked.id] = true
 		local range = picked.ranges[tier]
-		local val = math.floor(math.random(range[1], range[2]) * rarityMult)
+		local val = math.floor(randInt(rng, range[1], range[2]) * rarityMult)
 		table.insert(results, {id=picked.id, value=val})
 	end
 
@@ -174,7 +186,7 @@ local function rollWeaponAlterationSubstats(targetItem, tier, count)
 end
 
 -- Armor alteration: new per-slot 50/50 logic.
-local function rollArmorAlterationSubstats(targetItem, tier, count)
+local function rollArmorAlterationSubstats(targetItem, tier, count, rng)
 	local rarityMult = ItemConfig.RARITY_SUBSTAT_MULT[targetItem.rarity] or 1.0
 	local statRange  = ItemConfig.ARMOR_SUBSTAT_RANGE[tier] or {175, 200}
 
@@ -207,15 +219,15 @@ local function rollArmorAlterationSubstats(targetItem, tier, count)
 
 		if slot <= 2 then
 			-- 50/50: try stat pool vs other pool
-			local wantStat = math.random() < 0.5
+			local wantStat = randFloat(rng) < 0.5
 			if wantStat and statUsed < ARMOR_MAX_STAT_SUBS and #availStat > 0 then
-				pickedId = availStat[math.random(1, #availStat)]
+				pickedId = availStat[randInt(rng, 1, #availStat)]
 				statUsed = statUsed + 1
 			elseif #availOther > 0 then
-				pickedId = availOther[math.random(1, #availOther)]
+				pickedId = availOther[randInt(rng, 1, #availOther)]
 			elseif statUsed < ARMOR_MAX_STAT_SUBS and #availStat > 0 then
 				-- fallback: other pool exhausted, use stat pool
-				pickedId = availStat[math.random(1, #availStat)]
+				pickedId = availStat[randInt(rng, 1, #availStat)]
 				statUsed = statUsed + 1
 			else
 				break
@@ -228,7 +240,7 @@ local function rollArmorAlterationSubstats(targetItem, tier, count)
 			end
 			for _, id in ipairs(availOther) do table.insert(available, id) end
 			if #available == 0 then break end
-			pickedId = available[math.random(1, #available)]
+			pickedId = available[randInt(rng, 1, #available)]
 			if ARMOR_STAT_IDS[pickedId] then statUsed = statUsed + 1 end
 		end
 
@@ -239,10 +251,10 @@ local function rollArmorAlterationSubstats(targetItem, tier, count)
 		if eff and eff.ranges then
 			-- bonus effect: use its own tier range directly (no rarityMult — these are final values)
 			local r = eff.ranges[tier] or eff.ranges[1]
-			val = math.random(r[1], r[2])
+			val = randInt(rng, r[1], r[2])
 		else
 			-- stat substat (VIT/STR/DEX/INT): scale by rarity as normal
-			val = math.floor(math.random(statRange[1], statRange[2]) * rarityMult)
+			val = math.floor(randInt(rng, statRange[1], statRange[2]) * rarityMult)
 		end
 		table.insert(results, {id=pickedId, value=val})
 	end
@@ -250,23 +262,23 @@ local function rollArmorAlterationSubstats(targetItem, tier, count)
 	return results
 end
 
-local function rollAlterationSubstats(targetItem, tier)
-	local isWin = math.random() < 0.5
+local function rollAlterationSubstats(targetItem, tier, rng)
+	local isWin = randFloat(rng) < 0.5
 	local count
 
 	if targetItem.type == "Armor" then
 		-- Armor: fail = always 1 substat; win = WIN_SUBSTAT_DIST
-		count = isWin and rollWeighted(WIN_SUBSTAT_DIST[tier] or WIN_SUBSTAT_DIST[1]) or 1
-		return rollArmorAlterationSubstats(targetItem, tier, count)
+		count = isWin and rollWeighted(WIN_SUBSTAT_DIST[tier] or WIN_SUBSTAT_DIST[1], rng) or 1
+		return rollArmorAlterationSubstats(targetItem, tier, count, rng)
 	else
 		-- Weapon: existing logic
 		if isWin then
-			count = rollWeighted(WIN_SUBSTAT_DIST[tier] or WIN_SUBSTAT_DIST[1])
+			count = rollWeighted(WIN_SUBSTAT_DIST[tier] or WIN_SUBSTAT_DIST[1], rng)
 		else
 			local range = LOSE_SUBSTAT_RANGE[tier] or {1,1}
-			count = math.random(range[1], range[2])
+			count = randInt(rng, range[1], range[2])
 		end
-		return rollWeaponAlterationSubstats(targetItem, tier, count)
+		return rollWeaponAlterationSubstats(targetItem, tier, count, rng)
 	end
 end
 
@@ -303,9 +315,28 @@ rescaleForLevel = function(targetItem, subs, oldLevel, newLevel)
 		local oldHp = math.floor(tonumber(subs.hp) or 0)
 		local newHp = rawHp and math.floor(rawHp * newFactor) or math.floor(oldHp * (newFactor / oldFactor))
 		if newHp and newHp > 0 then
-			subs.hp  = newHp
-			subs.hps = math.floor(newHp * 0.5)
+			subs.hp = newHp
+			-- only pieces that rolled HP/s (shields) have one; never give it to the others
+			if subs.hps ~= nil then subs.hps = math.floor(newHp * 0.5) end
 		end
+	end
+end
+
+--[[
+	Wisdom: level +1 raises the item's BASE stats (scaled from the raw rolled base, like a drop at
+	that level). An enchant multiplies on top of the base, so on an enchanted item the level is
+	applied to the pre-enchant snapshot (`base` = item.baseSubStats) and the enchant levels are
+	replayed over it (EnchantScrollApply.RebuildEnchantOwned). Rescaling the enchanted numbers
+	directly would wipe the enchant bonus, and a later break (which rebuilds from the snapshot)
+	would undo the level. Writes into `subs` and `base`.
+]]
+local function applyWisdom(targetItem, subs, base, oldLevel, newLevel)
+	local enchant = math.floor(tonumber(targetItem.enchantLevel) or 0)
+	if enchant > 0 and type(base) == "table" then
+		rescaleForLevel(targetItem, base, oldLevel, newLevel)
+		EnchantScrollApply.RebuildEnchantOwned(targetItem, base, enchant, subs)
+	else
+		rescaleForLevel(targetItem, subs, oldLevel, newLevel)
 	end
 end
 
@@ -330,11 +361,19 @@ function CraftingOrbApply.PreviewWisdom(item)
 	if level >= tier * WISDOM_LEVEL_CAP_PER_TIER then return nil, "level_capped" end
 	local subs = {}
 	for k, v in pairs(type(item.subStats) == "table" and item.subStats or {}) do subs[k] = v end
-	rescaleForLevel(item, subs, level, level + 1)
+	local base = nil
+	if type(item.baseSubStats) == "table" then
+		base = {}
+		for k, v in pairs(item.baseSubStats) do base[k] = v end
+	end
+	applyWisdom(item, subs, base, level, level + 1)
 	return level + 1, subs
 end
 
-function CraftingOrbApply.ApplyFromAct(profile, act, _rng)
+-- forcedAlteration: SERVER-ONLY. A set Alteration result ({ [substatId] = value }, may be
+-- empty) from a tutorial ScriptedRigs entry; ProfileService passes it, never anything a
+-- client sent. nil = the normal random roll.
+function CraftingOrbApply.ApplyFromAct(profile, act, rng, forcedAlteration)
 	if type(profile) ~= "table" then return false, "bad_profile", nil end
 	if type(act) ~= "table" or act.kind ~= "ApplyCraftingOrb" then return false, "bad_act", nil end
 	local scrollUuid = act.scrollUuid
@@ -378,13 +417,21 @@ function CraftingOrbApply.ApplyFromAct(profile, act, _rng)
 	if orbKind == "Wisdom" then
 		targetItem.level = wisdomNewLevel
 		if type(targetItem.subStats) == "table" then
-			rescaleForLevel(targetItem, targetItem.subStats, wisdomOldLevel, wisdomNewLevel)
+			applyWisdom(targetItem, targetItem.subStats, targetItem.baseSubStats, wisdomOldLevel, wisdomNewLevel)
 		end
 	end
 
 	-- Alteration Orb
 	if orbKind == "Alteration" then
-		local newSubs = rollAlterationSubstats(targetItem, tTier)
+		local newSubs
+		if type(forcedAlteration) == "table" then
+			newSubs = {}
+			for id, value in pairs(forcedAlteration) do
+				table.insert(newSubs, { id = id, value = value })
+			end
+		else
+			newSubs = rollAlterationSubstats(targetItem, tTier, rng)
+		end
 		local subs    = targetItem.subStats
 		if type(subs) == "table" then
 			local baseKeys = (targetItem.type == "Weapon") and WEAPON_BASE_KEYS or ARMOR_BASE_KEYS

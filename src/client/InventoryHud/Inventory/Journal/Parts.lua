@@ -21,6 +21,7 @@ local Types = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
 local Style = require(script.Parent:WaitForChild("Style"))
 
 local e = React.createElement
+local TipLayer = require(script.Parent:WaitForChild("TipLayer"))
 local Parts = {}
 
 type FlatSpec = { color: Color3, edge: Color3?, edgeTransparency: number?, corner: number?, transparency: number? }
@@ -95,6 +96,14 @@ end
 
 -- props: text, selected, onClick, art ("chip"), artSelected ("chip_selected"), Size,
 -- LayoutOrder, textSize, icon (image id, optional), disabled, dim (e.g. locked tabs)
+-- Marks a UI element for the tutorial's focus highlight (TutorialClient finds it by this).
+function Parts.TargetRef(key: string?)
+	if not key then return nil end
+	return function(rbx)
+		if rbx then rbx:SetAttribute("TutorialTarget", key) end
+	end
+end
+
 function Parts.ChromeButton(props: any)
 	local hovered, setHovered = React.useState(false)
 	local selected = props.selected == true
@@ -113,6 +122,7 @@ function Parts.ChromeButton(props: any)
 		AutoButtonColor = false,
 		Text = "",
 		Active = not disabled,
+		ref = Parts.TargetRef(props.tutorialTarget), -- optional: the tutorial can point at it
 		[React.Event.Activated] = function()
 			if not disabled and props.onClick then props.onClick() end
 		end,
@@ -224,6 +234,7 @@ local TIP_W = 280
 local TIP_CHARS_PER_LINE = 38 -- at 14 px in TIP_W minus padding (Work Sans averages ~6.5 px a glyph)
 function Parts.HelpIcon(props: { text: string, Position: UDim2?, AnchorPoint: Vector2? })
 	local hovered, setHovered = React.useState(false)
+	local ref = React.useRef(nil)
 	-- Explicit height: AutomaticSize + TextWrapped under the page's UIScale measured one line
 	-- and cut the rest off.
 	local lines = math.max(1, math.ceil(#props.text / TIP_CHARS_PER_LINE))
@@ -239,6 +250,7 @@ function Parts.HelpIcon(props: { text: string, Position: UDim2?, AnchorPoint: Ve
 		TextSize = 15,
 		TextColor3 = Style.Text.Muted,
 		ZIndex = 5,
+		ref = ref,
 		[React.Event.MouseEnter] = function() setHovered(true) end,
 		[React.Event.MouseLeave] = function() setHovered(false) end,
 	}, {
@@ -248,9 +260,8 @@ function Parts.HelpIcon(props: { text: string, Position: UDim2?, AnchorPoint: Ve
 			Thickness = 1.5,
 			ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 		}),
-		Tip = hovered and e("TextLabel", {
-			AnchorPoint = Vector2.new(1, 0),
-			Position = UDim2.new(1, 0, 1, 8),
+		-- Drawn in TipLayer, above the whole menu, so page titles can't cover it.
+		Tip = hovered and e(TipLayer.Floating, { anchor = ref.current, width = TIP_W, height = tipH, align = "right" }, { Card = e("TextLabel", {
 			Size = UDim2.fromOffset(TIP_W, tipH),
 			BackgroundColor3 = Color3.fromRGB(16, 12, 9),
 			BackgroundTransparency = 0.05,
@@ -270,7 +281,7 @@ function Parts.HelpIcon(props: { text: string, Position: UDim2?, AnchorPoint: Ve
 				PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
 			}),
 			Edge = e("UIStroke", { Color = Style.Flat.Edge, Transparency = 0.3, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }),
-		}) or nil,
+		}) }) or nil,
 	})
 end
 

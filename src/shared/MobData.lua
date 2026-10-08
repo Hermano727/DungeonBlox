@@ -377,6 +377,31 @@ MobData[1]["PlainsSlimeElite"] = {
 --     far enough to trigger it. Tightened 150 -> 90 (AggroRange + 30,
 --     matching the ratio regular T1 mobs use) on top of that so it also
 --     gives up sooner once a player genuinely disengages.
+-- The tutorial's named elite (2026-10-04): a big Plains Slime, deliberately beatable by a new
+-- player. Spawns in the tutorial arena's elite zone (TutorialRealmTemplate ArenaZone) after the
+-- pity counter, set to 99/100 by the tutorial, fills. Placeholder art (the Plains Slime, scaled).
+MobData[1]["TutorialSlimeKing"] = {
+    Name = "The Slime King",
+    Level = 3,
+    BaseHP = 300,
+    BaseDamage = 8,
+    BaseScore = 50,
+    LootPool = "EliteDrop",
+    MobID = "TutorialSlimeKing",
+    ModelName = "PlainsSlime",
+    ModelScale = 2.2,
+    Armor = 4,
+    AggroRange = 35,
+    ReturnDistance = 60,
+    AttackRange = 7,
+    AttackCooldown = 1.2,
+    MoveSpeed = 6,
+    JumpHeight = 3,
+    KnockbackMultiplier = 0.3,
+    MovementClass = "Slime",
+    IsNamedElite = true,
+}
+
 MobData[1]["Kane"] = {
     Name = "Kane the Enraged",
     Level = 21,

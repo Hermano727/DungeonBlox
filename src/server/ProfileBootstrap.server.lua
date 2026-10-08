@@ -1,3 +1,4 @@
+local PotionAction = require(game:GetService("ReplicatedStorage"):WaitForChild("PotionAction"))
 --[[
   ProfileBootstrap
   - Ensures networking instances exist (code-first so Studio setup is optional).
@@ -138,6 +139,7 @@ end
   Security: UUID must exist in server inventory; slot derived server-side only.
 ]]
 rfEquip.OnServerInvoke = function(player, itemUuid, equipOpts)
+	if PotionAction.IsLocked(player.Character) then return false, "drinking" end
 	if not throttle(player.UserId) then
 		return false, "throttled"
 	end
@@ -154,6 +156,7 @@ end
     Returns: ok: boolean, err: string?
 ]]
 rfUnequip.OnServerInvoke = function(player, slot)
+	if PotionAction.IsLocked(player.Character) then return false, "drinking" end
 	if not throttle(player.UserId) then
 		return false, "throttled"
 	end
@@ -177,6 +180,7 @@ end
         | { kind = "TrashItem", uuid = string }
 ]]
 rfInventoryAct.OnServerInvoke = function(player, act)
+	if PotionAction.IsLocked(player.Character) then return false, "drinking" end
 	if type(act) ~= "table" or type(act.kind) ~= "string" then
 		return false, "bad_arg"
 	end
@@ -689,6 +693,12 @@ rfDevProfile.OnServerInvoke = function(player, action, args)
 		local okF = refillHunger()
 		cleanse()
 		return okH and okE and okF, "partial"
+	elseif action == "tutorialReset" or action == "tutorialSkip" or action == "tutorialStep" then
+		-- The tutorial (SSS/TutorialService): start over / end it / jump to a step.
+		local Tutorial = require(ServerScriptService:WaitForChild("TutorialService"))
+		if action == "tutorialReset" then return Tutorial.Reset(player) end
+		if action == "tutorialSkip" then return Tutorial.Skip(player) end
+		return Tutorial.JumpTo(player, tostring(args.step or ""))
 	end
 	return false, "bad_action"
 end

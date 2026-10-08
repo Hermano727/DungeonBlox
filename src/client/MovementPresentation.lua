@@ -1,4 +1,7 @@
 -- One additive bone layer per client, including observed remote characters.
+-- Also the out-of-breath pose (2026-10-04): while a player's replicated EnergyPanting attribute
+-- is set (EnergyServer, energy hit 0), their back hunches a little and the chest heaves with
+-- each breath, so everyone around can see they're spent. PantingEffects adds the drain, breath and sound.
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local RS = game:GetService("ReplicatedStorage")
@@ -13,6 +16,10 @@ local function connect(signal, fn)
     table.insert(connections, signal:Connect(fn))
 end
 local roles = {"Pelvis", "Spine_01", "Spine_02", "Neck", "Thigh_L", "Thigh_R"}
+local PANT_HUNCH = math.rad(9) -- forward bend of the back while spent
+local PANT_HEAVE = math.rad(3) -- chest rise and fall per breath
+local PANT_RATE = 1.6 -- breaths per second
+local PANT_BLEND = 4 -- how fast the pose comes and goes
 
 local function restore(state)
     for bone, base in pairs(state.base) do
@@ -33,7 +40,8 @@ local function resolve(character)
         bones[name] = bone
     end
     return {root=root, hum=hum, animator=animator, bones=bones, base={},
-        motion=Motion.New(), params=Grounding.NewRaycastParams(character)}
+        motion=Motion.New(), params=Grounding.NewRaycastParams(character),
+        player=Players:GetPlayerFromCharacter(character), pant=0}
 end
 local function eligible(character, state)
     local own = Players.LocalPlayer.Character
@@ -98,11 +106,17 @@ connect(RunService.PreSimulation, function(dt)
         local m = Motion.Step(state.motion, dt, -localVelocity.Z/speed, localVelocity.X/speed,
             ground and ground.Grounded == true, character:GetAttribute("IsSprinting") == true,
             state.root:GetAttribute("IsCrouching") == true, attacking)
+        -- Out of breath: blend the hunch in and out, and breathe on top of it.
+        local spent = state.player ~= nil and state.player:GetAttribute("EnergyPanting") == true
+        state.pant += ((spent and 1 or 0) - state.pant) * (1 - math.exp(-PANT_BLEND * dt))
+        local breath = math.sin(os.clock() * math.pi * 2 * PANT_RATE)
+        local hunch = PANT_HUNCH * state.pant
+        local heave = PANT_HEAVE * breath * state.pant
         local rotations = {
             Pelvis = CFrame.Angles(0, -m.Yaw*0.35, 0),
-            Spine_01 = CFrame.Angles(-m.Forward*0.5, -m.Yaw*0.325, -m.Side*0.5),
-            Spine_02 = CFrame.Angles(-m.Forward*0.5, -m.Yaw*0.325, -m.Side*0.5),
-            Neck = CFrame.Angles(m.Forward, m.Yaw, m.Side),
+            Spine_01 = CFrame.Angles(-m.Forward*0.5 - hunch*0.6, -m.Yaw*0.325, -m.Side*0.5),
+            Spine_02 = CFrame.Angles(-m.Forward*0.5 - hunch*0.4 - heave, -m.Yaw*0.325, -m.Side*0.5),
+            Neck = CFrame.Angles(m.Forward + hunch*0.5 + heave*0.5, m.Yaw, m.Side),
             Thigh_L = CFrame.Angles(0, m.Yaw*0.35, 0),
             Thigh_R = CFrame.Angles(0, m.Yaw*0.35, 0),
         }

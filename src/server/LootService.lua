@@ -26,6 +26,7 @@ local DungeonProfile = require(ServerScriptService:WaitForChild("ProfileService"
 local BuffService    = require(ServerScriptService:WaitForChild("BuffService"))
 local PartyService   = require(ServerScriptService:WaitForChild("PartyService"))
 local WorldLoot      = require(ServerScriptService:WaitForChild("WorldLootService"))
+local ScriptedRigs   = require(ServerScriptService:WaitForChild("ScriptedRigs"))
 
 local Players = game:GetService("Players")
 
@@ -399,6 +400,28 @@ local function tryDropMythic(mob, killingBlowPlayer, deathPos, scatterIndex)
     return scatterIndex + #results
 end
 
+-- A tutorial-scripted drop (ScriptedRigs "mobDrop" / "eliteDrop"): { itemId, count } or
+-- { template = grantTemplate }. Server-queued, tutorial-only.
+local function spawnScriptedDrop(rig, killingBlowPlayer, deathPos, scatterIndex, mobId)
+    if type(rig) ~= "table" then return scatterIndex end
+    local payload
+    if type(rig.template) == "table" then
+        local template = table.clone(rig.template)
+        ItemIdentity.Stamp(template, { by = killingBlowPlayer, kind = ItemIdentity.SOURCE.MOB_DROP, src = mobId })
+        payload = { kind = "item_template", template = template }
+    elseif type(rig.itemId) == "string" then
+        payload = { kind = "item_id", itemId = rig.itemId, count = math.max(1, math.floor(tonumber(rig.count) or 1)) }
+    else
+        return scatterIndex
+    end
+    -- A short wait before it can be picked up, so the player sees it land (the tutorial shows
+    -- off the drop) instead of grabbing it the instant it appears.
+    if type(rig.pickupDelay) == "number" then payload.pickupDelay = rig.pickupDelay end
+    local ok = pcall(WorldLoot.SpawnMobDrop, deathPos, killingBlowPlayer.UserId, payload, scatterIndex)
+    if ok and type(rig.onDropped) == "function" then pcall(rig.onDropped, deathPos) end
+    return ok and scatterIndex + 1 or scatterIndex
+end
+
 function LootService.onMobDied(mob, killingBlowPlayer)
     if not killingBlowPlayer or not killingBlowPlayer.Parent then return end
 
@@ -412,18 +435,26 @@ function LootService.onMobDied(mob, killingBlowPlayer)
     local ownerUserId = killingBlowPlayer.UserId
     local scatterIndex = 0
 
-    -- Each roll is independent; scatterIndex only advances when a roll
-    -- actually spawns a pickup, so drops stay tightly clustered.
-    scatterIndex = tryDropCoins(tier, elite, killingBlowPlayer, deathPos, ownerUserId, scatterIndex)
-    scatterIndex = tryDropKeyFragment(tier, deathPos, ownerUserId, scatterIndex, killingBlowPlayer)
-    scatterIndex = tryDropGearByScore(mob, tier, level, killingBlowPlayer, deathPos, ownerUserId, scatterIndex)
-    scatterIndex = tryDropMythic(mob, killingBlowPlayer, deathPos, scatterIndex)
+    -- A tutorial-scripted drop replaces every normal roll for this kill (no coins either).
+    local scripted = ScriptedRigs.Take(killingBlowPlayer, "mobDrop")
+    if scripted then
+        scatterIndex = spawnScriptedDrop(scripted, killingBlowPlayer, deathPos, scatterIndex, mob.MobID)
+    else
+        -- Each roll is independent; scatterIndex only advances when a roll
+        -- actually spawns a pickup, so drops stay tightly clustered.
+        scatterIndex = tryDropCoins(tier, elite, killingBlowPlayer, deathPos, ownerUserId, scatterIndex)
+        scatterIndex = tryDropKeyFragment(tier, deathPos, ownerUserId, scatterIndex, killingBlowPlayer)
+        scatterIndex = tryDropGearByScore(mob, tier, level, killingBlowPlayer, deathPos, ownerUserId, scatterIndex)
+        scatterIndex = tryDropMythic(mob, killingBlowPlayer, deathPos, scatterIndex)
+    end
     -- Named-elite signature gear: flat per-item chance, no score/pity, to the
     -- killing player only. Separate from the Mythic path above -- see
     -- NamedEliteLootService and docs/named-elite-loot.md.
     if mob.Stats and mob.Stats.IsNamedElite then
         local EliteLoot = require(ServerScriptService:WaitForChild("NamedEliteLootService"))
         scatterIndex = EliteLoot.OnNamedEliteKilled(mob, killingBlowPlayer, deathPos, scatterIndex)
+        -- The tutorial's elite always drops its scripted reward (a key fragment) on top.
+        scatterIndex = spawnScriptedDrop(ScriptedRigs.Take(killingBlowPlayer, "eliteDrop"), killingBlowPlayer, deathPos, scatterIndex, mob.MobID)
     end
 
     -- Boss death ends the run: cash everyone out, then open the exit window.

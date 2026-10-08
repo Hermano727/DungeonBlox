@@ -110,6 +110,17 @@ function ProfileTypes.DefaultProfile()
 		activity = {},
 
 		flags = {
+			-- The onboarding tutorial (2026-10-04). Server-owned: only TutorialService advances
+			-- it. While `done` is false the server may run scripted ("rigged") outcomes for this
+			-- player (SSS/ScriptedRigs); nothing else can. Saves from before the tutorial existed
+			-- are marked done on load (Reconcile), so only brand-new players start it.
+			tutorial = {
+				done = false,
+				step = "start",
+			},
+			-- The Hearthstone (journal tab + using it). New players unlock it at the tutorial's
+			-- totem (HearthTotemService); saves from before then keep it.
+			hearthstoneUnlocked = false,
 			inRaid = false,
 			teleports = {},
 			starterPackImported = false,
@@ -207,8 +218,8 @@ function ProfileTypes.DefaultProfile()
 		end)(),
 
 		hearthstone = {
-			active        = "cyren",  -- id of the currently bound location
-			unlocked      = { "cyren" },  -- ordered list of owned location ids
+			active        = "oakhaven",  -- id of the currently bound location
+			unlocked      = { "oakhaven" },  -- ordered list of owned location ids
 			cooldownUntil = 0,  -- os.time() when teleport cooldown expires
 		},
 
@@ -694,7 +705,27 @@ function ProfileTypes.Reconcile(loaded, ownerUserId)
 	if type(loaded) ~= "table" then
 		loaded = {}
 	end
+	-- A save from before the tutorial existed (it has flags, but no tutorial entry) is an
+	-- existing player: they skip it. Must run BEFORE fillMissing, which would otherwise hand
+	-- them the new-player default (done = false).
+	if type(loaded.flags) == "table" and loaded.flags.tutorial == nil then
+		loaded.flags.tutorial = { done = true, step = "existing_player" }
+	end
+	if type(loaded.flags) == "table" and loaded.flags.hearthstoneUnlocked == nil then
+		loaded.flags.hearthstoneUnlocked = true
+	end
 	fillMissing(loaded, ProfileTypes.DefaultProfile())
+	-- "cyren" was a placeholder town the old default bound every new profile to; it never
+	-- existed. Rebind those to Oakhaven and drop it from the owned list.
+	local hs = loaded.hearthstone
+	if type(hs) == "table" then
+		if hs.active == "cyren" or type(hs.active) ~= "string" then hs.active = "oakhaven" end
+		if type(hs.unlocked) == "table" then
+			for i = #hs.unlocked, 1, -1 do
+				if hs.unlocked[i] == "cyren" then table.remove(hs.unlocked, i) end
+			end
+		end
+	end
 	if type(loaded.currencies) == "table" then
 		loaded.currencies.Scrap = nil
 	end

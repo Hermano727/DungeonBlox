@@ -1,56 +1,61 @@
 -- MerchantShopClient: ROUTER ONLY. Zero UI code.
--- To add a new NPC type: create XxxClient module + add one resolvePrompt line below.
--- Editing any client module will NEVER affect this file or any other client.
+-- Every service NPC's ProximityPrompt lands here. If the NpcType has a dialog tree
+-- (RS/DialogSystem/Trees/<NpcType>) the conversation opens and its options open the menu;
+-- NPCRegistry `SkipDialog = true` (Merchant, Animal Trainer) opens the menu straight away.
+-- To add a service NPC: its XxxClient module (with .open(npcId)) + one SERVICE entry below,
+-- and a tree if it should talk first.
+-- The tutorial / quest NPCs (Miner, Fisherman, QuestGiver) are not routed here; they still
+-- use the old DialogModule through NPCClient.
 
 local Players                = game:GetService("Players")
 local ProximityPromptService = game:GetService("ProximityPromptService")
+local ReplicatedStorage      = game:GetService("ReplicatedStorage")
 
+local NPCRegistry         = require(ReplicatedStorage:WaitForChild("NPCRegistry"))
+local DialogTrees         = require(ReplicatedStorage:WaitForChild("DialogSystem"):WaitForChild("DialogTreeLoader"))
 local DialogRuntime       = require(script.Parent:WaitForChild("DialogHud"):WaitForChild("DialogRuntime"))
 local HearthstoneClient   = require(script.Parent:WaitForChild("HearthstoneClient"))
-local AuctionHouseClient  = require(script.Parent:WaitForChild("AuctionHouseClient"))
-local MerchantClient      = require(script.Parent:WaitForChild("MerchantClient"))
-local DungeoneerClient    = require(script.Parent:WaitForChild("DungeoneerClient"))
-local AnimalTrainerClient = require(script.Parent:WaitForChild("AnimalTrainerClient"))
 
 local player = Players.LocalPlayer
 
-local function resolvePrompt(prompt, npcType)
-	if not prompt or not prompt:IsA("ProximityPrompt") then return nil end
-	local parent = prompt.Parent; if not parent then return nil end
-	local model  = parent:FindFirstAncestorOfClass("Model"); if not model then return nil end
-	if model:GetAttribute("NpcType") ~= npcType then return nil end
-	local npcId = model:GetAttribute("NpcId")
-	if type(npcId) ~= "string" or npcId == "" then return nil end
-	return model, npcId
-end
+-- NpcType -> the module whose .open(npcId) opens that NPC's menu.
+local SERVICE = {
+	Merchant      = require(script.Parent:WaitForChild("MerchantClient")),
+	AnimalTrainer = require(script.Parent:WaitForChild("AnimalTrainerClient")),
+	Dungeoneer    = require(script.Parent:WaitForChild("DungeoneerClient")),
+	Auctioneer    = require(script.Parent:WaitForChild("AuctionHouseClient")),
+	Blacksmith    = require(script.Parent:WaitForChild("BlacksmithClient")),
+	SkillTrainer  = require(script.Parent:WaitForChild("SkillTrainerClient")),
+	Innkeeper     = { open = function() HearthstoneClient.openInnkeeperShop() end },
+}
 
-local function resolveInnkeeper(prompt)
-	if not prompt or not prompt:IsA("ProximityPrompt") then return nil end
-	local parent = prompt.Parent; if not parent then return nil end
-	local model  = parent:FindFirstAncestorOfClass("Model"); if not model then return nil end
-	local t = model:GetAttribute("NpcType")
-	if t ~= "Innkeeper" and model.Name ~= "Innkeeper" then return nil end
+-- The NPC behind a prompt: its model, NpcType and NpcId. Innkeeper models from before the
+-- attributes existed are recognised by name.
+local function resolve(prompt)
+	if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Parent then return nil end
+	local model = prompt.Parent:FindFirstAncestorOfClass("Model")
+	if not model then return nil end
+	local npcType = model:GetAttribute("NpcType")
+	if npcType == nil and model.Name == "Innkeeper" then npcType = "Innkeeper" end
+	if type(npcType) ~= "string" or not SERVICE[npcType] then return nil end
 	local npcId = model:GetAttribute("NpcId")
-	if type(npcId) ~= "string" or npcId == "" then npcId = "innkeeper_01" end
-	return model, npcId
+	if type(npcId) ~= "string" or npcId == "" then
+		if npcType ~= "Innkeeper" then return nil end
+		npcId = "innkeeper_01"
+	end
+	return model, npcType, npcId
 end
 
 ProximityPromptService.PromptTriggered:Connect(function(prompt, triggeringPlayer)
 	if triggeringPlayer ~= player then return end
-	-- Each NPC type routes to its own fully-isolated client module.
-	-- Add new types at the bottom; never modify existing lines.
-	local bsModel,bsId = resolvePrompt(prompt, "Blacksmith")
-	if bsId then DialogRuntime.startConversation(bsModel, bsId, "Blacksmith"); return end
-	local _,innId = resolveInnkeeper(prompt);               if innId then HearthstoneClient.openInnkeeperShop(); return end
-	local _,aucId = resolvePrompt(prompt, "Auctioneer");    if aucId then AuctionHouseClient.open();       return end
-	local _,merId = resolvePrompt(prompt, "Merchant");      if merId then MerchantClient.open(merId);     return end
-	local _,dunId = resolvePrompt(prompt, "Dungeoneer");    if dunId then DungeoneerClient.open(dunId);   return end
-	local _,atId  = resolvePrompt(prompt, "AnimalTrainer"); if atId  then AnimalTrainerClient.open(atId); return end
-	-- Add new NPC types here:
-end)
-
-player.CharacterAdded:Connect(function()
-	-- Each client handles its own cursor release on CharacterAdded.
+	local model, npcType, npcId = resolve(prompt)
+	if not model then return end
+	local reg = NPCRegistry.Get(npcType)
+	if DialogTrees[npcType] and not (reg and reg.SkipDialog) then
+		DialogRuntime.startConversation(model, npcId, npcType)
+	else
+		SERVICE[npcType].open(npcId)
+	end
 end)
 
 print("[MerchantShopClient] router ready")

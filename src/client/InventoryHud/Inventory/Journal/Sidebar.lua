@@ -3,7 +3,8 @@
 --  top-level pages (Loot Score, Records, ...). Deeper views (Loot Score -> Activity) are not
 --  listed here; they're reached from inside their page and left with Back.
 --
---    e(Sidebar, { pages = { { id, label, icon? } }, selected = id, onSelect = fn(id) })
+--    e(Sidebar, { pages = { { id, label, iconArt?, icon? } }, selected = id, onSelect = fn(id) })
+--  iconArt: a JournalUI key; icon: a plain image id (the NPC shops use item icons).
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local React = require(ReplicatedStorage.Packages.React)
@@ -48,18 +49,20 @@ local function Sidebar(props: { pages: { any }, selected: string, onSelect: (str
 	}
 	for i, page in ipairs(props.pages) do
 		local iconArt = page.iconArt and Style.Art(page.iconArt) or nil
+		local icon = page.icon or (iconArt and iconArt.Image) or nil
 		rows[page.id] = e(Parts.ChromeButton, {
 			text = page.label,
 			selected = page.id == props.selected,
 			art = "sidebar_row",
 			artSelected = "sidebar_row_selected",
-			icon = iconArt and iconArt.Image or nil,
+			icon = (icon and icon ~= "") and icon or nil,
 			iconSize = 32,
 			iconInset = 26, -- clear of the plaque's bronze end cap
 			Size = UDim2.new(1, 0, 0, ROW_H),
 			LayoutOrder = i,
 			textSize = labelSize,
 			onClick = function() props.onSelect(page.id) end,
+			tutorialTarget = "journal_" .. page.id,
 		})
 	end
 	local vines = Style.Art("sidebar_vines")

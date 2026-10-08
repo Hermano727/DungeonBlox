@@ -21,6 +21,11 @@ local Keybinds = {
 	TogglePerspective = K.R,      -- cycles first-person <-> over-shoulder
 	FreeLook          = { K.LeftControl, K.RightControl },
 
+	-- Combat
+	QuickDrink        = K.Z,      -- drinks a potion from the bag without swapping the held weapon. Was O: no O press
+	                              -- ever reached the scripts in testing (O is one of Roblox's own camera zoom keys, I/O)
+	QuickEat          = K.V,      -- eats one cooked fish from the bag (FishQuickEatClient)
+
 	-- UI
 	SkillsTab   = K.Tab,
 	PartyMenu   = K.P,

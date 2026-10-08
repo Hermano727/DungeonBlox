@@ -1,7 +1,8 @@
 --[[
     HealthClient
-    Builds the HP bar, elite-pity indicator, and hunger pip row, and keeps
-    them synced to the local character's Humanoid / server-pushed stats.
+    Builds the HP bar and hunger pip row, and keeps them synced to the local
+    character's Humanoid / server-pushed stats. (The named-elite pity plate
+    moved to its own script, ElitePityHud, 2026-10-01.)
 
     Layout (2026-09-08 rework, per direct request): HP, Energy (built by
     EnergyClient/EnergyBarGui, not this script), and Hunger are now stacked
@@ -21,8 +22,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local HungerConfig = require(ReplicatedStorage:WaitForChild("HungerConfig"))
 local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
-local MobData = require(ReplicatedStorage:WaitForChild("MobData"))
-local UIDevTuning = require(ReplicatedStorage:WaitForChild("UIDevTuning"))
+local HudBarStyle = require(ReplicatedStorage:WaitForChild("HudBarStyle"))
 local HealthBarFX = require(ReplicatedStorage:WaitForChild("HealthBarFX"))
 local ProfileMenusState = require(ReplicatedStorage:WaitForChild("ProfileMenusState"))
 local LifeStealBarFeedback = require(script.Parent:WaitForChild("LifeStealBarFeedback"))
@@ -42,7 +42,6 @@ local playerGui = player:WaitForChild("PlayerGui")
 -- known BarBackground values so HP/Hunger can be positioned relative to it.
 local BASE_WIDTH_SCALE = 0.22 -- original (pre-2026-09-08) unscaled Energy footprint
 local BASE_WIDTH_MIN, BASE_WIDTH_MAX = 260, 460
-local BASE_HEIGHT = 15
 
 -- HP: same auto-scaling rule as the original Energy baseline, then 33%
 -- bigger across the board (per direct request: "scale the img ornament and
@@ -51,7 +50,9 @@ local HP_SIZE_MULTIPLIER = 1.33
 local HP_WIDTH_SCALE = BASE_WIDTH_SCALE * HP_SIZE_MULTIPLIER
 local HP_WIDTH_MIN = BASE_WIDTH_MIN * HP_SIZE_MULTIPLIER
 local HP_WIDTH_MAX = BASE_WIDTH_MAX * HP_SIZE_MULTIPLIER
-local HP_HEIGHT = BASE_HEIGHT * HP_SIZE_MULTIPLIER
+-- Thin since 2026-10-01 (HudBarStyle, Elden-Ring-like hairline bars): heights are fixed px,
+-- no longer derived from the old ornate-border footprint.
+local HP_HEIGHT = 10
 
 -- Energy briefly matched HP's size exactly, but the ornament border art
 -- couldn't wrap the bigger bar even at Border.Scale 3.0, so per direct
@@ -66,7 +67,7 @@ local HP_HEIGHT = BASE_HEIGHT * HP_SIZE_MULTIPLIER
 local ENERGY_SIZE_MULTIPLIER = HP_SIZE_MULTIPLIER * 0.67
 local ENERGY_WIDTH_SCALE = BASE_WIDTH_SCALE * ENERGY_SIZE_MULTIPLIER
 local ENERGY_WIDTH_MIN, ENERGY_WIDTH_MAX = BASE_WIDTH_MIN * ENERGY_SIZE_MULTIPLIER, BASE_WIDTH_MAX * ENERGY_SIZE_MULTIPLIER
-local ENERGY_HEIGHT = BASE_HEIGHT * ENERGY_SIZE_MULTIPLIER
+local ENERGY_HEIGHT = 7 -- EnergyClient BAR_HEIGHT, keep in step
 -- EnergyBarGui.BarBackground's own Position Y offset (AnchorPoint 0.5,1).
 -- Was -96, then -111 (2026-09-08, "move all 3 up by a lil bit"); shifted up
 -- again to -145 (2026-09-10) to clear room for the Hotbar's diamond slots
@@ -80,26 +81,13 @@ local ENERGY_BOTTOM_OFFSET = -145
 -- match their new bigger size, just grow a bit from where it already was.
 local HUNGER_SIZE_MULTIPLIER = 1.2
 
-local GAP_HP_TO_ENERGY = 24     -- generous -- HP/Energy's ornate borders overhang their own trough box
+local GAP_HP_TO_ENERGY = 8      -- just clears the two bars' end diamonds (EnergyClient mirrors this)
 local GAP_ENERGY_TO_HUNGER = 10 -- was 5; nudged down another 5px (2026-09-10, "move the hunger
                                  -- bar maybe 5 px down (VERY slight)")
 
--- Imported "hp bar border" art (Elden-Ring-style ornate frame). Fixed-size,
--- never resizes with HP -- only the gradient fill below does that. Sized as
--- parent-size-plus-padding (see applyHealthBorderTuning), so it automatically
--- tracks the trough's own dynamic viewport-based width, same trick
--- EnergyClient uses for its border.
-local HP_BORDER_IMAGE = "rbxassetid://90368126230600"
-local HP_BORDER_PAD_X = 26 * HP_SIZE_MULTIPLIER -- base overhang at Border.Scale == 1, tune via F6
-local HP_BORDER_PAD_Y = 12 * HP_SIZE_MULTIPLIER
-
-local HealthBarTuning = UIDevTuning.Register("HealthBar", {
-    -- Approved 2026-09-07 via UIDevTool (F6) snapshot at Scale=0.900, base
-    -- pad scaled up 33% same day (see HP_SIZE_MULTIPLIER). Re-tuned down to
-    -- 0.800 on 2026-09-08 per direct feedback ("just tested that is the
-    -- proper size").
-    Border = { Scale = 0.800, OffsetX = 0, OffsetY = 3, Rotation = 0 },
-})
+-- The HP fill colour and the pale-gold damage trail (HealthBarFX chunk), Elden-Ring-like.
+local HP_COLOR = Color3.fromRGB(150, 30, 28)
+local HP_TRAIL_COLOR = Color3.fromRGB(222, 190, 120)
 
 ---------------------------------------------------------------------------
 -- Build the ScreenGui (once, persists across respawns)
@@ -116,132 +104,6 @@ game:GetService("CollectionService"):AddTag(gui, "OverMenus")
 gui.Parent         = playerGui
 
 ---------------------------------------------------------------------------
--- Elite-pity "omen" plate (top-centre, only in an elite zone before the elite spawns):
---        ------- (skull) -------     dark-red rules fading outward
---          KANE THE ENRAGED          Display font, bone white, faint dark edge
---          [=======.........]        hairline progress, blood red
---               42 / 100             small, muted
--- The skull pulses when the count goes up. All pieces live in the ElitePity table (this
--- script is near Luau's local limit).
----------------------------------------------------------------------------
-local ElitePity = {}
-do
-    local HudIcons = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Icons"):WaitForChild("Hud"):WaitForChild("HudIcons"))
-    local BONE = Color3.fromRGB(236, 226, 208)
-    local MUTED = Color3.fromRGB(176, 164, 150)
-    local BLOOD = Color3.fromRGB(190, 38, 34)
-    local BLOOD_DARK = Color3.fromRGB(96, 14, 14)
-    local WIDTH = 300
-
-    -- Its own ScreenGui, NOT the vitals' one: that is a HudHider overlay (HP stays up over the
-    -- Tab menu), and this plate must hide behind menus like the rest of the HUD.
-    local pityGui = Instance.new("ScreenGui")
-    pityGui.Name = "ElitePityGui"
-    pityGui.ResetOnSpawn = false
-    pityGui.IgnoreGuiInset = true
-    pityGui.DisplayOrder = gui.DisplayOrder
-    pityGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    pityGui.Parent = playerGui
-
-    local frame = Instance.new("Frame")
-    frame.Name = "ElitePityFrame"
-    frame.AnchorPoint = Vector2.new(0.5, 0)
-    frame.Position = UDim2.new(0.5, 0, 0, 8)
-    frame.Size = UDim2.fromOffset(WIDTH, 0)
-    frame.AutomaticSize = Enum.AutomaticSize.Y
-    frame.BackgroundTransparency = 1
-    frame.Visible = false
-    frame.Parent = pityGui
-    local layout = Instance.new("UIListLayout", frame)
-    layout.FillDirection = Enum.FillDirection.Vertical
-    layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-    layout.SortOrder = Enum.SortOrder.LayoutOrder
-    layout.Padding = UDim.new(0, 4)
-
-    -- Skull between two rules that fade outward.
-    local skullRow = Instance.new("Frame", frame)
-    skullRow.Name = "SkullRow"
-    skullRow.LayoutOrder = 1
-    skullRow.Size = UDim2.fromOffset(WIDTH, 34)
-    skullRow.BackgroundTransparency = 1
-    for _, side in ipairs({ -1, 1 }) do
-        local rule = Instance.new("Frame", skullRow)
-        rule.AnchorPoint = Vector2.new(side < 0 and 1 or 0, 0.5)
-        rule.Position = UDim2.new(0.5, side * 26, 0.5, 0)
-        rule.Size = UDim2.fromOffset(92, 2)
-        rule.BackgroundColor3 = BLOOD
-        rule.BorderSizePixel = 0
-        local fade = Instance.new("UIGradient", rule)
-        -- Solid at the skull, gone at the outer end.
-        fade.Transparency = NumberSequence.new({
-            NumberSequenceKeypoint.new(0, side < 0 and 1 or 0.1),
-            NumberSequenceKeypoint.new(1, side < 0 and 0.1 or 1),
-        })
-    end
-    local skullScale = Instance.new("UIScale")
-    local skull = Instance.new("ImageLabel", skullRow)
-    skull.Name = "Skull"
-    skull.AnchorPoint = Vector2.new(0.5, 0.5)
-    skull.Position = UDim2.fromScale(0.5, 0.5)
-    skull.Size = UDim2.fromOffset(34, 34)
-    skull.BackgroundTransparency = 1
-    skull.Image = HudIcons.SKULL
-    skull.ScaleType = Enum.ScaleType.Fit
-    skull.ImageColor3 = BONE
-    skullScale.Parent = skull
-
-    local name = Instance.new("TextLabel", frame)
-    name.Name = "EliteName"
-    name.LayoutOrder = 2
-    name.Size = UDim2.fromOffset(WIDTH, 22)
-    name.BackgroundTransparency = 1
-    name.FontFace = UIFonts.DisplayBold
-    name.TextSize = 18
-    name.TextColor3 = BONE
-    name.TextStrokeColor3 = Color3.fromRGB(10, 6, 6)
-    name.TextStrokeTransparency = 0.55
-    name.Text = "ELITE"
-
-    local track = Instance.new("Frame", frame)
-    track.Name = "Progress"
-    track.LayoutOrder = 3
-    track.Size = UDim2.fromOffset(170, 3)
-    track.BackgroundColor3 = Color3.fromRGB(20, 12, 12)
-    track.BackgroundTransparency = 0.35
-    track.BorderSizePixel = 0
-    Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
-    local fill = Instance.new("Frame", track)
-    fill.Name = "Fill"
-    fill.Size = UDim2.fromScale(0, 1)
-    fill.BackgroundColor3 = Color3.new(1, 1, 1)
-    fill.BorderSizePixel = 0
-    Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
-    local fillGradient = Instance.new("UIGradient", fill)
-    fillGradient.Color = ColorSequence.new(BLOOD_DARK, BLOOD)
-
-    local count = Instance.new("TextLabel", frame)
-    count.Name = "Count"
-    count.LayoutOrder = 4
-    count.Size = UDim2.fromOffset(WIDTH, 16)
-    count.BackgroundTransparency = 1
-    count.FontFace = UIFonts.BodyBold
-    count.TextSize = 13
-    count.TextColor3 = MUTED
-    count.TextStrokeColor3 = Color3.fromRGB(10, 6, 6)
-    count.TextStrokeTransparency = 0.7
-    count.Text = "0 / 100"
-
-    ElitePity.frame, ElitePity.name, ElitePity.count, ElitePity.fill = frame, name, count, fill
-    ElitePity.lastKills = nil
-
-    -- A short thump on the skull whenever the count climbs.
-    function ElitePity.Pulse()
-        skullScale.Scale = 1.3
-        TweenService:Create(skullScale, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
-    end
-end
-
----------------------------------------------------------------------------
 -- HP bar -- same auto-scaling architecture as EnergyBarGui.BarBackground
 ---------------------------------------------------------------------------
 
@@ -255,8 +117,8 @@ barBg.BackgroundTransparency = 0.15
 barBg.BorderSizePixel  = 0
 barBg.ZIndex           = 2
 barBg.Parent           = gui
-Instance.new("UICorner", barBg).CornerRadius = UDim.new(0, 4)
 local DEFAULT_HP_ANCHOR, DEFAULT_HP_POS = barBg.AnchorPoint, barBg.Position
+barBg:SetAttribute("TutorialTarget", "hud_hp") -- the tutorial's spotlights find HUD pieces by these
 
 local hpWidthConstraint = Instance.new("UISizeConstraint", barBg)
 hpWidthConstraint.MinSize = Vector2.new(HP_WIDTH_MIN, HP_HEIGHT)
@@ -269,39 +131,18 @@ local barFill = Instance.new("Frame", barBg)
 barFill.Name             = "BarFill"
 barFill.Position         = UDim2.new(0, 0, 0, 0)
 barFill.Size             = UDim2.new(1, 0, 1, 0)
-barFill.BackgroundColor3 = Color3.fromRGB(200, 40, 40)
+barFill.BackgroundColor3 = HP_COLOR
 barFill.BorderSizePixel  = 0
 barFill.ZIndex           = 3
-Instance.new("UICorner", barFill).CornerRadius = UDim.new(0, 4)
 
 local barFillGradient = Instance.new("UIGradient", barFill)
 barFillGradient.Rotation = 90 -- vertical: bright highlight near the top, darker toward the bottom
-barFillGradient.Color = ColorSequence.new(Color3.fromRGB(200, 40, 40))
+barFillGradient.Color = HudBarStyle.GradientFor(HP_COLOR)
 
--- Ornate border (imported art). Sits on top of the fill and masks the
--- fill's straight rectangular edges at the bar's tapered ends.
-local barBorder = Instance.new("ImageLabel", barBg)
-barBorder.Name                   = "BarBorder"
-barBorder.AnchorPoint             = Vector2.new(0.5, 0.5)
-barBorder.BackgroundTransparency = 1
-barBorder.Image                  = HP_BORDER_IMAGE
-barBorder.ScaleType               = Enum.ScaleType.Stretch
-barBorder.ZIndex                  = 5
+-- Trough, bronze hairline, end caps and the drifting grain (shared with the energy bar).
+HudBarStyle.Apply(barBg, barFill)
 
-local function applyHealthBorderTuning()
-    local b = HealthBarTuning:Get().Border
-    local padX = HP_BORDER_PAD_X * b.Scale
-    local padY = HP_BORDER_PAD_Y * b.Scale
-    barBorder.Size = UDim2.new(1, padX * 2, 1, padY * 2)
-    barBorder.Position = UDim2.new(0.5, b.OffsetX, 0.5, b.OffsetY)
-    barBorder.Rotation = b.Rotation
-end
-
-applyHealthBorderTuning()
-HealthBarTuning:Subscribe(applyHealthBorderTuning)
-
--- HP text: centered on the bar, tracks barBg's own dynamic width via Scale
--- instead of a hardcoded pixel size/position.
+-- HP text: just right of the bar (HudBarStyle.PlaceReadout below), too thin to hold it now.
 local hpText = Instance.new("TextLabel", barBg)
 hpText.Name                   = "HPText"
 hpText.Size                   = UDim2.fromScale(1, 1)
@@ -327,6 +168,7 @@ hpTextShadow.TextTransparency = 0.5
 hpTextShadow.TextStrokeTransparency = 1
 hpTextShadow.ZIndex = 6
 hpTextShadow.Parent = barBg
+HudBarStyle.PlaceReadout(barBg, hpText, hpTextShadow)
 
 ---------------------------------------------------------------------------
 -- Hunger pips + potion icons -- ONE combined row, centered as a group under
@@ -368,7 +210,26 @@ hungerPotionRowLayout.SortOrder = Enum.SortOrder.LayoutOrder
 hungerPotionRowLayout.Padding = UDim.new(0, ROW_GROUP_GAP)
 hungerPotionRowLayout.Parent = hungerPotionRow
 
--- Hunger pip group (left side of the combined row).
+-- Quick-eat fish slot (left of the hunger pips, 2026-10-03). FishQuickEatClient finds this by
+-- name and builds the key chip, fish icon and count into it; this script only owns the row.
+local fishMount = Instance.new("Frame")
+fishMount.Name = "FishIconsMount"
+fishMount.LayoutOrder = 0
+fishMount.Size = UDim2.new(0, 0, 0, PIP_SIZE)
+fishMount.AutomaticSize = Enum.AutomaticSize.X
+fishMount.BackgroundTransparency = 1
+fishMount.Parent = hungerPotionRow
+fishMount:SetAttribute("TutorialTarget", "hud_fish")
+
+local fishMountLayout = Instance.new("UIListLayout")
+fishMountLayout.FillDirection = Enum.FillDirection.Horizontal
+fishMountLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
+fishMountLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+fishMountLayout.SortOrder = Enum.SortOrder.LayoutOrder
+fishMountLayout.Padding = UDim.new(0, 4)
+fishMountLayout.Parent = fishMount
+
+-- Hunger pip group (middle of the combined row).
 local hungerGroup = Instance.new("Frame")
 hungerGroup.Name = "HungerGroup"
 hungerGroup.LayoutOrder = 1
@@ -376,6 +237,7 @@ hungerGroup.Size = UDim2.new(0, 0, 0, PIP_SIZE)
 hungerGroup.AutomaticSize = Enum.AutomaticSize.X
 hungerGroup.BackgroundTransparency = 1
 hungerGroup.Parent = hungerPotionRow
+hungerGroup:SetAttribute("TutorialTarget", "hud_hunger")
 
 local hungerGroupLayout = Instance.new("UIListLayout")
 hungerGroupLayout.FillDirection = Enum.FillDirection.Horizontal
@@ -416,6 +278,7 @@ potionMount.Size = UDim2.new(0, 0, 0, PIP_SIZE)
 potionMount.AutomaticSize = Enum.AutomaticSize.X
 potionMount.BackgroundTransparency = 1
 potionMount.Parent = hungerPotionRow
+potionMount:SetAttribute("TutorialTarget", "hud_potion")
 
 local potionMountLayout = Instance.new("UIListLayout")
 potionMountLayout.FillDirection = Enum.FillDirection.Horizontal
@@ -424,6 +287,25 @@ potionMountLayout.VerticalAlignment = Enum.VerticalAlignment.Center
 potionMountLayout.SortOrder = Enum.SortOrder.LayoutOrder
 potionMountLayout.Padding = UDim.new(0, 4) -- tight gap between the 3 charge icons themselves
 potionMountLayout.Parent = potionMount
+
+-- Dash slot (right end of the row, 2026-10-04). DashClient builds the key chip, dash icon and
+-- cooldown countdown into it, the same shape as the fish and potion slots.
+local dashMount = Instance.new("Frame")
+dashMount.Name = "DashIconsMount"
+dashMount.LayoutOrder = 3
+dashMount.Size = UDim2.new(0, 0, 0, PIP_SIZE)
+dashMount.AutomaticSize = Enum.AutomaticSize.X
+dashMount.BackgroundTransparency = 1
+dashMount.Parent = hungerPotionRow
+dashMount:SetAttribute("TutorialTarget", "hud_dash")
+
+local dashMountLayout = Instance.new("UIListLayout")
+dashMountLayout.FillDirection = Enum.FillDirection.Horizontal
+dashMountLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+dashMountLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+dashMountLayout.SortOrder = Enum.SortOrder.LayoutOrder
+dashMountLayout.Padding = UDim.new(0, 4)
+dashMountLayout.Parent = dashMount
 
 ---------------------------------------------------------------------------
 -- ProfileMenus-open layout -- HP, Hunger, and Potions (Energy mirrors this in
@@ -449,7 +331,7 @@ local MENU_PAD_TOP = 0
 local MENU_DROP_SCALE = 0
 -- In the menu the energy bar is hidden (HudHider: it isn't an overlay, and you aren't moving),
 -- so hunger + potions sit right under HP instead of under energy's empty slot.
-local MENU_GAP_HP_TO_HUNGER = 14 -- clears the HP bar's ornate border overhang
+local MENU_GAP_HP_TO_HUNGER = 10 -- clears the HP bar's end diamonds
 local MENU_MOVE_TWEEN = TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 local function setMenuLayout(frame: GuiObject, open: boolean, defaultAnchor: Vector2, defaultPos: UDim2, menuPos: UDim2?)
@@ -530,6 +412,12 @@ local hpBarFX = HealthBarFX.new({
     -- Same hit feel as the floating mob bars: hard white flash, then a fast
     -- wobble, no size punch. See HealthBarFX's hitStyle note.
     punch = false, hitStyle = "wobble", flashTime = 0.2, flashStartTransparency = 0.05,
+    -- Side-to-side only, no tilt: a rotated bar can't clip its drifting grain (HealthBarFX).
+    wobbleDegrees = 0,
+    -- One steady crimson (no green/yellow/red ramp) with a pale-gold damage trail.
+    colorRamp = function() return HP_COLOR end,
+    gradientFor = HudBarStyle.GradientFor,
+    chunkColor = HP_TRAIL_COLOR,
 })
 local lifeStealFX = LifeStealBarFeedback.new(barBg)
 local lifeStealConnection
@@ -583,48 +471,6 @@ local function updateHunger(current)
     setPipRow(hungerPips, current)
 end
 
-local function refreshElitePityBar()
-    local inEliteZone = player:GetAttribute("IsInEliteZone") == true
-    local eliteActive = player:GetAttribute("EliteActive") == true
-    local pityKills = tonumber(player:GetAttribute("ElitePityKills")) or 0
-    local pityMax = math.max(1, tonumber(player:GetAttribute("ElitePityMax")) or 100)
-    local eliteMobId = player:GetAttribute("CurrentEliteMobId")
-    pityKills = math.clamp(pityKills, 0, pityMax)
-
-    -- Pre-spawn "chance building up" meter only. This frame used to ALSO
-    -- double as a second HP readout once an elite went active -- removed
-    -- per direct request ("remove the purple bar that shows up when an
-    -- elite spawns, that was the old outdated bad system") now that
-    -- BossHealthBar.client.lua's dedicated top-middle bar is the one real
-    -- HP readout for named elites. So this frame hides itself entirely the
-    -- moment EliteActive flips true, instead of switching modes.
-    -- Also hidden while ANY named elite is up server-wide (EliteSpawnLocked): pity
-    -- progress and the lucky roll are both frozen then, so a bar would be lying.
-    local spawnLocked = player:GetAttribute("EliteSpawnLocked") == true
-    local shouldShow = inEliteZone and not eliteActive and not spawnLocked
-    ElitePity.frame.Visible = shouldShow
-    if not shouldShow then
-        ElitePity.lastKills = nil
-        return
-    end
-
-    local name = "Elite"
-    if type(eliteMobId) == "string" and eliteMobId ~= "" then
-        local mobStats = MobData.FindMobById(eliteMobId)
-        if type(mobStats) == "table" and type(mobStats.Name) == "string" and mobStats.Name ~= "" then
-            name = mobStats.Name
-        end
-    end
-
-    ElitePity.name.Text = string.upper(name)
-    ElitePity.count.Text = string.format("%d / %d", pityKills, pityMax)
-    TweenService:Create(ElitePity.fill, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-        Size = UDim2.fromScale(pityKills / pityMax, 1),
-    }):Play()
-    if ElitePity.lastKills and pityKills > ElitePity.lastKills then ElitePity.Pulse() end
-    ElitePity.lastKills = pityKills
-end
-
 ---------------------------------------------------------------------------
 -- Connect to character (reconnects on respawn)
 ---------------------------------------------------------------------------
@@ -668,15 +514,6 @@ else
     warn("[HealthClient] Hunger NumberValue not found")
 end
 
-player:GetAttributeChangedSignal("IsInEliteZone"):Connect(refreshElitePityBar)
-player:GetAttributeChangedSignal("ElitePityKills"):Connect(refreshElitePityBar)
-player:GetAttributeChangedSignal("ElitePityMax"):Connect(refreshElitePityBar)
-player:GetAttributeChangedSignal("EliteSpawnLocked"):Connect(refreshElitePityBar)
-player:GetAttributeChangedSignal("CurrentEliteMobId"):Connect(refreshElitePityBar)
-player:GetAttributeChangedSignal("EliteActive"):Connect(refreshElitePityBar)
-player:GetAttributeChangedSignal("EliteCurrentHealth"):Connect(refreshElitePityBar)
-player:GetAttributeChangedSignal("EliteMaxHealth"):Connect(refreshElitePityBar)
-task.defer(refreshElitePityBar)
 
 -- Vitals hide while a menu is up (RS/HudVitals; InteractionLock feeds it, the inventory and
 -- the cleanse channel opt out). In a do-block: this script is near Luau's local limit.

@@ -94,6 +94,16 @@ function HungerData.addExhaustion(player, amount)
 	end
 end
 
+-- Server code only (the tutorial): set hunger to an exact number of pips.
+function HungerData.set(player, pips)
+	local d = _d[player]
+	if not d or type(pips) ~= "number" then return false end
+	d.hunger = math.clamp(math.floor(pips), 0, d.maxHunger)
+	d.exhaustion = 0
+	pushValues(player, d)
+	return true
+end
+
 -- Eating: restores Hunger pips directly, capped at max.
 function HungerData.eat(player, hungerPips)
 	local d = _d[player]

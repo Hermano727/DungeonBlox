@@ -44,6 +44,7 @@ local ContextMenu      = require(script:WaitForChild("ContextMenu"))
 local Tooltip          = require(script:WaitForChild("Tooltip"))
 
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
+local CookingConfig = require(ReplicatedStorage:WaitForChild("CookingConfig"))
 local Types = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
 local ProfileMenusState = require(ReplicatedStorage:WaitForChild("ProfileMenusState"))
 local HudVitals = require(ReplicatedStorage:WaitForChild("HudVitals"))
@@ -305,6 +306,20 @@ local function InventoryMain()
 				text = optionText,
 				onClick = function()
 					DungeonMenuNet.requestEquip(item.uuid)
+				end,
+			})
+		end
+		-- Food is eaten straight from the bag (2026-10-03): how the buff fish are eaten.
+		if ItemDefinitions.IsFood(item.itemId) then
+			table.insert(options, {
+				text = "Eat " .. displayName(item),
+				onClick = function()
+					task.spawn(function()
+						local ok, reason = DungeonMenuNet.requestEatFromBag(item.uuid)
+						if not ok then
+							CenterFlashUI.Show(CookingConfig.EAT_REFUSALS[reason] or "You can't eat that now")
+						end
+					end)
 				end,
 			})
 		end
@@ -780,7 +795,7 @@ local function SlidingBody(props: { activeKey: string, direction: number, render
 	}, children)
 end
 
-local function Inventory(props: { resetKey: number? })
+local function Inventory(props: { resetKey: number?, openTo: any? })
 	-- Flat destination key instead of the old push/pop stack -- see this file's header
 	-- comment. QuickNav owns the carousel index itself and reports the selected id up
 	-- through onSelect; resetKey is threaded straight through to QuickNav so it can snap
@@ -827,7 +842,7 @@ local function Inventory(props: { resetKey: number? })
 			BackgroundTransparency = 1,
 			ZIndex = 2,
 		}, {
-			Nav = e(QuickNav, { onSelect = onNavSelect, resetKey = props.resetKey }),
+			Nav = e(QuickNav, { onSelect = onNavSelect, resetKey = props.resetKey, openTo = props.openTo }),
 		}),
 
 		ContentArea = e("Frame", {

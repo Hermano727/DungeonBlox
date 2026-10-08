@@ -28,6 +28,7 @@ local React = require(ReplicatedStorage.Packages.React)
 local Types = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
 local ItemConfig = require(ReplicatedStorage:WaitForChild("ItemConfig"))
+local EnergyConfig = require(ReplicatedStorage:WaitForChild("EnergyConfig"))
 local StatsSheet = require(ReplicatedStorage:WaitForChild("StatsSheet"))
 local WorldMapRequest = require(ReplicatedStorage:WaitForChild("WorldMapRequest"))
 local InventoryData = require(script.Parent:WaitForChild("InventoryData"))
@@ -35,6 +36,7 @@ local CharacterViewport = require(script.Parent:WaitForChild("CharacterViewport"
 local Journal = script.Parent:WaitForChild("Journal")
 local Style = require(Journal:WaitForChild("Style"))
 local Parts = require(Journal:WaitForChild("Parts"))
+local TipLayer = require(Journal:WaitForChild("TipLayer"))
 local Book = require(Journal:WaitForChild("Book"))
 
 local e = React.createElement
@@ -147,7 +149,7 @@ local function wrapHeight(str: string, lineH: number): number
 	return math.max(1, math.ceil(#str / TIP_CHARS)) * lineH
 end
 
-local function TipLabel(props: { tip: Tip, above: boolean? })
+local function TipLabel(props: { tip: Tip, above: boolean?, anchor: GuiObject? })
 	local tip = props.tip
 	local rows: { [string]: any } = {
 		Layout = e("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }),
@@ -180,9 +182,8 @@ local function TipLabel(props: { tip: Tip, above: boolean? })
 			TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Bottom, ZIndex = 51,
 		})
 	end
-	return e("Frame", {
-		AnchorPoint = Vector2.new(0.5, props.above and 1 or 0),
-		Position = props.above and UDim2.new(0.5, 0, 0, -8) or UDim2.new(0.5, 0, 1, 8),
+	-- Drawn in TipLayer (above the whole menu) at the hovered element, not inside the page.
+	return e(TipLayer.Floating, { anchor = props.anchor, above = props.above, width = TIP_W, height = height }, { Card = e("Frame", {
 		Size = UDim2.fromOffset(TIP_W, height),
 		BackgroundColor3 = TIP_INK.Bg,
 		BackgroundTransparency = 0.03,
@@ -196,17 +197,19 @@ local function TipLabel(props: { tip: Tip, above: boolean? })
 			PaddingTop = UDim.new(0, TIP_PAD), PaddingBottom = UDim.new(0, TIP_PAD),
 		}),
 		Rows = e("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, ZIndex = 51 }, rows),
-	})
+	}) })
 end
 
 -- A box that shows `tip` while hovered. Raises itself above its siblings while the tip is up.
 local function Hover(props: any)
 	local hovered, setHovered = React.useState(false)
+	local ref = React.useRef(nil)
 	local children = table.clone(props.children or {})
 	if hovered and type(props.tip) == "table" then
-		children.Tip = e(TipLabel, { tip = props.tip, above = props.above })
+		children.Tip = e(TipLabel, { tip = props.tip, above = props.above, anchor = ref.current })
 	end
 	return e("Frame", {
+		ref = ref,
 		LayoutOrder = props.order,
 		Size = props.Size,
 		Position = props.Position,
@@ -522,6 +525,7 @@ end
 
 local function SummaryRow(props: { icon: string, title: string, value: string, tip: Tip?, onClick: (() -> ())?, order: number })
 	local hovered, setHovered = React.useState(false)
+	local rowRef = React.useRef(nil)
 	local clickable = props.onClick ~= nil
 	local body = {
 		Icon = e(Icon, { art = props.icon, size = 38, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 6, 0.5, 0) }),
@@ -546,7 +550,7 @@ local function SummaryRow(props: { icon: string, title: string, value: string, t
 			BackgroundTransparency = 0.7,
 			BorderSizePixel = 0,
 		}),
-		Tip = (hovered and props.tip) and e(TipLabel, { tip = props.tip }) or nil,
+		Tip = (hovered and props.tip) and e(TipLabel, { tip = props.tip, anchor = rowRef.current }) or nil,
 	}
 	local base: { [any]: any } = {
 		LayoutOrder = props.order,
@@ -555,6 +559,7 @@ local function SummaryRow(props: { icon: string, title: string, value: string, t
 		BackgroundTransparency = (clickable and hovered) and 0.92 or 1,
 		BorderSizePixel = 0,
 		ZIndex = hovered and 20 or 1,
+		ref = rowRef,
 		[React.Event.MouseEnter] = function() setHovered(true) end,
 		[React.Event.MouseLeave] = function() setHovered(false) end,
 	}
@@ -652,12 +657,22 @@ local function DefenseLeft(props: { sheet: any })
 			},
 		}),
 		Energy = e(StatBlock, {
-			order = 3, icon = "fx_energy", value = num(s.energyRegen, 2) .. " / s", caption = "Energy Regen",
-			tip = {
-				title = ("Energy Regen %s / s"):format(num(s.energyRegen, 2)),
-				lines = { "Energy you recover every second. Sprinting and swinging spend it." },
-				foot = ("Base %s, gear +%s"):format(num(s.base.energyRegen, 2), num(s.energyRegen - s.base.energyRegen, 2)),
-			},
+			-- Regen never stops, sprinting included; sprint drains SPRINT_COST on top of it
+			-- (EnergyData). The armor share is what decides whether you can sprint forever.
+			order = 3, icon = "fx_energy", value = num(s.energyRegen, 2) .. " / s",
+			caption = ("%s base + %s from armor"):format(num(s.base.energyRegen, 2), num(s.energyRegen - s.base.energyRegen, 2)),
+			tip = (function()
+				local cost = EnergyConfig.SPRINT_COST
+				local net = s.energyRegen - cost
+				local sprint = net >= 0
+					and ("Sprinting costs %s / s, so you can sprint forever (gaining %s / s)."):format(num(cost, 2), num(net, 2))
+					or ("Sprinting costs %s / s: you lose %s / s. %s more from armor and you can sprint forever."):format(num(cost, 2), num(-net, 2), num(-net, 2))
+				return {
+					title = ("Energy Regen %s / s"):format(num(s.energyRegen, 2)),
+					lines = { "Energy you recover every second, even while sprinting. Swings spend it per swing.", sprint },
+					foot = ("Base %s + %s from armor (helm, chest, legs and boots)"):format(num(s.base.energyRegen, 2), num(s.energyRegen - s.base.energyRegen, 2)),
+				}
+			end)(),
 		}),
 		Armor = e(StatBlock, {
 			order = 4, icon = "fx_armor", value = pct(s.reduction * 100), caption = ("Less damage (%d armor)"):format(s.armor),

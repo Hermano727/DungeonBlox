@@ -25,8 +25,18 @@ local CraftingOrbApply = require(ReplicatedStorage:WaitForChild("CraftingOrbAppl
 local AltarUpgrade = require(ServerScriptService:WaitForChild("AltarUpgrade"))
 local ArmorVisualsService = require(ServerScriptService:WaitForChild("ArmorVisualsService"))
 local InventoryAudit = require(ServerScriptService:WaitForChild("InventoryAudit"))
+local DurabilityService = require(ServerScriptService:WaitForChild("DurabilityService"))
+local ScriptedRigs = require(ServerScriptService:WaitForChild("ScriptedRigs"))
 
 local ProfileService = {}
+
+-- Every skill level-up is announced to EVERY client (the leveller, branch, new level), so
+-- everyone nearby sees the light wave round that player (src/client/LevelUpEffect).
+local RemoteUtils = require(ReplicatedStorage:WaitForChild("RemoteUtils"))
+local levelUpEvent = RemoteUtils.EnsureRemoteEvent(RemoteUtils.EnsureFolder(ReplicatedStorage, "GameEvents"), "LevelUpEffect")
+local function announceLevelUp(player, branch, level)
+	levelUpEvent:FireAllClients(player, branch, level)
+end
 
 -- Lazy requires for cross-cutting gates (combat flag, safe-zone) used by DropItem/
 -- TrashItem below. Lazy + FindFirstChild (not WaitForChild) mirrors DamageService's
@@ -673,6 +683,45 @@ function ProfileService.Unload(player)
 end
 
 --[[
+	WipeProfile(player, reason) -- the player starts over as a brand-new player (2026-10-04).
+
+	Everything goes: items, coins, skills, map, flags (so the tutorial starts again and the
+	Hearthstone is locked). The DataStore session lock and the snapshot sequence are kept, the
+	wipe is saved straight away, and the character respawns so the starter kit and appearance
+	come back fresh. The wipe audit is told first (Sanction), so it isn't reported as a loss.
+
+	The profile TABLE is kept and refilled in place, so anything holding a reference to it keeps
+	working. Systems that cache a SUB-table (the minimap's map state) listen to
+	ProfileService.ProfileWiped and drop it.
+
+	Server-only, no remote: today the F8 tutorial reset uses it. A future "delete my profile"
+	option goes through here too, behind its own confirmation.
+]]
+local wipedEvent = Instance.new("BindableEvent")
+ProfileService.ProfileWiped = wipedEvent.Event -- (player)
+
+function ProfileService.WipeProfile(player, reason)
+	local profile = sessions[player.UserId]
+	if not profile then return false, "no_profile" end
+	pcall(InventoryAudit.Sanction, player, "profile wipe: " .. tostring(reason or "unspecified"))
+	local keep = { Lock = profile.Lock, IsEphemeral = profile.IsEphemeral, __snapSeq = profile.__snapSeq }
+	local fresh = Types.Reconcile(nil, player.UserId) -- exactly what a brand-new player gets
+	for k in pairs(profile) do profile[k] = nil end
+	for k, v in pairs(fresh) do profile[k] = v end
+	for k, v in pairs(keep) do profile[k] = v end
+	ensureSkillStats(profile)
+	pcall(InventoryAudit.Observe, player, profile, "wipe") -- the new baseline
+	ProfileService.SaveProfile(player)
+	wipedEvent:Fire(player)
+	ProfileService.PushProfile(player)
+	-- A new body: the starter kit, appearance and HP come back from the fresh profile.
+	task.defer(function()
+		if player.Parent then player:LoadCharacter() end
+	end)
+	return true
+end
+
+--[[
 	SaveProfile(player) -- writes the cached session back to DataStore, keeping
 	the lock (JobId/UpdatedAt refreshed) so autosave can call this repeatedly
 	without releasing the session. No-ops for ephemeral (Studio-fallback)
@@ -829,6 +878,7 @@ local function buildOwnedItemFromTemplate(template, mayCarryIdentity, originCtx)
 		toolPrefabName = template.toolPrefabName,
 		durability    = template.durability,
 		maxDurability = template.maxDurability,
+		broken        = template.broken == true or nil, -- a scripted broken reward (tutorial chest)
 	}
 	if type(template.itemId) == "string" and template.itemId ~= "" then
 		item.itemId = template.itemId
@@ -1514,6 +1564,7 @@ function ProfileService.ApplyEnchantScroll(player, scrollUuid, targetUuid)
 		return false, targetErr or "bad_target_item"
 	end
 
+	local wasBroken = target.broken == true
 	local okApply, errApply = EnchantScrollApply.ApplyFromAct(profile, {
 		kind = "ApplyEnchantScroll",
 		scrollUuid = scrollUuid,
@@ -1521,6 +1572,11 @@ function ProfileService.ApplyEnchantScroll(player, scrollUuid, targetUuid)
 	}, Random.new())
 	if not okApply then
 		return false, errApply
+	end
+	-- A failed +4 or higher BREAKS the item (EnchantScrollApply.BreakItem): take it off if worn
+	-- and tell the player.
+	if target.broken == true and not wasBroken then
+		DurabilityService.OnBroken(player, profile, targetUuid)
 	end
 	-- The scroll stack may have been fully consumed (uuid removed from inventory); make sure
 	-- no stale bagSlots reference is left pointing at it.
@@ -1639,11 +1695,17 @@ function ProfileService.ApplyCraftingOrb(player, scrollUuid, targetUuid)
 		return false, targetErr or "bad_target_item"
 	end
 
+	-- A tutorial-scripted Alteration result, only if this is an Alteration orb (server-queued,
+	-- tutorial-only; see ScriptedRigs). Peek first so another orb kind doesn't use it up.
+	local forced
+	if ItemDefinitions.GetOrbKind(scroll.itemId) == "Alteration" and ScriptedRigs.Peek(player, "alteration") ~= nil then
+		forced = ScriptedRigs.Take(player, "alteration")
+	end
 	local okApply, errApply = CraftingOrbApply.ApplyFromAct(profile, {
 		kind = "ApplyCraftingOrb",
 		scrollUuid = scrollUuid,
 		targetUuid = targetUuid,
-	}, Random.new())
+	}, Random.new(), forced)
 	if not okApply then
 		return false, errApply
 	end
@@ -1738,6 +1800,34 @@ function ProfileService.ConsumeItemId(player, itemId, count)
 		Hotbar.syncFromProfile(player, profile)
 	end
 	return true, nil
+end
+
+-- Takes `count` from ONE specific stack (by uuid). Unlike ConsumeItemId, which eats whichever
+-- stack of that itemId it meets first (banked ones included), the caller picks the stack, so a
+-- quick-drink can never spend a potion that is sitting in the bank.
+function ProfileService.ConsumeFromStack(player, itemUuid, count)
+	local profile = ProfileService.Load(player)
+	local item = profile and profile.inventory and profile.inventory[itemUuid]
+	count = math.max(1, math.floor(tonumber(count) or 1))
+	if type(item) ~= "table" then
+		return false, "missing"
+	end
+	local have = math.max(1, tonumber(item.count) or 1)
+	if have < count then
+		return false, "insufficient"
+	end
+	item.count = have - count
+	local removed = item.count <= 0
+	if removed then
+		ProfileService.ClearItemReferences(profile, itemUuid)
+		profile.inventory[itemUuid] = nil
+	end
+	StatsService.RecomputeRuntimeHp(profile)
+	ProfileService.PushProfile(player)
+	if removed then
+		Hotbar.syncFromProfile(player, profile)
+	end
+	return true, removed
 end
 
 local function isValidEquipSlot(slot)
@@ -1941,6 +2031,11 @@ function ProfileService.BuildSnapshotPayload(player)
 	ensureBagSlots(profile)
 	ensureChest(profile)
 	rehomeOrphanedItems(profile) -- nothing owned may be left invisible in what the client draws
+	-- Every weapon / armor piece has durability, whichever path granted it (cheap: one pass
+	-- over a few dozen items, and it's a no-op once they have it).
+	for _, item in pairs(profile.inventory) do
+		DurabilityService.EnsureDurability(item)
+	end
 	local derived = StatsService.BuildSnapshot(profile)
 	local uid = player.UserId
 	local seq = (snapshotGenByUserId[uid] or 0) + 1
@@ -2135,6 +2230,9 @@ function ProfileService.AddSkillXP(player, branch, amount)
 	end
 
 	ProfileService.PushProfile(player)
+	if levelsGained > 0 then
+		announceLevelUp(player, key, bucket.level)
+	end
 	return true, nil, { level = bucket.level, xp = bucket.xp, levelsGained = levelsGained }
 end
 
@@ -2152,6 +2250,7 @@ function ProfileService.DevSetSkillLevel(player, branch, level)
 		return false, "bad_level"
 	end
 	local bucket = profile.stats[key]
+	local raised = lv > bucket.level
 	bucket.level = lv
 	bucket.xp = 0
 	if key == "mining" then
@@ -2160,6 +2259,9 @@ function ProfileService.DevSetSkillLevel(player, branch, level)
 		profile.stats.fishing.fishingLevel = lv
 	end
 	ProfileService.PushProfile(player)
+	if raised then
+		announceLevelUp(player, key, lv) -- so the F8 level setter shows the effect too
+	end
 	return true, nil
 end
 

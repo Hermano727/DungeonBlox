@@ -1,11 +1,21 @@
 -- Each client reconstructs the accepted weapon from replicated Tool metadata.
 -- The server secures the hidden physical Tool; these cosmetic parts alone follow
--- Hand_R. Combat still uses the Tool and camera/root raycasts.
+-- a hand bone (CharacterAnimProfiles.GetAttachForTool: swords, pickaxes and spears Hand_R, bows Hand_L).
+-- Combat still uses the Tool and camera/root raycasts.
+--
+-- Bows also get their string (two Beams from the nocks to a point that follows the
+-- drawing hand while a draw or aim clip is playing, read off the replicated Animator,
+-- so every client sees the same pull) and the nocked arrow along it.
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ActiveEquipment = require(ReplicatedStorage:WaitForChild("ActiveEquipment"))
+local PotionPresentation = require(script.Parent:WaitForChild("PotionPresentation"))
 local Profiles = require(ReplicatedStorage:WaitForChild("CharacterAnimProfiles"))
+local BowConfig = require(ReplicatedStorage:WaitForChild("BowConfig"))
+local BowAnimations = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Animations"):WaitForChild("BowAnimations"))
+
+local STRING_REST = (BowConfig.NOCK_TOP + BowConfig.NOCK_BOTTOM) / 2
 
 local visuals = Instance.new("Folder")
 visuals.Name = "HarukaWeaponVisuals"
@@ -20,7 +30,82 @@ end
 
 local function clearVisual(state)
 	if state.model then state.model:Destroy() end
-	state.model, state.parts, state.bone = nil, nil, nil
+	state.model, state.parts, state.bone, state.offset, state.bow = nil, nil, nil, nil, nil
+end
+
+-- 0..1: how much a draw (past the nock) or full-draw clip is holding the string back.
+local function stringPull(character)
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+	if not animator then return 0 end
+	local pull = 0
+	for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+		local id = track.Animation and track.Animation.AnimationId
+		if id == BowAnimations.T1_BOW_AIM
+			or (id == BowAnimations.T1_BOW_DRAW and track.TimePosition >= BowConfig.NOCK_TIME) then
+			pull += track.WeightCurrent
+		end
+	end
+	return pull
+end
+
+local function buildBowExtras(state, bowPart)
+	local mesh = state.character:FindFirstChild("Hero_Character")
+	local hand = mesh and mesh:FindFirstChild("Hand_R", true)
+	local function attachment(name, position)
+		local a = Instance.new("Attachment")
+		a.Name = name
+		a.Position = position
+		a.Parent = bowPart
+		return a
+	end
+	local top = attachment("NockTop", BowConfig.NOCK_TOP)
+	local bottom = attachment("NockBottom", BowConfig.NOCK_BOTTOM)
+	local nock = attachment("Nock", STRING_REST)
+	local beams = {}
+	for _, pair in ipairs({ { top, nock }, { nock, bottom } }) do
+		local beam = Instance.new("Beam")
+		beam.Name = "String"
+		beam.Attachment0, beam.Attachment1 = pair[1], pair[2]
+		beam.Width0, beam.Width1 = BowConfig.STRING_WIDTH, BowConfig.STRING_WIDTH
+		beam.Color = ColorSequence.new(BowConfig.STRING_COLOR)
+		beam.Transparency = NumberSequence.new(0)
+		beam.FaceCamera = true
+		beam.Segments = 1
+		beam.LightInfluence = 1
+		beam.Parent = bowPart
+		table.insert(beams, beam)
+	end
+	local arrow
+	local templates = ReplicatedStorage:FindFirstChild(BowConfig.VISUALS_FOLDER)
+	local template = templates and templates:FindFirstChild(BowConfig.ARROW_TEMPLATE)
+	if template then
+		arrow = template:Clone()
+		arrow.Anchored = true
+		arrow.CanCollide, arrow.CanTouch, arrow.CanQuery = false, false, false
+		arrow.LocalTransparencyModifier = 1
+		arrow.Parent = state.model
+	end
+	state.bow = { part = bowPart, hand = hand and hand:IsA("Bone") and hand or nil, nock = nock, beams = beams, arrow = arrow }
+end
+
+local function updateBow(state, hidden)
+	local bow = state.bow
+	local bowFrame = bow.part.CFrame
+	local drawn = not hidden and bow.hand ~= nil and stringPull(state.character) > 0.5
+	local nockWorld = drawn and bow.hand.TransformedWorldCFrame * BowConfig.NOCK_HAND or bowFrame * STRING_REST
+	bow.nock.Position = bowFrame:PointToObjectSpace(nockWorld)
+	for _, beam in ipairs(bow.beams) do beam.Enabled = not hidden end
+	if bow.arrow then
+		if drawn then
+			local along = bowFrame * BowConfig.ARROW_REST - nockWorld
+			if along.Magnitude > 0.05 then
+				along = along.Unit
+				bow.arrow.CFrame = CFrame.lookAt(nockWorld + along * (BowConfig.ARROW_LENGTH / 2), nockWorld + along * BowConfig.ARROW_LENGTH)
+			end
+		end
+		bow.arrow.LocalTransparencyModifier = drawn and 0 or 1
+	end
 end
 
 local function disconnect(connections)
@@ -34,14 +119,15 @@ local function resolveVisual(state)
 		setStatus(state, character:GetAttribute(ActiveEquipment.ATTRIBUTE) and "WaitingForTool" or "Unequipped")
 		return
 	end
-	if Profiles.GetProfileForTool(tool) ~= "Sword" then setStatus(state, "Unsupported"); return end
+	local attach = Profiles.GetAttachForTool(tool)
+	if not attach then setStatus(state, "Unsupported"); return end
 	if not character:FindFirstChild("Hero_Character") then setStatus(state, "WaitingForMesh"); return end
 	if tool:GetAttribute("BoneWeaponVisual") ~= true then setStatus(state, "WaitingForMetadata"); return end
 	local handle = tool:FindFirstChild("Handle")
 	if not handle or not handle:IsA("BasePart") then setStatus(state, "WaitingForHandle"); return end
 	local mesh = character:FindFirstChild("Hero_Character")
-	local bone = mesh:FindFirstChild("Hand_R", true)
-	if not bone or not bone:IsA("Bone") then setStatus(state, "WaitingForHand_R"); return end
+	local bone = mesh:FindFirstChild(attach.bone, true)
+	if not bone or not bone:IsA("Bone") then setStatus(state, "WaitingFor" .. attach.bone); return end
 	local sources = {}
 	for _, part in ipairs(tool:GetDescendants()) do
 		if part:IsA("BasePart") then
@@ -71,11 +157,18 @@ local function resolveVisual(state)
 		part.Transparency = source:GetAttribute("DungeonVisualTransparency")
 		part.LocalTransparencyModifier = 0
 		local offset = source:GetAttribute("DungeonVisualOffset")
-		part.CFrame = bone.TransformedWorldCFrame * Profiles.SWORD_GRIP_OFFSET * offset
+		part.CFrame = bone.TransformedWorldCFrame * attach.offset * offset
 		part.Parent = model
 		table.insert(parts, { part = part, source = source, offset = offset })
 	end
-	state.model, state.parts, state.bone = model, parts, bone
+	state.model, state.parts, state.bone, state.offset = model, parts, bone, attach.offset
+	if attach.kind == "Bow" and parts[1] then
+		local handlePart = parts[1].part
+		for _, entry in ipairs(parts) do
+			if entry.source == handle then handlePart = entry.part end
+		end
+		buildBowExtras(state, handlePart)
+	end
 	model.Parent = visuals
 	setStatus(state, "Ready")
 end
@@ -150,10 +243,16 @@ RunService:BindToRenderStep("HarukaWeaponAttachment", Enum.RenderPriority.Last.V
 			resolveVisual(state)
 		end
 		if state.model then
-			local cf = state.bone.TransformedWorldCFrame * Profiles.SWORD_GRIP_OFFSET
-			for _, entry in ipairs(state.parts) do entry.part.CFrame = cf * entry.offset end
+			local cf = state.bone.TransformedWorldCFrame * state.offset
+			-- Follow the actual replicated track. A failed load never hides the weapon.
+			local drinking = PotionPresentation.IsDrinking(character)
+			for _, entry in ipairs(state.parts) do
+				entry.part.CFrame = cf * entry.offset
+				entry.part.LocalTransparencyModifier = drinking and 1 or 0
+			end
+			if state.bow then updateBow(state, drinking) end
 		elseif state.tool and not state.warned and os.clock() - state.waitStarted > 5
-			and Profiles.GetProfileForTool(state.tool) == "Sword" then
+			and Profiles.GetAttachForTool(state.tool) ~= nil then
 			state.warned = true
 			warn("[WeaponAttachClient]", character.Name, state.status, state.tool:GetAttribute("DungeonItemUuid"))
 		end

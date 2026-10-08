@@ -73,6 +73,8 @@ local Families = {
 local NPCDefault = {
 	Name = Font.new(Families.Body, Enum.FontWeight.Bold),
 	Dialog = Font.new(Families.Body, Enum.FontWeight.Medium),
+	-- the crest-on-plaque nametag (src/client/NpcNametags), the Journal's serif
+	Tag = Font.new(Families.Serif, Enum.FontWeight.Bold),
 }
 
 -- Per-NPC-type overrides, keyed by the same npcType string bootstrap scripts identify
@@ -81,7 +83,7 @@ local NPCDefault = {
 --   NPCOverrides.Blacksmith = { Name = Font.new(Families.Display, Enum.FontWeight.Bold) }
 local NPCOverrides = {}
 
---- Returns the font for `slot` ("Name" or "Dialog") for the given NPC type, falling back to
+--- Returns the font for `slot` ("Name", "Dialog" or "Tag") for the given NPC type, falling back to
 --- NPCDefault when there's no override (or no npcType at all). Called from
 --- NPCBootstrapKit.EnsureHeadGui.
 local function GetNPCFont(npcType, slot)

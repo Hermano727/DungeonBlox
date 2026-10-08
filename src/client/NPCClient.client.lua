@@ -28,6 +28,9 @@ local playerGui = player:WaitForChild("PlayerGui")
 
 local DialogModule  = require(ReplicatedStorage:WaitForChild("DialogModule"))
 local NPCRegistry   = require(ReplicatedStorage:WaitForChild("NPCRegistry"))
+-- NPC types with a tree in the new dialog system (DialogHud, routed by MerchantShopClient)
+-- are left alone here; this script only still drives the tutorial / quest NPCs.
+local DialogTrees   = require(ReplicatedStorage:WaitForChild("DialogSystem"):WaitForChild("DialogTreeLoader"))
 
 local MenuMouse     = require(ReplicatedStorage:WaitForChild("CursorUtils"))
 local Types         = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
@@ -1156,6 +1159,10 @@ local function setupNPC(model)
     end
     if wiredNpcIds[npcId] then
         return
+    end
+
+    if DialogTrees[npcType] then
+        return -- on the new dialog system
     end
 
     local reg = NPCRegistry.Get(npcType)

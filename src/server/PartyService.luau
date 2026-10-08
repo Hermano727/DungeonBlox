@@ -4,6 +4,11 @@
 
 	Boost rule: +5% loot (coins) per total party member (incl. self). Requires
 	at least 2 members. Capped at MAX_PARTY_SIZE (8). Zone overlap not required.
+
+	Companions (2026-10-04, tutorial only): AddCompanion puts an NPC ally in a player's party as
+	a virtual member (a negative member id, never a real UserId). It counts toward the party size
+	and the loot boost and shows in the Party tab. Refused unless the player's server-side tutorial
+	is active (ScriptedRigs.TutorialActive); companions are dropped when their owner leaves.
 ]]
 
 local HttpService = game:GetService("HttpService")
@@ -19,6 +24,8 @@ local PartyService = {}
 -- parties[partyId] = { id, leaderUserId, members = { [userId]=true } }
 local parties = {}
 local playerParty = {} -- [userId] = partyId
+local companions = {} -- [companionId (negative)] = { name, ownerUserId, partyId }
+local nextCompanionId = -1
 local pendingInvites = {} -- [toUserId] = { fromUserId, fromName, expiresAt }
 local lastAction = {}
 
@@ -165,10 +172,19 @@ local function buildMemberRows(party)
 	local rows = {}
 	for uid in pairs(party.members) do
 		local plr = Players:GetPlayerByUserId(uid)
+		local companion = companions[uid]
 		if plr then
 			table.insert(rows, {
 				userId = uid,
 				name = plr.DisplayName ~= "" and plr.DisplayName or plr.Name,
+			})
+		elseif companion then
+			-- An NPC ally: drawn with its owner's face (it's a copy of their character).
+			table.insert(rows, {
+				userId = uid,
+				name = companion.name,
+				companion = true,
+				headshotUserId = companion.ownerUserId,
 			})
 		end
 	end
@@ -235,6 +251,15 @@ local function removeFromParty(userId)
 	local partyId = playerParty[userId]
 	if not partyId then
 		return
+	end
+	-- A player's companions leave with them.
+	for cid, companion in pairs(companions) do
+		if companion.ownerUserId == userId then
+			companions[cid] = nil
+			local p = parties[companion.partyId]
+			if p then p.members[cid] = nil end
+			playerParty[cid] = nil
+		end
 	end
 	local party = parties[partyId]
 	if not party then
@@ -380,6 +405,38 @@ local function handleDecline(player, inviterUserId)
 	if invite and invite.fromUserId == inviterUserId then
 		clearInviteFor(player.UserId)
 	end
+	return true
+end
+
+-- Tutorial only (see header): an NPC ally joins `player`'s party (one is made if they have
+-- none). Returns its member id, or nil if refused.
+function PartyService.AddCompanion(player, name)
+	local ScriptedRigs = require(ServerScriptService:WaitForChild("ScriptedRigs"))
+	if not ScriptedRigs.TutorialActive(player) then return nil end
+	local partyId = getPlayerPartyId(player.UserId) or createParty(player.UserId)
+	local party = parties[partyId]
+	if memberCount(party) >= PartyConfig.MAX_PARTY_SIZE then return nil end
+	local cid = nextCompanionId
+	nextCompanionId -= 1
+	companions[cid] = { name = tostring(name or "Companion"), ownerUserId = player.UserId, partyId = partyId }
+	party.members[cid] = true
+	playerParty[cid] = partyId
+	broadcastState()
+	return cid
+end
+
+-- The companion leaves (and the party, if it was just the two of them, goes back to solo).
+function PartyService.RemoveCompanion(player, companionId)
+	local companion = companions[companionId]
+	if not companion or companion.ownerUserId ~= player.UserId then return false end
+	companions[companionId] = nil
+	local party = parties[companion.partyId]
+	if party then
+		party.members[companionId] = nil
+		if memberCount(party) <= 1 then disbandParty(companion.partyId) end
+	end
+	playerParty[companionId] = nil
+	broadcastState()
 	return true
 end
 

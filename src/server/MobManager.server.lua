@@ -21,6 +21,7 @@ local MountService = require(ServerScriptService:WaitForChild("MountService"))
 local PartyService = require(ServerScriptService:WaitForChild("PartyService"))
 local ZoneService = require(ServerScriptService:WaitForChild("ZoneService"))
 local NamedEliteSoundtracks = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Sounds"):WaitForChild("NamedEliteSoundtracks"))
+local ScriptedRigs = require(ServerScriptService:WaitForChild("ScriptedRigs"))
 
 local CombatRemote = ReplicatedStorage:WaitForChild("CombatRemote")
 local CombatXPEvent = ReplicatedStorage:WaitForChild("CombatXPEvent")
@@ -144,12 +145,8 @@ end
 -- ============================================
 
 local function getZoneEliteConfig(zoneName)
-    for _, zone in ipairs(ZoneService.GetAllZones()) do
-        if zone.name == zoneName then
-            return zone
-        end
-    end
-    return nil
+    -- Saved zones and transient ones (a tutorial instance's elite arena).
+    return ZoneService.FindZoneByName(zoneName)
 end
 
 local function getPlayerZoneStacks(userId)
@@ -211,8 +208,12 @@ function ProcessMobDeath(mob, killingBlowPlayer)
     -- Elite-zone progression: each player gets an increasing chance while
     -- killing mobs in their CURRENT elite zone. This keeps server logic and
     -- UI bar tracking keyed to the same zone name.
-    -- No progress and no rolls while a named elite is already up.
-    if killingBlowPlayer and mob.SpawnerRef and not namedEliteActive() then
+    -- No progress and no rolls while a named elite is already up. A player in the tutorial
+    -- (server-side flag, ScriptedRigs.TutorialActive) has their OWN elite in their private
+    -- instance: the world's one-elite slot doesn't block it, and it never takes that slot
+    -- (no server-wide boss bar, doesn't stop world elites).
+    local tutorialKill = killingBlowPlayer ~= nil and ScriptedRigs.TutorialActive(killingBlowPlayer)
+    if killingBlowPlayer and mob.SpawnerRef and (tutorialKill or not namedEliteActive()) then
         local activeEliteZoneName = killingBlowPlayer:GetAttribute("CurrentEliteZone")
         if type(activeEliteZoneName) ~= "string" or activeEliteZoneName == "" then
             activeEliteZoneName = zone
@@ -234,7 +235,10 @@ function ProcessMobDeath(mob, killingBlowPlayer)
                     -- Spawn immediately so players always see the rise animation
                     -- at the captured kill-time position, independent of range checks.
                     local spawnedElite = mob.SpawnerRef:SpawnMob()
-                    if spawnedElite then
+                    if spawnedElite and tutorialKill then
+                        spawnedElite._tutorialOwner = killingBlowPlayer.UserId
+                        setBossBar(killingBlowPlayer, spawnedElite) -- their bar only
+                    elseif spawnedElite then
                         trackNamedElite(killingBlowPlayer, spawnedElite)
                     end
                     zoneStacks[activeEliteZoneName] = 0
@@ -652,6 +656,15 @@ _G.MobSystem = {
     GetActiveSpawners = function() return ActiveSpawners end,
     GetZonePity = function() return ZonePity end,
     IsNamedEliteActive = namedEliteActive,
+    -- Tutorial only: set a player's named-elite pity in a zone (e.g. 99 of 100, so the next
+    -- kill brings the elite). Refused unless the player's server-side tutorial is active.
+    SetTutorialPity = function(player, zoneName, kills)
+        if not ScriptedRigs.TutorialActive(player) or type(zoneName) ~= "string" then return false end
+        local stacks = getPlayerZoneStacks(player.UserId)
+        stacks[zoneName] = math.clamp(math.floor(tonumber(kills) or 0), 0, NAMED_ELITE_PITY_KILLS - 1)
+        setPlayerElitePityAttributes(player, zoneName, stacks[zoneName])
+        return true
+    end,
     ApplyWeaponDamage = MobCombat.ApplyWeaponDamage,
     ApplyWeaponDamageInRadius = MobCombat.ApplyWeaponDamageInRadius,
 }

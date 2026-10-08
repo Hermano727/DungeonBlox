@@ -1,3 +1,4 @@
+local PotionAction = require(game:GetService("ReplicatedStorage"):WaitForChild("PotionAction"))
 --[[
     HearthstoneService  (server-only)
     Handles teleport, location swap, and Innkeeper purchase logic.
@@ -7,7 +8,9 @@
     combat (CombatStateService.IsInCombat) and off cooldown, then counts down
     HearthstoneConfig.CHANNEL_SECONDS[alignment] (Lawful 10 / Neutral 20 / Chaotic 30) before
     Teleport() fires. Any hit taken breaks it (CombatStateService.OnHit), as do death and
-    respawn; CancelChannel(player) for the player's own cancel. The client sees it through two
+    respawn, as does moving more than MOVE_TOLERANCE or entering combat in any way (checked every
+    Heartbeat); CancelChannel(player) for the player's own cancel. In the tutorial it's
+    HearthstoneConfig.TUTORIAL_CHANNEL_SECONDS (3). The client sees it through two
     player attributes: HearthChannelEnd (workspace:GetServerTimeNow() it completes at) and
     HearthChannelLength (seconds), cleared when it ends; an interruption is also flashed
     (GameEvents/CenterFlashNotify).
@@ -24,6 +27,11 @@ local CombatStateService  = require(ServerScriptService:WaitForChild("CombatStat
 local Players             = game:GetService("Players")
 
 local HearthstoneService = {}
+
+local RemoteUtils = require(ReplicatedStorage:WaitForChild("RemoteUtils"))
+local travelEvent = RemoteUtils.EnsureRemoteEvent(RemoteUtils.EnsureFolder(ReplicatedStorage, "GameEvents"), "TravelScreen")
+local TRAVEL_FADE = 0.6 -- the screen is up before the move
+local TRAVEL_SETTLE = 0.8 -- and stays a moment after, while the destination settles
 
 local function getProfile(player)
     local p = DungeonProfile.Get(player) or DungeonProfile.Load(player)
@@ -49,6 +57,38 @@ local function getProfile(player)
     return p
 end
 
+-- A town's hearth totem decides where its location puts you: any Workspace model with the
+-- attribute HearthLocation = <location id> (Oakhaven's OakHaven_HearthTotem = "oakhaven").
+-- You arrive just in front of it, facing out. Without one, the location's saved position.
+local ARRIVE_IN_FRONT = 6 -- studs out from the totem's face
+local totemCache = {} -- [locationId] = model
+
+local function findTotem(locationId)
+    local cached = totemCache[locationId]
+    if cached and cached:IsDescendantOf(workspace) and cached:GetAttribute("HearthLocation") == locationId then
+        return cached
+    end
+    totemCache[locationId] = nil
+    for _, inst in ipairs(workspace:GetDescendants()) do
+        if inst:IsA("Model") and inst:GetAttribute("HearthLocation") == locationId then
+            totemCache[locationId] = inst
+            return inst
+        end
+    end
+    return nil
+end
+
+local function arrivalCFrame(loc)
+    local totem = loc.id and findTotem(loc.id)
+    if totem then
+        local pivot = totem:GetPivot() -- the waystone's pivot sits at its base
+        local look = Vector3.new(pivot.LookVector.X, 0, pivot.LookVector.Z).Unit
+        local pos = pivot.Position + look * ARRIVE_IN_FRONT + Vector3.new(0, 3, 0)
+        return CFrame.lookAt(pos, pos + look)
+    end
+    return CFrame.new(loc.position + Vector3.new(0, 3, 0))
+end
+
 -- Returns the CFrame of `player`'s active hearthstone location (same lookup Teleport()
 -- uses, minus the cooldown/mutation), for callers that just need "where does this player's
 -- hearthstone point right now" -- e.g. the dungeon system's "Leave Dungeon" button. Falls
@@ -59,7 +99,7 @@ function HearthstoneService.GetHearthstoneLocation(player)
     local function oakhavenFallback()
         for _, seed in ipairs(HearthstoneConfig.SEED_LOCATIONS) do
             if seed.id == "oakhaven" then
-                return CFrame.new(seed.position + Vector3.new(0, 3, 0))
+                return arrivalCFrame(seed)
             end
         end
         -- Should be unreachable (oakhaven is always seeded), but never return nil.
@@ -77,13 +117,14 @@ function HearthstoneService.GetHearthstoneLocation(player)
         return oakhavenFallback()
     end
 
-    return CFrame.new(loc.position + Vector3.new(0, 3, 0))
+    return arrivalCFrame(loc)
 end
 
 -- Teleport player to their active hearthstone location (5-min cooldown).
 function HearthstoneService.Teleport(player)
     local profile = getProfile(player)
     if not profile then return false, "no_profile" end
+    if not HearthstoneService.IsUnlocked(profile) then return false, "locked" end
 
     local hs  = profile.hearthstone
     local now = os.time()
@@ -98,10 +139,25 @@ function HearthstoneService.Teleport(player)
     local hrp  = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return false, "no_character" end
 
-    hrp.CFrame = CFrame.new(loc.position + Vector3.new(0, 3, 0))
     hs.cooldownUntil = now + HearthstoneConfig.COOLDOWN
+    -- The travel screen (TravelScreenClient) covers the jump: shown first, the destination
+    -- streams in behind it, then the move, then it lifts.
+    travelEvent:FireClient(player, { phase = "show", name = loc.name or loc.id })
+    task.wait(TRAVEL_FADE)
+    local arrive = arrivalCFrame(loc)
+    pcall(function() player:RequestStreamAroundAsync(arrive.Position, 10) end)
+    if hrp.Parent then
+        hrp.CFrame = arrive
+    end
     DungeonProfile.PushProfile(player)
+    task.wait(TRAVEL_SETTLE)
+    travelEvent:FireClient(player, { phase = "hide" })
     return true, hs.cooldownUntil
+end
+
+-- Has this profile unlocked the Hearthstone? (the tutorial's totem; older saves have it)
+function HearthstoneService.IsUnlocked(profile)
+    return type(profile) == "table" and type(profile.flags) == "table" and profile.flags.hearthstoneUnlocked == true
 end
 
 -- ---------------------------------------------------------------------------
@@ -109,6 +165,8 @@ end
 -- ---------------------------------------------------------------------------
 
 local channels = {} -- [userId] = { thread, conns }
+local MOVE_TOLERANCE = 1.5 -- studs (horizontal) you can drift before moving cancels it
+local RunService = game:GetService("RunService")
 
 local function flash(player, text)
     local ge = ReplicatedStorage:FindFirstChild("GameEvents")
@@ -135,6 +193,8 @@ function HearthstoneService.CancelChannel(player, reason)
     if coroutine.running() ~= ch.thread then pcall(task.cancel, ch.thread) end
     if reason == "combat" then
         flash(player, "Hearthstone interrupted!")
+    elseif reason == "moved" then
+        flash(player, "You moved. Hearthstone cancelled.")
     end
     return true
 end
@@ -145,9 +205,11 @@ end
 
 -- Returns ok, seconds | false, reason ("in_combat", "cooldown", "already_channeling", ...).
 function HearthstoneService.StartChannel(player)
+	if PotionAction.IsLocked(player.Character) then return false, "drinking" end
     if channels[player.UserId] then return false, "already_channeling" end
     local profile = getProfile(player)
     if not profile then return false, "no_profile" end
+    if not HearthstoneService.IsUnlocked(profile) then return false, "locked" end
     local hs = profile.hearthstone
     local now = os.time()
     if now < (hs.cooldownUntil or 0) then
@@ -161,11 +223,31 @@ function HearthstoneService.StartChannel(player)
 
     local alignment = DungeonProfile.GetAlignment(player)
     local seconds = HearthstoneConfig.CHANNEL_SECONDS[alignment] or HearthstoneConfig.CHANNEL_SECONDS.Neutral
+    -- The tutorial's hearth out is short (from the server's own profile flag).
+    local tutorial = type(profile.flags) == "table" and profile.flags.tutorial
+    if type(tutorial) == "table" and tutorial.done ~= true then
+        seconds = HearthstoneConfig.TUTORIAL_CHANNEL_SECONDS
+    end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return false, "no_character" end
+    local startPos = root.Position
 
     local ch = { conns = {} }
     channels[player.UserId] = ch
     table.insert(ch.conns, humanoid.Died:Connect(function() HearthstoneService.CancelChannel(player, "died") end))
     table.insert(ch.conns, player.CharacterRemoving:Connect(function() HearthstoneService.CancelChannel(player, "died") end))
+    -- Moving or entering combat (dealing damage too, not only taking a hit) cancels it.
+    table.insert(ch.conns, RunService.Heartbeat:Connect(function()
+        if channels[player.UserId] ~= ch then return end
+        if CombatStateService.IsInCombat(player) then
+            HearthstoneService.CancelChannel(player, "combat")
+            return
+        end
+        local drift = root.Position - startPos
+        if Vector3.new(drift.X, 0, drift.Z).Magnitude > MOVE_TOLERANCE then
+            HearthstoneService.CancelChannel(player, "moved")
+        end
+    end))
     player:SetAttribute("HearthChannelLength", seconds)
     player:SetAttribute("HearthChannelEnd", workspace:GetServerTimeNow() + seconds)
 

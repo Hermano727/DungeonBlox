@@ -28,6 +28,7 @@ local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"
 local RarityBorder = require(script.Parent:WaitForChild("RarityBorder"))
 local LegendaryGlow = require(script.Parent:WaitForChild("LegendaryGlow"))
 local EnchantBadge = require(script.Parent:WaitForChild("EnchantBadge"))
+local DurabilityBar = require(script.Parent:WaitForChild("DurabilityBar"))
 local CharacterViewport = require(script.Parent:WaitForChild("CharacterViewport"))
 local Style = require(script.Parent:WaitForChild("Journal"):WaitForChild("Style"))
 local e = React.createElement
@@ -114,6 +115,7 @@ local function Socket(props: SocketProps)
 	local inner: { [string]: any } = {}
 	if item then
 		local icon = ItemDefinitions.GetIconForItem(item)
+		local broken = DurabilityBar.IsBroken(item)
 		if type(icon) == "string" and icon ~= "" then
 			inner.Icon = e("ImageLabel", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
@@ -121,6 +123,8 @@ local function Socket(props: SocketProps)
 				Size = UDim2.fromScale(1, 1),
 				BackgroundTransparency = 1,
 				Image = icon,
+				ImageColor3 = broken and DurabilityBar.BROKEN_ICON_TINT or Color3.new(1, 1, 1),
+				ImageTransparency = broken and DurabilityBar.BROKEN_ICON_ALPHA or 0,
 				ScaleType = Enum.ScaleType.Fit,
 				ZIndex = 4,
 			})
@@ -129,6 +133,8 @@ local function Socket(props: SocketProps)
 			inner.Glow = e(LegendaryGlow, { zIndex = 2 })
 		end
 		inner.EnchantBadge = EnchantBadge.ForItem(item)
+		-- Inside the round socket: a little narrower and lifted so it clears the carved ring.
+		inner.Durability = DurabilityBar.ForItem(item, { width = 0.7, bottom = 1.02 })
 	end
 
 	return e("Frame", {

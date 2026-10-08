@@ -31,6 +31,7 @@ local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
+local NPCRegistry = require(ReplicatedStorage:WaitForChild("NPCRegistry"))
 
 local NPCBootstrapKit = {}
 
@@ -52,7 +53,16 @@ NPCBootstrapKit.DefaultColors = {
 --- npcType: string identifying the NPC archetype ("Merchant", "Blacksmith", etc.) -- passed
 --- straight to UIFonts.GetNPCFont so a future per-archetype override (UIFonts.NPCOverrides)
 --- takes effect without this function changing. nil falls back to UIFonts.NPCDefault.
+--- A type with an NPCRegistry Nametag entry gets the client-drawn tag (src/client/NpcNametags)
+--- instead: no Head.gui is built, and one saved on the model in Studio is removed.
 function NPCBootstrapKit.EnsureHeadGui(head, displayName, colors, npcType)
+	if NPCRegistry.GetNametag(npcType) then
+		local old = head:FindFirstChild("gui")
+		if old and old:IsA("BillboardGui") then
+			old:Destroy()
+		end
+		return
+	end
 	if head:FindFirstChild("gui") then
 		return
 	end

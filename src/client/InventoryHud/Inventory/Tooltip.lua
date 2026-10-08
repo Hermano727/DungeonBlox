@@ -61,6 +61,22 @@ local function baseStatLines(subStats): { string }
 	return lines
 end
 
+-- Wear and protection, shown under the rarity: "Durability 1320 / 1500" (or BROKEN), and
+-- "Protected" while a protection scroll is on it.
+local function wearLines(item): { string }
+	local out = {}
+	local maxDur = tonumber(item.maxDurability)
+	if item.broken == true then
+		table.insert(out, "BROKEN, repair at a Blacksmith")
+	elseif maxDur and maxDur > 0 then
+		table.insert(out, string.format("Durability %d / %d", math.floor(tonumber(item.durability) or maxDur), math.floor(maxDur)))
+	end
+	if item.scrollProtected == true then
+		table.insert(out, "Protected from breaking")
+	end
+	return out
+end
+
 local function substatLines(subStats): { string }
 	local entries = {}
 	if type(subStats) == "table" then
@@ -138,6 +154,7 @@ local function renderTooltip(props: { item: any, position: Vector2 })
 
 	local baseLines = baseStatLines(item.subStats)
 	local subLines = substatLines(item.subStats)
+	local wear = wearLines(item)
 
 	local order = 0
 	local children: { [string]: any } = {
@@ -168,6 +185,11 @@ local function renderTooltip(props: { item: any, position: Vector2 })
 			TextColor3 = rarityColor,
 			TextXAlignment = Enum.TextXAlignment.Left,
 		})
+	end
+
+	for _, line in ipairs(wear) do
+		order = order + 1
+		children["Wear" .. order] = StatLine(line, order)
 	end
 
 	if #baseLines > 0 then
@@ -235,6 +257,9 @@ local function estimateSize(item: any): Vector2
 	if hasRarity then
 		table.insert(lineHeights, RARITY_H)
 	end
+	for _ = 1, #wearLines(item) do
+		table.insert(lineHeights, STAT_LINE_H)
+	end
 	if #baseLines > 0 then
 		table.insert(lineHeights, SPACER_H)
 		table.insert(lineHeights, HEADER_H)
@@ -262,4 +287,7 @@ end
 return {
 	Component = renderTooltip,
 	EstimateSize = estimateSize,
+	-- The stat text, for other screens that describe an item (the Auction House).
+	BaseStatLines = baseStatLines,
+	SubstatLines = substatLines,
 }

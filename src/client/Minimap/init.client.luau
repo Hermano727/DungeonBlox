@@ -17,6 +17,10 @@
 
 	Each map chunk (MinimapConfig.CHUNK cells) is one EditableImage shared by both views; its
 	colours are asked from the server once (MinimapChunkRequest) and cached.
+
+	NPC markers: every NPC with an NPCRegistry Nametag shows as its nametag crest + role icon
+	(RS/NpcMapMarkers, published by SSS/NpcLocations) on uncovered ground. The corner map never
+	names them; the expanded map shows the role name once zoomed to MinimapConfig.NpcNameScale.
 ]]
 
 local AssetService = game:GetService("AssetService")
@@ -31,6 +35,7 @@ local MenuMouse = require(ReplicatedStorage:WaitForChild("CursorUtils"))
 local QuickNav = require(ReplicatedStorage:WaitForChild("HudQuickNav"))
 local InteractionLock = require(ReplicatedStorage:WaitForChild("InteractionLock"))
 local WorldMapRequest = require(ReplicatedStorage:WaitForChild("WorldMapRequest"))
+local NpcMapMarkers = require(ReplicatedStorage:WaitForChild("NpcMapMarkers"))
 local LOCK_OWNER = "WorldMap"
 local MapView = require(script:WaitForChild("MapView"))
 local DiscoveryPeek = require(script:WaitForChild("DiscoveryPeek"))
@@ -200,31 +205,34 @@ mini.BorderSizePixel = 0
 mini.Visible = false
 mini.Parent = gui
 stroke(mini, EDGE, 2)
-local miniView = MapView.new(mini, { scale = Config.MiniScale, labelScale = 5, labelMin = 10, labelMax = 14 })
+local miniView = MapView.new(mini, {
+	scale = Config.MiniScale, labelScale = 5, labelMin = 13, labelMax = 18,
+	npcMarkerPx = Config.NpcMarkerMiniPx, -- no npcNameScale: never named on the corner map
+})
 
 -- "[M] Map", inside the map's bottom-right corner on a soft dark pill so it reads over any
 -- ground colour.
 local miniHint = Instance.new("TextLabel")
 miniHint.Name = "Hint"
 miniHint.AnchorPoint = Vector2.new(1, 1)
-miniHint.Position = UDim2.new(1, -5, 1, -5)
-miniHint.Size = UDim2.fromOffset(0, 18)
+miniHint.Position = UDim2.new(1, -6, 1, -6)
+miniHint.Size = UDim2.fromOffset(0, 23)
 miniHint.AutomaticSize = Enum.AutomaticSize.X
 miniHint.BackgroundColor3 = Color3.new(0, 0, 0)
 miniHint.BackgroundTransparency = .45
 miniHint.BorderSizePixel = 0
 miniHint.Font = Enum.Font.GothamBold
-miniHint.TextSize = 12
+miniHint.TextSize = 16
 miniHint.TextColor3 = Color3.fromRGB(245, 243, 238)
 miniHint.TextStrokeTransparency = .55
 miniHint.Text = "[" .. Keys.ToggleMap.Name .. "] Map"
-miniHint.ZIndex = 5
+miniHint.ZIndex = 12 -- over the NPC markers (5..8) and arrows (9, 10) in either ZIndex mode
 miniHint.Parent = mini
 local hintCorner = Instance.new("UICorner")
-hintCorner.CornerRadius = UDim.new(0, 4)
+hintCorner.CornerRadius = UDim.new(0, 5)
 hintCorner.Parent = miniHint
 local hintPadding = Instance.new("UIPadding")
-hintPadding.PaddingLeft, hintPadding.PaddingRight = UDim.new(0, 6), UDim.new(0, 6)
+hintPadding.PaddingLeft, hintPadding.PaddingRight = UDim.new(0, 8), UDim.new(0, 8)
 hintPadding.Parent = miniHint
 
 -- The quick-nav buttons (settings, ...) hang under the minimap's bottom-left corner.
@@ -242,7 +250,11 @@ big.Visible = false
 big.Active = true
 big.Parent = gui
 stroke(big, EDGE, 3)
-local bigView = MapView.new(big, { scale = 2, labelScale = 7, labelMin = 12, labelMax = 40 })
+local bigView = MapView.new(big, {
+	scale = 2, labelScale = 7, labelMin = 12, labelMax = 40,
+	npcMarkerPerCell = Config.NpcMarkerPerCell, npcMarkerMin = Config.NpcMarkerBigMin,
+	npcMarkerMax = Config.NpcMarkerBigMax, npcNameScale = Config.NpcNameScale,
+})
 bigView.clip.Active = true
 
 local hints = Instance.new("Frame")
@@ -633,6 +645,39 @@ UserInputService.InputEnded:Connect(function(input)
 end)
 
 -------------------------------------------------------------------------------------------------
+-- NPC markers (RS/NpcMapMarkers): drawn only where the map is uncovered, so an unexplored
+-- town keeps its NPCs to itself. Re-checked on every reveal tick; the views are only touched
+-- when the visible set changes.
+
+local function cellShown(cx, cz)
+	local c = chunks[Config.ChunkKey(Config.ChunkOfCell(cx, cz))]
+	if not c then return false end
+	local index = Config.BitIndex(cx, cz)
+	return Config.GetBit(c.bits, index) or (c.defaultMask ~= nil and Config.GetBit(c.defaultMask, index))
+end
+
+local npcMarkerKey
+local function refreshNpcMarkers()
+	if not bounds then return end
+	local list, keys = {}, {}
+	for _, entry in ipairs(NpcMapMarkers.List()) do
+		local x, z = entry.position.X / CELL, entry.position.Z / CELL
+		local cx, cz = math.floor(x), math.floor(z)
+		if Config.CellInBounds(bounds, cx, cz) and cellShown(cx, cz) then
+			table.insert(list, { id = entry.id, x = x, z = z, name = entry.name, icon = entry.icon, npcType = entry.npcType })
+			table.insert(keys, ("%s@%d,%d"):format(entry.id, cx, cz))
+		end
+	end
+	table.sort(keys)
+	local key = table.concat(keys, "|")
+	if key == npcMarkerKey then return end
+	npcMarkerKey = key
+	miniView:SetNpcMarkers(list)
+	bigView:SetNpcMarkers(list)
+end
+NpcMapMarkers.Changed:Connect(refreshNpcMarkers)
+
+-------------------------------------------------------------------------------------------------
 -- Frame loop
 
 -- Other players near you (Config.OtherPlayerRadius), in map cells. Just positions and facing:
@@ -670,6 +715,7 @@ RunService.RenderStepped:Connect(function()
 	if inWorld and now >= nextReveal then
 		nextReveal = now + Config.CLIENT_TICK
 		revealAround(root.Position)
+		refreshNpcMarkers()
 	end
 
 	for _ = 1, RENDERS_PER_FRAME do

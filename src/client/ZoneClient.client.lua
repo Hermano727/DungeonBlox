@@ -123,99 +123,229 @@ ZoneEntryFlash.OnClientEvent:Connect(function(payload)
 end)
 
 ----------------------------------------------------------------------
--- Zone entry banner (centered, informational — all players, all zones)
+-- Zone entry banner (centred, all players, all zones). Rebuilt 2026-10-02 after a
+-- "mission title" reference: a long gold line across the screen with the region name under it.
+--
+--                    (gold tree glowing behind)
+--                        Region Discovered            small, gold, above the line
+--   *---------------------------<>---------------------------*   opens outward, sparkles ride its ends
+--                           OAKHAVEN                   the biggest thing on screen
+--                            Lawful                    under the name, in the alignment's colour
+--
+-- First visits (SSS/MinimapService `discovered`) get the full banner with the tree; every later
+-- crossing gets a smaller one (shorter line, smaller name, no tree or header). Every size is a
+-- share of the screen, so it looks the same at any resolution; text is TextScaled.
 ----------------------------------------------------------------------
+
+local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
+local HudArt = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Images"):WaitForChild("HudArt"))
+
+local GOLD = Color3.fromRGB(240, 206, 128)
+local GOLD_BRIGHT = Color3.fromRGB(255, 240, 196)
+local NAME_COLOR = Color3.fromRGB(250, 246, 236)
+local INK = Color3.fromRGB(16, 10, 6)
+
+local LAYOUTS = {
+	discovered = {
+		lineY = 0.40, lineW = 0.8, hold = 4.2, tree = true, header = true,
+		nameH = 0.17, nameW = 0.72, alignH = 0.036,
+	},
+	entry = {
+		lineY = 0.3, lineW = 0.42, hold = 2.6, tree = false, header = false,
+		nameH = 0.075, nameW = 0.45, alignH = 0.026,
+	},
+}
 
 local entrySg = Instance.new("ScreenGui")
 entrySg.Name           = "ZoneEntryBannerGui"
 entrySg.ResetOnSpawn   = false
 entrySg.IgnoreGuiInset = true
 entrySg.DisplayOrder   = 215
+entrySg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 entrySg.Enabled        = true
 entrySg.Parent         = playerGui
 
 local entryPanel = Instance.new("Frame")
 entryPanel.Name                   = "EntryBanner"
-entryPanel.AnchorPoint            = Vector2.new(0.5, 0.5)
-entryPanel.Position               = UDim2.new(0.5, 0, 0.4, 0)
-entryPanel.Size                   = UDim2.fromOffset(480, 72)
+entryPanel.Size                   = UDim2.fromScale(1, 1)
 entryPanel.BackgroundTransparency = 1
-entryPanel.BorderSizePixel        = 0
 entryPanel.Visible                = false
 entryPanel.Parent                 = entrySg
 
-local entryZoneName = Instance.new("TextLabel")
-entryZoneName.Name                   = "ZoneName"
-entryZoneName.BackgroundTransparency = 1
-entryZoneName.Position               = UDim2.fromOffset(0, 0)
-entryZoneName.Size                   = UDim2.new(1, 0, 0, 40)
-entryZoneName.Font                   = Enum.Font.GothamBold
-entryZoneName.TextSize               = 30
-entryZoneName.TextColor3             = Color3.fromRGB(240, 235, 225)
-entryZoneName.TextStrokeTransparency = 0.4
-entryZoneName.TextTransparency       = 1
-entryZoneName.Text                   = ""
-entryZoneName.TextXAlignment         = Enum.TextXAlignment.Center
-entryZoneName.Parent                 = entryPanel
+local function new(className, props)
+	local item = Instance.new(className)
+	for key, value in pairs(props) do item[key] = value end
+	return item
+end
 
-local entryAlignLabel = Instance.new("TextLabel")
-entryAlignLabel.Name                   = "AlignLabel"
-entryAlignLabel.BackgroundTransparency = 1
-entryAlignLabel.Position               = UDim2.fromOffset(0, 40)
-entryAlignLabel.Size                   = UDim2.new(1, 0, 0, 22)
-entryAlignLabel.Font                   = Enum.Font.GothamMedium
-entryAlignLabel.TextSize               = 15
-entryAlignLabel.TextColor3             = Color3.fromRGB(200, 190, 170)
-entryAlignLabel.TextStrokeTransparency = 0.5
-entryAlignLabel.TextTransparency       = 1
-entryAlignLabel.Text                   = ""
-entryAlignLabel.TextXAlignment         = Enum.TextXAlignment.Center
-entryAlignLabel.Parent                 = entryPanel
+-- The tree, standing on the line, tinted gold, with a soft halo behind it.
+local treeHolder = new("Frame", {
+	Name = "Tree", AnchorPoint = Vector2.new(0.5, 1), BackgroundTransparency = 1, ZIndex = 0, Parent = entryPanel,
+})
+new("UIAspectRatioConstraint", { AspectRatio = HudArt.ZONE_TREE_ASPECT or 1.5, DominantAxis = Enum.DominantAxis.Height, Parent = treeHolder })
+local treeScale = new("UIScale", { Parent = treeHolder })
+local halo = new("ImageLabel", {
+	Name = "Halo", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.55), Size = UDim2.fromScale(1.9, 2.1),
+	BackgroundTransparency = 1, Image = HudArt.GLOW_SOFT, ImageColor3 = GOLD, ImageTransparency = 1, ZIndex = 0,
+	Parent = treeHolder,
+})
+local tree = new("ImageLabel", {
+	Name = "Silhouette", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+	Image = HudArt.ZONE_TREE or "", ImageColor3 = GOLD, ImageTransparency = 1, ZIndex = 1, Parent = treeHolder,
+})
 
--- First entry into a zone (the world map, SSS/MinimapService): a header line above the name.
-local entryHeader = Instance.new("TextLabel")
-entryHeader.Name                   = "DiscoveredHeader"
-entryHeader.BackgroundTransparency = 1
-entryHeader.Position               = UDim2.fromOffset(0, -26)
-entryHeader.Size                   = UDim2.new(1, 0, 0, 22)
-entryHeader.Font                   = Enum.Font.GothamBold
-entryHeader.TextSize               = 16
-entryHeader.TextColor3             = Color3.fromRGB(226, 206, 150)
-entryHeader.TextStrokeTransparency = 0.5
-entryHeader.TextTransparency       = 1
-entryHeader.Text                   = "REGION DISCOVERED"
-entryHeader.TextXAlignment         = Enum.TextXAlignment.Center
-entryHeader.Parent                 = entryPanel
+local function textRow(name, font, color, maxSize, gradient)
+	local label = new("TextLabel", {
+		Name = name, AnchorPoint = Vector2.new(0.5, 0), BackgroundTransparency = 1, FontFace = font,
+		TextScaled = true, TextColor3 = color, TextStrokeColor3 = INK, TextStrokeTransparency = 0.35,
+		TextTransparency = 1, ZIndex = 3, Parent = entryPanel,
+	})
+	new("UITextSizeConstraint", { MaxTextSize = maxSize, Parent = label })
+	if gradient then
+		-- A little brighter at the top, like the reference's gilded lettering.
+		new("UIGradient", { Rotation = 90, Color = ColorSequence.new(GOLD_BRIGHT, GOLD), Parent = label })
+	end
+	return label
+end
+local entryHeader     = textRow("DiscoveredHeader", UIFonts.SerifBold, Color3.new(1, 1, 1), 40, true)
+entryHeader.AnchorPoint = Vector2.new(0.5, 1)
+entryHeader.Text      = "Region Discovered"
+local entryZoneName   = textRow("ZoneName", UIFonts.SerifBold, NAME_COLOR, 240, false)
+local entryAlignLabel = textRow("AlignLabel", UIFonts.SerifBold, GOLD, 36, false)
+
+-- The line: a bright core and a soft glow, both fading toward the ends, opening from the centre.
+local line = new("Frame", {
+	Name = "Line", AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1, ZIndex = 2, Parent = entryPanel,
+})
+local fadeEnds = NumberSequence.new({
+	NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.18, 0.25),
+	NumberSequenceKeypoint.new(0.5, 0), NumberSequenceKeypoint.new(0.82, 0.25), NumberSequenceKeypoint.new(1, 1),
+})
+local lineGlow = new("Frame", {
+	Name = "Glow", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(1, 0, 0, 16),
+	BackgroundColor3 = GOLD, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 2, Parent = line,
+})
+new("UIGradient", { Transparency = fadeEnds, Parent = lineGlow })
+local lineCore = new("Frame", {
+	Name = "Core", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(1, 0, 0, 3),
+	BackgroundColor3 = GOLD_BRIGHT, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 3, Parent = line,
+})
+new("UIGradient", { Transparency = fadeEnds, Parent = lineCore })
+-- The centre: an outlined diamond flanked by two small solid ones.
+local ornaments = {}
+local function diamond(offsetX, size, filled)
+	local d = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, offsetX, 0.5, 0), Size = UDim2.fromOffset(size, size),
+		Rotation = 45, BackgroundColor3 = filled and GOLD_BRIGHT or INK, BackgroundTransparency = 1, BorderSizePixel = 0,
+		ZIndex = 4, Parent = line,
+	})
+	local stroke = new("UIStroke", { Color = GOLD_BRIGHT, Thickness = filled and 0 or 1.5, Transparency = 1, Parent = d })
+	table.insert(ornaments, { frame = d, stroke = stroke, fillTo = filled and 0 or 0.15 })
+end
+diamond(0, 13, false)
+diamond(-19, 6, true)
+diamond(19, 6, true)
+-- Sparkles riding the two ends while the line opens.
+local sparkles = {}
+for _, side in ipairs({ 0, 1 }) do
+	table.insert(sparkles, new("ImageLabel", {
+		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(side, 0.5), Size = UDim2.fromOffset(34, 34),
+		BackgroundTransparency = 1, Image = HudArt.GLOW_SOFT, ImageColor3 = GOLD_BRIGHT, ImageTransparency = 1,
+		ZIndex = 4, Parent = line,
+	}))
+end
 
 local entryToken = 0
+
+local function tween(item, seconds, goal, style, direction)
+	local t = TweenService:Create(item, TweenInfo.new(seconds, style or Enum.EasingStyle.Quad, direction or Enum.EasingDirection.Out), goal)
+	t:Play()
+	return t
+end
 
 local function showEntryBanner(zoneName, zoneAlignment, discovered)
 	entryToken = entryToken + 1
 	local myToken = entryToken
+	local L = discovered and LAYOUTS.discovered or LAYOUTS.entry
 
-	local accentColor = ZoneConfig.ALIGNMENT_COLORS[zoneAlignment] or Color3.fromRGB(200, 190, 170)
-	entryZoneName.Text      = tostring(zoneName or ""):upper()
-	-- Discovery shows the alignment on its own line ("WILDERNESS"); plain entry keeps "... ZONE".
-	entryAlignLabel.Text    = ZoneConfig.DisplayAlignment(zoneAlignment):upper() .. (discovered and "" or " ZONE")
-	entryAlignLabel.TextColor3 = accentColor
+	-- Lay out for this banner.
+	line.Position = UDim2.fromScale(0.5, L.lineY)
+	line.Size = UDim2.new(0, 0, 0, 12)
+	treeHolder.Visible = L.tree
+	treeHolder.Position = UDim2.fromScale(0.5, L.lineY + 0.012)
+	treeHolder.Size = UDim2.fromScale(1, 0.3) -- the aspect constraint sets the width
+	entryHeader.Visible = L.header
+	entryHeader.Size = UDim2.fromScale(0.5, 0.04)
+	entryZoneName.Size = UDim2.fromScale(L.nameW, L.nameH)
+	entryAlignLabel.Size = UDim2.fromScale(0.5, L.alignH)
+	local nameTop = L.lineY + 0.018
+	local alignTop = nameTop + L.nameH + 0.006
 
+	entryZoneName.Text = tostring(zoneName or "")
+	local accent = ZoneConfig.ALIGNMENT_COLORS[zoneAlignment] or GOLD
+	-- Discovery shows the alignment on its own ("Lawful"); plain entry keeps "Lawful zone".
+	local alignment = ZoneConfig.DisplayAlignment(zoneAlignment)
+	entryAlignLabel.Text = discovered and alignment or (alignment .. " zone")
+	entryAlignLabel.TextColor3 = accent
+
+	-- Reset to hidden, then play the entrance.
+	for _, label in ipairs({ entryHeader, entryZoneName, entryAlignLabel }) do label.TextTransparency = 1; label.TextStrokeTransparency = 1 end
+	tree.ImageTransparency, halo.ImageTransparency = 1, 1
+	lineCore.BackgroundTransparency, lineGlow.BackgroundTransparency = 1, 1
+	for _, o in ipairs(ornaments) do o.frame.BackgroundTransparency = 1; o.stroke.Transparency = 1 end
+	for _, s in ipairs(sparkles) do s.ImageTransparency = 1 end
+	entryHeader.Position = UDim2.fromScale(0.5, L.lineY - 0.004)
+	entryZoneName.Position = UDim2.fromScale(0.5, nameTop + 0.02)
+	entryAlignLabel.Position = UDim2.fromScale(0.5, alignTop + 0.02)
 	entryPanel.Visible = true
-	local inTween = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-	TweenService:Create(entryZoneName,   inTween, { TextTransparency = 0 }):Play()
-	TweenService:Create(entryAlignLabel, inTween, { TextTransparency = 0 }):Play()
-	entryHeader.TextTransparency = 1
-	if discovered then TweenService:Create(entryHeader, inTween, { TextTransparency = 0 }):Play() end
 
-	task.delay(discovered and 4 or 2.5, function()
+	-- The line opens outward from the centre; the sparkles ride its ends, then fade.
+	tween(line, 0.75, { Size = UDim2.new(L.lineW, 0, 0, 12) }, Enum.EasingStyle.Quart)
+	tween(lineCore, 0.3, { BackgroundTransparency = 0 })
+	tween(lineGlow, 0.3, { BackgroundTransparency = 0.55 })
+	for _, o in ipairs(ornaments) do
+		tween(o.frame, 0.3, { BackgroundTransparency = o.fillTo })
+		tween(o.stroke, 0.3, { Transparency = 0 })
+	end
+	for _, s in ipairs(sparkles) do
+		s.ImageTransparency = 0.1
+		task.delay(0.6, function()
+			if myToken == entryToken then tween(s, 0.5, { ImageTransparency = 1 }) end
+		end)
+	end
+	-- The tree rises in behind; the text slides up into place.
+	if L.tree then
+		treeScale.Scale = 0.94
+		tween(treeScale, 1.1, { Scale = 1 }, Enum.EasingStyle.Sine)
+		tween(tree, 1.1, { ImageTransparency = 0.38 }, Enum.EasingStyle.Sine)
+		tween(halo, 1.1, { ImageTransparency = 0.6 }, Enum.EasingStyle.Sine)
+	end
+	if L.header then
+		tween(entryHeader, 0.45, { TextTransparency = 0, TextStrokeTransparency = 0.45, Position = UDim2.fromScale(0.5, L.lineY - 0.012) })
+	end
+	task.delay(0.15, function()
 		if myToken ~= entryToken then return end
-		local outTween = TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-		TweenService:Create(entryZoneName,   outTween, { TextTransparency = 1 }):Play()
-		TweenService:Create(entryAlignLabel, outTween, { TextTransparency = 1 }):Play()
-		TweenService:Create(entryHeader,     outTween, { TextTransparency = 1 }):Play()
-		task.delay(0.45, function()
-			if myToken == entryToken then
-				entryPanel.Visible = false
-			end
+		tween(entryZoneName, 0.5, { TextTransparency = 0, TextStrokeTransparency = 0.35, Position = UDim2.fromScale(0.5, nameTop) }, Enum.EasingStyle.Quart)
+		tween(entryAlignLabel, 0.5, { TextTransparency = 0, TextStrokeTransparency = 0.15, Position = UDim2.fromScale(0.5, alignTop) }, Enum.EasingStyle.Quart)
+	end)
+
+	task.delay(L.hold, function()
+		if myToken ~= entryToken then return end
+		local out = 0.6
+		for _, label in ipairs({ entryHeader, entryZoneName, entryAlignLabel }) do
+			tween(label, out, { TextTransparency = 1, TextStrokeTransparency = 1 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		end
+		tween(tree, out, { ImageTransparency = 1 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		tween(halo, out, { ImageTransparency = 1 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		tween(lineCore, out, { BackgroundTransparency = 1 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		tween(lineGlow, out, { BackgroundTransparency = 1 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		tween(line, out, { Size = UDim2.new(L.lineW * 0.6, 0, 0, 12) }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		for _, o in ipairs(ornaments) do
+			tween(o.frame, out, { BackgroundTransparency = 1 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+			tween(o.stroke, out, { Transparency = 1 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		end
+		task.delay(out + 0.05, function()
+			if myToken == entryToken then entryPanel.Visible = false end
 		end)
 	end)
 end

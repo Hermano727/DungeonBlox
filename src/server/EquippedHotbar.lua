@@ -1,3 +1,4 @@
+local PotionAction = require(game:GetService("ReplicatedStorage"):WaitForChild("PotionAction"))
 --[[
 	Spawns Tool instances into Backpack for dungeon hotbar slots 1-9 and legacy equipped slots.
 	Uses ServerStorage.DungeonToolPrefabsArchive; prefab name from item.toolPrefabName or ItemDefinitions.ToolPrefabName.
@@ -9,6 +10,9 @@ local Types = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
 local ItemConfig = require(ReplicatedStorage:WaitForChild("ItemConfig"))
 local EnergyConfig = require(ReplicatedStorage:WaitForChild("EnergyConfig"))
+local PotionConfig = require(ReplicatedStorage:WaitForChild("PotionConfig"))
+local PotionDrinkConfig = require(ReplicatedStorage:WaitForChild("PotionDrinkConfig"))
+local PotionToolStorage = require(script.Parent:WaitForChild("PotionToolStorage"))
 local WeaponData = require(ReplicatedStorage:WaitForChild("WeaponData"))
 local ActiveEquipment = require(ReplicatedStorage:WaitForChild("ActiveEquipment"))
 local CharacterAnimProfiles = require(ReplicatedStorage:WaitForChild("CharacterAnimProfiles"))
@@ -132,6 +136,7 @@ local function ensureDefaultPotionTool(folder)
 		return
 	end
 	if folder:FindFirstChild("DefaultPotionTool") then
+		folder.DefaultPotionTool.Grip = PotionDrinkConfig.TOOL_GRIP
 		return
 	end
 
@@ -146,14 +151,44 @@ local function ensureDefaultPotionTool(folder)
 	tool.CanBeDropped = false
 	tool.RequiresHandle = true
 
-	local handle = Instance.new("Part")
-	handle.Name = "Handle"
-	handle.Size = Vector3.new(0.5, 0.7, 0.5)
-	handle.Color = Color3.fromRGB(150, 60, 180)
-	handle.Material = Enum.Material.Glass
-	handle.TopSurface = Enum.SurfaceType.Smooth
-	handle.BottomSurface = Enum.SurfaceType.Smooth
-	handle.Parent = tool
+	-- The vial (2026-10-02): ServerStorage.PotionModels.T1_MinorPotion, four MeshParts (Glass,
+	-- Liquid, Band, Cork; source assets/models/potions/T1_MinorPotion). Its Glass becomes the
+	-- Handle and the rest are welded to it. Without the model, a plain glass block stands in.
+	local vial = ServerStorage:FindFirstChild("PotionModels") and ServerStorage.PotionModels:FindFirstChild("T1_MinorPotion")
+	local handle
+	if vial and vial:FindFirstChild("Glass") then
+		handle = vial.Glass:Clone()
+		handle.Name = "Handle"
+		handle.Anchored = false
+		handle.CanCollide = false
+		handle.Massless = true
+		handle.Parent = tool
+		for _, part in ipairs(vial:GetChildren()) do
+			if part:IsA("BasePart") and part.Name ~= "Glass" then
+				local piece = part:Clone()
+				piece.Anchored = false
+				piece.CanCollide = false
+				piece.Massless = true
+				piece.CFrame = handle.CFrame * vial.Glass.CFrame:ToObjectSpace(part.CFrame)
+				piece.Parent = tool
+				local weld = Instance.new("WeldConstraint")
+				weld.Part0 = handle
+				weld.Part1 = piece
+				weld.Parent = piece
+			end
+		end
+		-- Upright in the fist, gripped around the middle of the tube. Tune live in Play.
+		tool.Grip = PotionDrinkConfig.TOOL_GRIP
+	else
+		handle = Instance.new("Part")
+		handle.Name = "Handle"
+		handle.Size = Vector3.new(0.5, 0.7, 0.5)
+		handle.Color = Color3.fromRGB(150, 60, 180)
+		handle.Material = Enum.Material.Glass
+		handle.TopSurface = Enum.SurfaceType.Smooth
+		handle.BottomSurface = Enum.SurfaceType.Smooth
+		handle.Parent = tool
+	end
 
 	local ls = tmpl:Clone()
 	ls.Name = "DrinkPotionClient"
@@ -409,6 +444,9 @@ function EquippedHotbar.syncFromProfile(player, profile)
 			return
 		end
 		local tool = prefab:Clone()
+		local potion = item and PotionConfig.Tiers[item.itemId]
+		local liquid = potion and tool:FindFirstChild("Liquid")
+		if liquid and liquid:IsA("BasePart") then liquid.Color = potion.drinkColor end
 		tool:SetAttribute("DungeonEquipped", true)
 		tool:SetAttribute("DungeonEquipSlot", metaSlot)
 		tool:SetAttribute("DungeonItemUuid", uuid)
@@ -464,6 +502,7 @@ function EquippedHotbar.syncFromProfile(player, profile)
 			end
 		end
 
+		if potion then PotionToolStorage.Bind(tool, player) end
 		tool.Parent = backpack
 		spawned[uuid] = true
 	end
@@ -485,6 +524,7 @@ end
 -- Select an already-owned, assigned item; this never changes inventory records.
 -- Explicit slot/empty selection is idempotent. Toggle semantics live in input.
 function EquippedHotbar.selectActiveSlot(player, profile, slot, character)
+	if PotionAction.IsLocked(character) then return false, "drinking" end
 	if not character or character ~= player.Character or not character.Parent then
 		return false, "character_changed"
 	end
@@ -518,8 +558,9 @@ function EquippedHotbar.selectActiveSlot(player, profile, slot, character)
 	end
 	if not tool then return false, "tool_missing" end
 	if ActiveEquipment.GetTool(character) == tool then return true end
+	-- Swords, pickaxes, spears (Hand_R) and bows (Hand_L): the physical tool is secured here, every client draws it on the bone.
 	local boneSword = character:FindFirstChild("Hero_Character") ~= nil
-		and CharacterAnimProfiles.GetProfileForTool(tool) == "Sword"
+		and CharacterAnimProfiles.GetAttachForTool(tool) ~= nil
 	local handle = tool:FindFirstChild("Handle")
 	if (boneSword or tool.RequiresHandle) and (not handle or not handle:IsA("BasePart")) then
 		return false, "handle_missing"

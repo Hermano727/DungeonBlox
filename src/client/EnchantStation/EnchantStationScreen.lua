@@ -114,10 +114,11 @@ local function isGearEligible(item)
 	return type(item) == "table" and (item.type == "Weapon" or item.type == "Armor")
 end
 
--- The second slot: enchant scrolls and crafting orbs.
+-- The second slot: enchant scrolls, protection scrolls and crafting orbs.
 local function isScrollEligible(item)
 	return type(item) == "table"
-		and (ItemDefinitions.IsEnchantScroll(item.itemId) or ItemDefinitions.IsCraftingOrb(item.itemId))
+		and (ItemDefinitions.IsEnchantScroll(item.itemId) or ItemDefinitions.IsProtectionScroll(item.itemId)
+			or ItemDefinitions.IsCraftingOrb(item.itemId))
 end
 
 -- The single routing rule for "which station slot does this item belong in". Click-to-place
@@ -409,6 +410,9 @@ local function EnchantStationScreen(props: { onClose: () -> (), resetKey: number
 	local atMax = gearItem ~= nil and successChance == nil
 
 	local isOrb = scrollItem ~= nil and ItemDefinitions.IsCraftingOrb(scrollItem.itemId)
+	-- Protection scrolls always apply: they stop the NEXT failed enchant (up to
+	-- EnchantScrollApply.PROTECTION_MAX_LEVEL) from breaking the item.
+	local isProtect = scrollItem ~= nil and ItemDefinitions.IsProtectionScroll(scrollItem.itemId)
 	local orbKind = isOrb and ItemDefinitions.GetOrbKind(scrollItem.itemId) or nil
 	local orbDef = isOrb and ItemDefinitions.Get(scrollItem.itemId) or nil
 	local gearLevel = gearItem and math.floor(tonumber(gearItem.level) or 1) or 1
@@ -418,7 +422,23 @@ local function EnchantStationScreen(props: { onClose: () -> (), resetKey: number
 	end
 
 	local mismatchReason = nil :: string?
-	if gearItem and scrollItem and isOrb then
+	if gearItem and gearItem.broken == true then
+		mismatchReason = "Broken: repair it at a Blacksmith first"
+	elseif gearItem and scrollItem and isProtect then
+		local protectDef = ItemDefinitions.Get(scrollItem.itemId)
+		local target = ItemDefinitions.GetScrollTarget(scrollItem.itemId)
+		if target == "Weapon" and gearItem.type ~= "Weapon" then
+			mismatchReason = "Scroll only works on weapons"
+		elseif target == "Armor" and gearItem.type ~= "Armor" then
+			mismatchReason = "Scroll only works on armor"
+		elseif not protectDef or math.floor(tonumber(protectDef.Tier) or 1) ~= math.floor(tonumber(gearItem.tier) or 1) then
+			mismatchReason = "Scroll tier doesn't match gear tier"
+		elseif gearItem.scrollProtected == true then
+			mismatchReason = "Already protected"
+		elseif currentEnchant >= EnchantScrollApply.PROTECTION_MAX_LEVEL then
+			mismatchReason = "Protection only covers up to +" .. EnchantScrollApply.PROTECTION_MAX_LEVEL
+		end
+	elseif gearItem and scrollItem and isOrb then
 		if not orbDef or math.floor(tonumber(orbDef.Tier) or 1) ~= math.floor(tonumber(gearItem.tier) or 1) then
 			mismatchReason = "Orb tier doesn't match gear tier"
 		elseif not CraftingOrbApply.IsImplemented(orbKind) then
@@ -443,7 +463,14 @@ local function EnchantStationScreen(props: { onClose: () -> (), resetKey: number
 	end
 
 	local previewSubs, previewItem, previewBadge
-	if isOrb then
+	if isProtect then
+		if gearItem then
+			previewItem = shallowCopy(gearItem)
+			previewItem.scrollProtected = true
+			previewItem.count = 1
+			previewBadge = "Safe"
+		end
+	elseif isOrb then
 		-- Orbs: Wisdom shows the exact next level; Alteration's reroll is random ("?").
 		if gearItem and orbKind == "Wisdom" and wisdomSubs then
 			previewSubs = wisdomSubs
@@ -469,23 +496,27 @@ local function EnchantStationScreen(props: { onClose: () -> (), resetKey: number
 	end
 
 	local canEnchant = gearItem ~= nil and scrollItem ~= nil and mismatchReason == nil
-		and (isOrb or not atMax) and not busy
+		and (isOrb or isProtect or not atMax) and not busy
 
 	local function onEnchant()
 		if not canEnchant then
 			return
 		end
 		setBusy(true)
-		setStatus(isOrb and "Using orb..." or "Enchanting...")
+		setStatus(isOrb and "Using orb..." or isProtect and "Protecting..." or "Enchanting...")
 		local levelBefore = currentEnchant
 		local targetUuid = gearUuid
 		local ok, err = DungeonMenuNet.requestInventoryAct({
-			kind = isOrb and "ApplyCraftingOrb" or "ApplyEnchantScroll",
+			kind = isOrb and "ApplyCraftingOrb" or isProtect and "ApplyProtectionScroll" or "ApplyEnchantScroll",
 			scrollUuid = scrollUuid,
 			targetUuid = targetUuid,
 		})
 		setBusy(false)
-		if ok and isOrb then
+		if ok and isProtect then
+			setStatus("Protected")
+			SfxService.PlayEffect("EnchantSuccess")
+			EnchantEffects.PlaySuccess()
+		elseif ok and isOrb then
 			-- An orb always takes (the server refuses anything it can't apply before consuming).
 			setStatus(orbKind == "Alteration" and "Substats rerolled" or "Level increased")
 			SfxService.PlayEffect("EnchantSuccess")
@@ -495,7 +526,7 @@ local function EnchantStationScreen(props: { onClose: () -> (), resetKey: number
 			-- The server RPC only says "the attempt was legal", not whether the roll passed.
 			-- requestInventoryAct has already pulled a fresh snapshot by the time it returns,
 			-- so the outcome is readable off the item: success is exactly +1; anything else
-			-- (reset to +0, or unchanged when a Protection Scroll ate the failure) is a fail.
+			-- (a break: -3 levels and broken, or unchanged when a Protection Scroll covered it) is a fail.
 			local snap = DungeonMenuNet.getLastSnapshot()
 			local after = snap and snap.profile and snap.profile.inventory and snap.profile.inventory[targetUuid]
 			local levelAfter = after and math.floor(tonumber(after.enchantLevel) or 0) or levelBefore
@@ -503,6 +534,7 @@ local function EnchantStationScreen(props: { onClose: () -> (), resetKey: number
 				SfxService.PlayEffect("EnchantSuccess")
 				EnchantEffects.PlaySuccess()
 			else
+				setStatus((after and after.broken) and "It broke!" or "Failed, but the protection held")
 				SfxService.PlayEffect("EnchantFail")
 				EnchantEffects.PlayFail()
 			end
@@ -517,7 +549,10 @@ local function EnchantStationScreen(props: { onClose: () -> (), resetKey: number
 	local showOdds = gearItem ~= nil and scrollItem ~= nil and mismatchReason == nil
 	local successText = ""
 	local failureText = ""
-	if showOdds and isOrb then
+	if showOdds and isProtect then
+		successText = "Always works"
+		failureText = "next fail won't break it"
+	elseif showOdds and isOrb then
 		if orbKind == "Wisdom" then
 			successText = "Lv " .. tostring(gearLevel) .. " > " .. tostring(wisdomLevel)
 		elseif orbKind == "Alteration" then
@@ -530,7 +565,13 @@ local function EnchantStationScreen(props: { onClose: () -> (), resetKey: number
 			failureText = "+9 is the cap"
 		elseif successChance then
 			successText = string.format("%d%% success", math.floor(successChance * 100 + 0.5))
-			failureText = string.format("%d%% failure", math.floor((1 - successChance) * 100 + 0.5))
+			-- A failed +4 or higher BREAKS the item unless a protection scroll covers it.
+			local failPct = math.floor((1 - successChance) * 100 + 0.5)
+			if failPct > 0 then
+				local covered = gearItem.scrollProtected == true and currentEnchant + 1 <= EnchantScrollApply.PROTECTION_MAX_LEVEL
+				failureText = covered and string.format("%d%% fail (protected)", failPct)
+					or string.format("%d%% break", failPct)
+			end
 		end
 	end
 
@@ -837,7 +878,7 @@ local function EnchantStationScreen(props: { onClose: () -> (), resetKey: number
 				FontFace = UIFonts.BodyBold,
 				TextSize = 15,
 				TextColor3 = canEnchant and Color3.new(1, 1, 1) or Color3.fromRGB(120, 120, 120),
-				Text = isOrb and "Use Orb" or "Enchant",
+				Text = isOrb and "Use Orb" or isProtect and "Protect" or "Enchant",
 				AutoButtonColor = canEnchant,
 				[React.Event.Activated] = canEnchant and onEnchant or nil,
 			}, {

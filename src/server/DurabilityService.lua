@@ -1,7 +1,18 @@
 --[[
 	DurabilityService
 	Central authority for all item durability mutations.
-	Nothing else should write item.durability or item.broken directly.
+	Nothing else should write item.durability or item.broken directly (the one shared rule,
+	EnchantScrollApply.BreakItem, is what breaking does to the item itself; it lives in
+	ReplicatedStorage because a failed enchant breaks items too).
+
+	Rules (2026-10-04):
+	  - Every weapon and armor piece has durability / maxDurability (ItemConfig.MAX_DURABILITY_BY_TIER),
+	    given on grant and filled in on load for older saves (EnsureDurability).
+	  - Wear: -1 to the held weapon per confirmed hit, -1 to each equipped armor piece per hit taken.
+	  - Death: every EQUIPPED piece loses 30% of its MAX durability. Bag items and profession tools
+	    (Pickaxe, FishingSpear) lose nothing.
+	  - At 0 the item breaks: -3 enchant levels (min +0), comes off, can't be re-equipped until a
+	    Blacksmith repairs it (3x the normal cost while broken).
 ]]
 
 local Players             = game:GetService("Players")
@@ -9,8 +20,14 @@ local ReplicatedStorage   = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local ItemConfig = require(ReplicatedStorage:WaitForChild("ItemConfig"))
+local EnchantScrollApply = require(ReplicatedStorage:WaitForChild("EnchantScrollApply"))
 
-local TIER_MAX_DUR = { 1500, 1750, 2000, 2250, 2500 }
+local TIER_MAX_DUR = ItemConfig.MAX_DURABILITY_BY_TIER
+local DEATH_LOSS = 0.30 -- of max durability, per equipped piece
+-- Equip-panel slots that wear on death (armor + the two weapon slots; never profession tools).
+local DEATH_WEAR_SLOTS = table.clone(ItemConfig.ARMOR_SLOTS)
+table.insert(DEATH_WEAR_SLOTS, "Weapon")
+table.insert(DEATH_WEAR_SLOTS, "Bow")
 
 -- Canonical armor-slot list, shared with ItemConfig and LootService, instead
 -- of each durability path keeping its own hand-copied { "Helm", "Chest", ... }
@@ -66,33 +83,53 @@ function DurabilityService.getRepairCost(item)
 	return base
 end
 
--- Mark item broken: set flag, strip 3 enchant levels, unequip
-function DurabilityService.breakItem(profile, uuid)
+-- Gives a weapon / armor piece its durability if it has none (new grants, older saves).
+-- Returns true if it changed the item.
+function DurabilityService.EnsureDurability(item)
+	if type(item) ~= "table" or (item.type ~= "Weapon" and item.type ~= "Armor") then return false end
+	local changed = false
+	if type(item.maxDurability) ~= "number" or item.maxDurability <= 0 then
+		item.maxDurability = DurabilityService.maxDurForTier(item.tier)
+		changed = true
+	end
+	if type(item.durability) ~= "number" then
+		item.durability = item.broken and 0 or item.maxDurability
+		changed = true
+	end
+	return changed
+end
+
+-- The server side of a break that already happened to the item (EnchantScrollApply.BreakItem):
+-- take it off if it's worn (UnequipItem puts it in the bag and drops the held tool), recompute
+-- HP and tell the player. Safe to call for an item that isn't equipped.
+function DurabilityService.OnBroken(player, profile, uuid)
+	local item = profile and profile.inventory and profile.inventory[uuid]
+	if type(item) ~= "table" then return end
+	local slot
+	if type(profile.equipped) == "table" then
+		for s, u in pairs(profile.equipped) do
+			if u == uuid then slot = s; break end
+		end
+	end
+	if slot and player then
+		dp().UnequipItem(player, slot)
+	elseif slot then
+		profile.equipped[slot] = nil
+	end
+	pcall(stats().RecomputeRuntimeHp, profile)
+	if player then
+		pcall(function()
+			getBrokenEvent():FireClient(player, stripPlus(item.name or "Item"))
+		end)
+	end
+end
+
+-- Breaks an owned item outright (item rule + the server side above).
+function DurabilityService.breakItem(profile, uuid, player)
 	local item = profile.inventory and profile.inventory[uuid]
 	if type(item) ~= "table" then return end
-	item.durability = 0
-	item.broken     = true
-	-- Reduce plusRank by 3 (min 0) and rename
-	local newRank = math.max(0, (item.plusRank or 0) - 3)
-	item.plusRank = newRank
-	local baseName = stripPlus(item.name or "")
-	if baseName == "" then baseName = item.name or "Item" end
-	if newRank > 0 then
-		item.name = string.format("%s [+%d]", baseName, newRank)
-	else
-		item.name = baseName
-	end
-	-- Unequip if currently equipped
-	if type(profile.equipped) == "table" then
-		for slot, u in pairs(profile.equipped) do
-			if u == uuid then
-				profile.equipped[slot] = nil
-				break
-			end
-		end
-		local ok, _ = pcall(stats().RecomputeRuntimeHp, profile)
-		if not ok then end
-	end
+	EnchantScrollApply.BreakItem(item)
+	DurabilityService.OnBroken(player, profile, uuid)
 end
 
 -- Internal: reduce an item's durability by delta, break if reaching 0
@@ -102,10 +139,7 @@ local function reduceDurability(player, profile, uuid, delta)
 	if type(item.durability) ~= "number" then return end
 	item.durability = math.max(0, item.durability - delta)
 	if item.durability <= 0 and not item.broken then
-		DurabilityService.breakItem(profile, uuid)
-		pcall(function()
-			getBrokenEvent():FireClient(player, item.name or "Item")
-		end)
+		DurabilityService.breakItem(profile, uuid, player)
 		dp().PushProfile(player)
 	end
 end
@@ -134,53 +168,29 @@ function DurabilityService.armorHit(player)
 	end
 end
 
--- 30% durability loss on death: equipped weapons/armor + ALL profession tools
+-- Death: every equipped piece (armor, Weapon, Bow) loses 30% of its MAX durability; bag items
+-- and profession tools are untouched. Several deaths in the same gear break it.
+-- Returns the uuids that broke. They're left EQUIPPED here on purpose: the death drop runs next
+-- and drops bag items, so the caller takes them off (OnBroken) only after the drop.
 function DurabilityService.applyDeathPenalty(profile, player)
-	if not profile then return end
+	local broke = {}
+	if not profile then return broke end
 	local inv = profile.inventory
-	if type(inv) ~= "table" then return end
-
-	-- Collect UUIDs that take the penalty
-	local penaltySet = {}
-
-	-- Equipped armor
-	for _, slot in ipairs(ARMOR_SLOTS) do
-		local uuid = (profile.equipped or {})[slot]
-		if uuid then penaltySet[uuid] = true end
-	end
-
-	-- Weapon (hotbar[1] is the only "equipped weapon" location now)
-	if type(profile.hotbar) == "table" then
-		local wuuid = profile.hotbar[1]
-		if type(wuuid) == "string" and wuuid ~= "" then penaltySet[wuuid] = true end
-	end
-
-	-- ALL profession tools regardless of equipped state
-	for uuid, item in pairs(inv) do
-		if type(item) == "table" then
-			local slot = item.equipSlot
-			if slot == "Pickaxe" or slot == "FishingSpear" then
-				penaltySet[uuid] = true
-			end
-		end
-	end
-
-	-- Apply 30% reduction
-	for uuid in pairs(penaltySet) do
-		local item = inv[uuid]
-		if type(item) == "table" and type(item.durability) == "number" and not item.broken then
-			local loss = math.floor(item.durability * 0.30)
+	if type(inv) ~= "table" or type(profile.equipped) ~= "table" then return broke end
+	for _, slot in ipairs(DEATH_WEAR_SLOTS) do
+		local uuid = profile.equipped[slot]
+		local item = uuid and inv[uuid]
+		if type(item) == "table" and not item.broken then
+			DurabilityService.EnsureDurability(item)
+			local loss = math.ceil(item.maxDurability * DEATH_LOSS)
 			item.durability = math.max(0, item.durability - loss)
 			if item.durability <= 0 then
-				DurabilityService.breakItem(profile, uuid)
-				if player then
-					pcall(function()
-						getBrokenEvent():FireClient(player, item.name or "Item")
-					end)
-				end
+				EnchantScrollApply.BreakItem(item)
+				table.insert(broke, uuid)
 			end
 		end
 	end
+	return broke
 end
 
 -- Restore item to full durability and clear broken flag
@@ -191,6 +201,8 @@ function DurabilityService.repairItem(item)
 	item.durability = maxDur
 	item.broken     = nil
 end
+
+getBrokenEvent() -- exists from the start, so clients can listen before the first break
 
 Players.PlayerRemoving:Connect(function() end)  -- keep module alive
 

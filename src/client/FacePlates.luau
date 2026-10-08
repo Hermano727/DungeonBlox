@@ -10,8 +10,13 @@
 	body (a Decal covers the whole part's box) or welded to it (the head moves by bone, not by
 	part). Instead each client keeps a thin FacePlate (a shell cut from the head's front,
 	assets/models/main character/face/FacePlate.fbx, template in ReplicatedFirst) on every rig
-	and moves it to the Head bone's ANIMATED transform every frame -- the same approach
-	WeaponAttachClient uses for the sword in the hand. The plate part itself is invisible;
+	and keeps it on the Head bone's ANIMATED transform -- the same idea as WeaponAttachClient's
+	sword in the hand. In the world the plate (and hair) are WELDED to the body mesh, so physics
+	carries them in the same step as the body; each frame only the weld's C0 is updated with the
+	head's pose RELATIVE to the body. (They used to be anchored and moved to the head's world
+	position each frame: any shove the physics gave the body after that, like bumping into a
+	log, left the face and hair hanging beside the head for that frame.) Rigs inside a
+	ViewportFrame's WorldModel have no physics, so those are still moved directly. The plate part itself is invisible;
 	three Decals on its front draw the chosen features (AppearanceOptions Decal ids), picked by
 	the model's "Appearance_<Feature>" attributes (RS/AppearanceApply sets them; server-set ones
 	replicate). Your own face is hidden in first person (the camera sits inside the head).
@@ -46,6 +51,7 @@ local HELM_CHECK_EVERY = 0.4
 
 local folder
 local active = {} -- [model] = state
+local follow -- defined below (used by refreshHair and Attach)
 local loop
 
 local function template()
@@ -78,6 +84,25 @@ local function refreshDecals(state)
 	state.hidden = hidden
 end
 
+-- In the world: weld `part` to the body mesh at the head's current pose (C0 is updated every
+-- frame in step). In a WorldModel (no physics): anchor it; step moves it directly.
+-- Returns the Weld, or nil when anchored.
+follow = function(state, part, offset)
+	if not state.welded then
+		part.Anchored = true
+		return nil
+	end
+	part.Anchored = false
+	local weld = Instance.new("Weld")
+	weld.Name = "FollowHead"
+	weld.Part0 = state.body
+	weld.Part1 = part
+	weld.C0 = state.body.CFrame:Inverse() * state.bone.TransformedWorldCFrame * offset
+	weld.C1 = CFrame.identity
+	weld.Parent = part
+	return weld
+end
+
 local function hairOption(state)
 	local id = state.model:GetAttribute(AppearanceApply.ATTRIBUTE_PREFIX .. "Hair")
 	return AppearanceOptions.GetOption("Hair", id) or AppearanceOptions.GetOption("Hair", AppearanceOptions.GetCategory("Hair").Default)
@@ -95,10 +120,11 @@ local function refreshHair(state)
 		if source and source:IsA("BasePart") then
 			local hair = source:Clone()
 			hair.Name = "Hair_" .. state.model.Name
-			hair.Anchored, hair.CanCollide, hair.CanQuery, hair.CanTouch = true, false, false, false
+			hair.CanCollide, hair.CanQuery, hair.CanTouch = false, false, false
 			hair.Massless = true
 			state.hairOffset = state.bone.WorldCFrame:Inverse() * (state.body.CFrame * CFrame.new(option.Offset or Vector3.zero))
 			hair.CFrame = state.bone.TransformedWorldCFrame * state.hairOffset
+			state.hairWeld = follow(state, hair, state.hairOffset)
 			hair.Parent = state.container
 			state.hair = hair
 		end
@@ -120,17 +146,24 @@ local function step()
 			FacePlates.Detach(model)
 		else
 			local head = state.bone.TransformedWorldCFrame
-			local batch = byWorld[state.world]
-			if not batch then
-				batch = { parts = {}, cframes = {} }
-				byWorld[state.world] = batch
-			end
-			local parts, cframes = batch.parts, batch.cframes
-			table.insert(parts, state.plate)
-			table.insert(cframes, head * state.offset)
-			if state.hair then
-				table.insert(parts, state.hair)
-				table.insert(cframes, head * state.hairOffset)
+			if state.welded then
+				-- The head's pose relative to the body; the weld does the rest.
+				local headFromBody = state.body.CFrame:Inverse() * head
+				state.plateWeld.C0 = headFromBody * state.offset
+				if state.hairWeld then state.hairWeld.C0 = headFromBody * state.hairOffset end
+			else
+				local batch = byWorld[state.world]
+				if not batch then
+					batch = { parts = {}, cframes = {} }
+					byWorld[state.world] = batch
+				end
+				local parts, cframes = batch.parts, batch.cframes
+				table.insert(parts, state.plate)
+				table.insert(cframes, head * state.offset)
+				if state.hair then
+					table.insert(parts, state.hair)
+					table.insert(cframes, head * state.hairOffset)
+				end
 			end
 			local firstPerson = isLocalFirstPerson(model)
 			if now >= (state.nextHelmCheck or 0) then
@@ -164,7 +197,8 @@ function FacePlates.Attach(model, container: Instance?)
 	local world = parent:IsA("WorldRoot") and parent or parent:FindFirstAncestorWhichIsA("WorldRoot") or Workspace
 	local plate = source:Clone()
 	plate.Name = "FacePlate_" .. model.Name
-	plate.Anchored, plate.CanCollide, plate.CanQuery, plate.CanTouch = true, false, false, false
+	plate.CanCollide, plate.CanQuery, plate.CanTouch = false, false, false
+	plate.Massless = true
 	plate.CastShadow = false
 	plate.Transparency = 1 -- only the decals draw
 	for _, d in ipairs(plate:GetChildren()) do
@@ -190,12 +224,13 @@ function FacePlates.Attach(model, container: Instance?)
 	-- Rest-pose placement relative to the head bone (Bone.WorldCFrame is the un-animated pose).
 	local offset = bone.WorldCFrame:Inverse() * (body.CFrame * PLATE_FROM_BODY)
 	plate.CFrame = bone.TransformedWorldCFrame * offset
-	plate.Parent = parent
 
 	local state = {
 		model = model, body = body, plate = plate, bone = bone, offset = offset, decals = decals,
-		container = parent, world = world,
+		container = parent, world = world, welded = world == Workspace,
 	}
+	state.plateWeld = follow(state, plate, offset)
+	plate.Parent = parent
 	state.helmet = model:FindFirstChild(HELM_PART, true) ~= nil
 	state.attrConn = model.AttributeChanged:Connect(function(name)
 		if name:sub(1, #AppearanceApply.ATTRIBUTE_PREFIX) == AppearanceApply.ATTRIBUTE_PREFIX then

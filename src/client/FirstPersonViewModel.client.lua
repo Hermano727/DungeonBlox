@@ -26,6 +26,7 @@ local Movement = require(script.Parent:WaitForChild("MovementPresentation"))
 local GroundState = require(script.Parent:WaitForChild("CharacterGroundState"))
 local MotionMath = require(ReplicatedStorage:WaitForChild("MovementPresentationMath"))
 local MotionConfig = require(ReplicatedStorage:WaitForChild("MovementPresentationConfig"))
+local PotionDrinkConfig = require(ReplicatedStorage:WaitForChild("PotionDrinkConfig"))
 local landingConnection = nil
 
 local player = Players.LocalPlayer
@@ -226,6 +227,11 @@ local function setupFirstPersonCamera(character)
 				desiredForward = SPRINT_CAMERA_FORWARD
 			elseif locomotionState == "Walk" or locomotionState == "CrouchWalk" then
 				desiredForward = WALK_CAMERA_FORWARD
+			end
+			-- One replicated arm animation serves both views. Keep the eyes behind
+			-- those hands during the raise instead of walking the camera past them.
+			if (player:GetAttribute("PotionDrinkCameraUntil") or 0) > workspace:GetServerTimeNow() then
+				desiredForward = PotionDrinkConfig.DRINK_CAMERA_FORWARD
 			end
 			local blend = 1 - math.exp(-CAMERA_FORWARD_BLEND_SPEED * deltaTime)
 			movementCameraForward += (desiredForward - movementCameraForward) * blend

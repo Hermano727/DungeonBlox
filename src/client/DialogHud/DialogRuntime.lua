@@ -8,8 +8,9 @@
 -- No new remotes.
 --
 -- Entry point: DialogRuntime.startConversation(npcModel, npcId, npcType),
--- called by whatever resolves the NPC's ProximityPrompt (currently
--- MerchantShopClient's router, for Blacksmith).
+-- called by whatever resolves the NPC's ProximityPrompt (MerchantShopClient's
+-- router, for every service NPC with a tree; NPCRegistry `SkipDialog` sends an
+-- NPC straight to its menu instead).
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -19,6 +20,7 @@ local DialogConfig = require(ReplicatedStorage.DialogSystem.DialogConfig)
 local DialogTrees = require(ReplicatedStorage.DialogSystem.DialogTreeLoader)
 local DialogConditions = require(ReplicatedStorage.DialogSystem.DialogConditions)
 local DialogActionTypes = require(ReplicatedStorage.DialogSystem.DialogActions)
+local NPCRegistry = require(ReplicatedStorage:WaitForChild("NPCRegistry"))
 local CursorUtils = require(ReplicatedStorage:WaitForChild("CursorUtils"))
 local Keys = require(ReplicatedStorage:WaitForChild("KeybindConfig"))
 
@@ -56,11 +58,13 @@ local ClientActionHandlers = {
 			warn("[DialogRuntime] OpenMenu action missing `client` module name")
 			return
 		end
+		-- `method` names the opener when it isn't `open` (HearthstoneClient.openInnkeeperShop).
+		local method = (ctx.args and ctx.args.method) or "open"
 		local ok, mod = pcall(function()
 			return require(StarterPlayerScripts:WaitForChild(moduleName))
 		end)
-		if ok and type(mod) == "table" and type(mod.open) == "function" then
-			mod.open(ctx.npcId)
+		if ok and type(mod) == "table" and type(mod[method]) == "function" then
+			mod[method](ctx.npcId)
 		else
 			warn("[DialogRuntime] OpenMenu: could not open '" .. moduleName .. "': " .. tostring(mod))
 		end
@@ -92,6 +96,7 @@ type Session = {
 	npcModel: Instance,
 	npcId: string,
 	npcType: string,
+	npcName: string,
 	tree: any,
 	nodeId: string,
 	statusText: string?,
@@ -154,7 +159,7 @@ local function render()
 	end
 
 	root:render(React.createElement(Dialog, {
-		npcName = session.npcType,
+		npcName = session.npcName,
 		text = node.text,
 		image = node.image,
 		responses = visibleResponses,
@@ -251,10 +256,17 @@ function DialogRuntime.startConversation(npcModel: Instance, npcId: string, npcT
 		closeSession()
 	end
 
+	-- The name in the dialog: the model's NpcName, else the registry's DisplayName.
+	local reg = NPCRegistry.Get(npcType)
+	local modelName = npcModel:GetAttribute("NpcName")
+	local npcName = (type(modelName) == "string" and modelName ~= "") and modelName
+		or (reg and reg.DisplayName) or npcType
+
 	session = {
 		npcModel = npcModel,
 		npcId = npcId,
 		npcType = npcType,
+		npcName = npcName,
 		tree = tree,
 		nodeId = tree.start,
 		statusText = nil,

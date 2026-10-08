@@ -229,9 +229,17 @@ function HealthBarFX.new(config)
 		self.colorRamp = config.colorRamp or HealthBarFX.DefaultColorRamp
 	end
 
+	-- Optional look overrides (the player's own thin vitals bar passes both, see HudBarStyle).
+	self.chunkColor = config.chunkColor or CHUNK_COLOR
+	self.gradientFor = config.gradientFor or HealthBarFX.GradientForColor
+
 	self.shakeMaxOffset = config.shakeMaxOffset or SHAKE_MAX_OFFSET
 	self.punchScale = config.punchScale or PUNCH_SCALE
 	self.hitStyle = config.hitStyle or "jitter"
+	-- Degrees of tilt in the wobble. HUD bars with a drifting grain pass 0: Roblox stops
+	-- clipping (ClipsDescendants) inside any ROTATED frame, so a tilted bar lets its grain
+	-- strip (HudBarStyle) spill out across the screen.
+	self.wobbleDegrees = config.wobbleDegrees or WOBBLE_DEGREES
 	self.flashTime = config.flashTime or FLASH_TIME
 	self.flashStartTransparency = config.flashStartTransparency or 0.25
 	-- The wobble's own contribution currently applied to the bar -- tracked so
@@ -307,7 +315,7 @@ function HealthBarFX:_ensureChunk()
 	if self._chunk then return self._chunk end
 	local chunk = Instance.new("Frame")
 	chunk.Name = "DamageChunk"
-	chunk.BackgroundColor3 = CHUNK_COLOR
+	chunk.BackgroundColor3 = self.chunkColor
 	chunk.BorderSizePixel = 0
 	chunk.ZIndex = self.fill.ZIndex + 1
 	chunk.Visible = false
@@ -426,14 +434,17 @@ function HealthBarFX:_wobble(damagePct, startDelay)
 	damagePct = math.clamp(damagePct or 0, 0, 1)
 	local strength = WOBBLE_FLOOR + (1 - WOBBLE_FLOOR) * math.sqrt(damagePct)
 	local amplitude = WOBBLE_AMOUNT * strength
-	local degrees = WOBBLE_DEGREES * strength
+	local degrees = self.wobbleDegrees * strength
 	self._shakeToken += 1
 	local myToken = self._shakeToken
 	local bg = self.background
 
 	local function apply(offset, rotation)
 		bg.Position = (bg.Position - self._wobbleOffset) + offset
-		bg.Rotation = (bg.Rotation - self._wobbleRotation) + rotation
+		local r = (bg.Rotation - self._wobbleRotation) + rotation
+		-- Snap float residue back to exactly 0: even a 1e-15 tilt turns clipping off for good.
+		if math.abs(r) < 1e-4 then r = 0 end
+		bg.Rotation = r
 		self._wobbleOffset, self._wobbleRotation = offset, rotation
 	end
 
@@ -605,7 +616,7 @@ function HealthBarFX:_applyRampColor(ratio)
 	if not (self.colorRamp and self.gradient) then return end
 	local color = self.colorRamp(ratio)
 	self.fill.BackgroundColor3 = color
-	self.gradient.Color = HealthBarFX.GradientForColor(color)
+	self.gradient.Color = self.gradientFor(color)
 end
 
 function HealthBarFX:_setFillInstant(ratio)

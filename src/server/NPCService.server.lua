@@ -21,6 +21,7 @@ local InventoryService = require(ServerScriptService:WaitForChild("InventoryServ
 local PlayerData       = require(ServerScriptService:WaitForChild("PlayerDataManager"))
 local ItemDefinitions  = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
 local QuestProgress    = require(ServerScriptService:WaitForChild("QuestProgressService"))
+local ScriptedRigs     = require(ServerScriptService:WaitForChild("ScriptedRigs"))
 
 ---------------------------------------------------------------------------
 -- RemoteFunction setup
@@ -189,6 +190,15 @@ local function handleBuyItem(player, _npcId, npcType, params)
 
     local cost     = entry.Price * qty
     local currency = entry.Currency or "Coins"
+    -- A tutorial-scripted one-time price (ScriptedRigs "price:<itemId>", server-queued,
+    -- tutorial-only), for a single unit. Used up only once the purchase goes through.
+    local priceRig = qty == 1 and ScriptedRigs.Peek(player, "price:" .. itemId) or nil
+    if type(priceRig) == "table" and type(priceRig.price) == "number" then
+        cost = math.max(0, math.floor(priceRig.price))
+        currency = type(priceRig.currency) == "string" and priceRig.currency or currency
+    else
+        priceRig = nil
+    end
 
     local dProfile = getDungeonProfile(player)
     if not dProfile then return {ok=false, err="no_profile"} end
@@ -220,6 +230,10 @@ local function handleBuyItem(player, _npcId, npcType, params)
             DungeonProfile.ConsumeItemId(player, itemId, grantQty)
             return {ok=false, err="remove_failed"}
         end
+    end
+
+    if priceRig then
+        ScriptedRigs.Take(player, "price:" .. itemId)
     end
 
     return {

@@ -1,4 +1,12 @@
--- DropperKeyService: mobs dying near a Dropper can spawn a floating key that unlocks the nearest Dropper for a coin payout.
+--[[
+	DropperKeyService: a mob killed near a key-chest (any Model named "Dropper") drops a floating
+	key only its killer can take; the key flies to the nearest chest, which opens and pays out.
+
+	Chest rarity (2026-10-04): the Dropper's `ChestRarity` attribute, "Food" / "Normal" (default) /
+	"Elite", sets the key's colour (green / white / purple) and the reward (REWARDS below).
+	A tutorial-scripted reward (ScriptedRigs "chestReward", server-queued, tutorial-only)
+	replaces it: { items = { { itemId, count } }, templates = { grantTemplate }, coins = n }.
+]]
 local DropperKeyService = {}
 
 local Workspace = game:GetService("Workspace")
@@ -10,10 +18,23 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local Debris = game:GetService("Debris")
 
 local DungeonProfile = require(ServerScriptService:WaitForChild("ProfileService"))
+local ScriptedRigs = require(ServerScriptService:WaitForChild("ScriptedRigs"))
+local ItemIdentity = require(ReplicatedStorage:WaitForChild("ItemIdentity"))
+
+-- What each chest rarity pays, and its key's colour.
+local REWARDS = {
+	Food = { coins = 25, items = { { "T1_CookedFish", 2 } }, color = Color3.fromRGB(90, 230, 110) },
+	Normal = { coins = 100, items = {}, color = Color3.fromRGB(235, 235, 235) },
+	Elite = { coins = 250, items = { { "T1OrbOfAlteration", 1 } }, color = Color3.fromRGB(170, 90, 255) },
+}
+
+local function rarityOf(dropper)
+	local r = dropper and dropper:GetAttribute("ChestRarity")
+	return REWARDS[r] and r or "Normal"
+end
 
 local DROP_RADIUS = 40
 local DROP_CHANCE = 1
-local COIN_REWARD = 100
 local KEY_FLOAT_Y = 3
 local KEY_HOMING_SPEED = 48
 local ARRIVE_DISTANCE = 3
@@ -119,6 +140,29 @@ local function grantCoins(player, amount)
 	end
 end
 
+-- Pays out a chest: the tutorial's scripted reward if one is queued, else the rarity's.
+local function grantReward(dropper, player)
+	local reward = ScriptedRigs.Take(player, "chestReward")
+	local origin
+	if type(reward) == "table" then
+		origin = { by = player, kind = ItemIdentity.SOURCE.QUEST, src = "tutorial_chest" }
+	else
+		reward = REWARDS[rarityOf(dropper)]
+		origin = { by = player, kind = ItemIdentity.SOURCE.MOB_DROP, src = "key_chest" }
+	end
+	local coins = math.floor(tonumber(reward.coins) or 0)
+	if coins > 0 then grantCoins(player, coins) end
+	for _, entry in ipairs(reward.items or {}) do
+		local itemId, count = entry[1] or entry.itemId, entry[2] or entry.count or 1
+		if type(itemId) == "string" then
+			pcall(DungeonProfile.GrantItemId, player, itemId, count, origin)
+		end
+	end
+	for _, template in ipairs(reward.templates or {}) do
+		pcall(DungeonProfile.GrantItem, player, table.clone(template), 1, origin)
+	end
+end
+
 local function runDropperReward(dropper, player, keyModel)
 	task.spawn(function()
 		local prompt = dropper:FindFirstChild("ProximityPrompt")
@@ -128,7 +172,7 @@ local function runDropperReward(dropper, player, keyModel)
 		end
 
 		tweenOpen(dropper)
-		grantCoins(player, COIN_REWARD)
+		grantReward(dropper, player)
 		task.wait(0.12)
 		tweenClose(dropper)
 
@@ -141,7 +185,7 @@ local function runDropperReward(dropper, player, keyModel)
 	end)
 end
 
-local function spawnFloatingKey(deathPos, killer)
+local function spawnFloatingKey(deathPos, killer, keyColor)
 	local tmpl = TEMPLATE_FOLDER:FindFirstChild(TEMPLATE_NAME)
 	if not tmpl or not tmpl:IsA("BasePart") then
 		warn("[DropperKeyService] Missing ServerStorage.DropperKeyTemplates.KeyMesh")
@@ -156,7 +200,7 @@ local function spawnFloatingKey(deathPos, killer)
 	key.Massless = true
 
 	local light = Instance.new("PointLight")
-	light.Color = Color3.fromRGB(120, 255, 140)
+	light.Color = keyColor
 	light.Brightness = 1.6
 	light.Range = 12
 	light.Parent = key
@@ -178,7 +222,7 @@ local function spawnFloatingKey(deathPos, killer)
 		NumberSequenceKeypoint.new(0, 0.35),
 		NumberSequenceKeypoint.new(1, 1),
 	})
-	pe.Color = ColorSequence.new(Color3.fromRGB(70, 255, 120), Color3.fromRGB(180, 255, 200))
+	pe.Color = ColorSequence.new(keyColor, keyColor:Lerp(Color3.new(1, 1, 1), 0.5))
 	pe.LightEmission = 0.85
 	pe.Parent = key
 
@@ -272,7 +316,7 @@ function DropperKeyService.onMobDied(mob, killingBlowPlayer)
 		return
 	end
 
-	local _, dist = nearestDropper(deathPos, droppers)
+	local nearest, dist = nearestDropper(deathPos, droppers)
 	if not dist or dist > DROP_RADIUS then
 		return
 	end
@@ -286,7 +330,7 @@ function DropperKeyService.onMobDied(mob, killingBlowPlayer)
 		return
 	end
 
-	spawnFloatingKey(deathPos, killingBlowPlayer)
+	spawnFloatingKey(deathPos, killingBlowPlayer, REWARDS[rarityOf(nearest)].color)
 end
 
 return DropperKeyService

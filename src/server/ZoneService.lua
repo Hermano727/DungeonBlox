@@ -274,8 +274,70 @@ end
 -- Public API
 ----------------------------------------------------------------------
 
+-- The SAVED zones (the map's own, broadcast to clients, drawn on the minimap).
 function ZoneService.GetAllZones()
 	return zones
+end
+
+----------------------------------------------------------------------
+-- Transient zones (2026-10-04): runtime-only zones for private instances (the tutorial's
+-- camp, its elite arena). They work like any zone for everything the server decides
+-- (safe zone, PvP gate, entry banner / Region Discovered, music, named-elite zone) but are
+-- never saved, never broadcast to clients and never part of GetAllZones, so the minimap's
+-- bounds (and the zone dev tools) don't see a copy parked far off the map. Removed with the
+-- instance (RemoveTransientZone).
+----------------------------------------------------------------------
+local transientZones = {}
+
+-- Every zone the server checks positions against: saved, then transient.
+local function queryZones()
+	if #transientZones == 0 then return zones end
+	local out = table.clone(zones)
+	for _, z in ipairs(transientZones) do table.insert(out, z) end
+	return out
+end
+
+-- attrs: { id (unique), name, alignment, radius | points, isEliteZone, eliteMobId, musicId }
+function ZoneService.AddTransientZone(attrs, position)
+	if type(attrs) ~= "table" or type(attrs.id) ~= "string" or attrs.id == "" then return nil, "bad_id" end
+	if zoneById[attrs.id] then return nil, "duplicate_id" end
+	if typeof(position) ~= "Vector3" then return nil, "bad_position" end
+	local row = {
+		id = attrs.id, name = attrs.name, alignment = attrs.alignment,
+		bannedAlignments = attrs.bannedAlignments or {}, musicId = attrs.musicId or "",
+		isEliteZone = attrs.isEliteZone == true, eliteMobId = attrs.eliteMobId or "",
+		x = position.X, y = position.Y, z = position.Z, radius = attrs.radius,
+		points = attrs.points,
+	}
+	local z = normalizeRow(row)
+	if not z then return nil, "bad_zone" end
+	z.transient = true
+	table.insert(transientZones, z)
+	zoneById[z.id] = z
+	return z
+end
+
+function ZoneService.RemoveTransientZone(zoneId)
+	for i, z in ipairs(transientZones) do
+		if z.id == zoneId then
+			table.remove(transientZones, i)
+			zoneById[zoneId] = nil
+			for _, st in pairs(playerState) do
+				st.inside[zoneId] = nil
+				st.lastFlash[zoneId] = nil
+			end
+			return true
+		end
+	end
+	return false
+end
+
+-- Any zone (saved or transient) by its name.
+function ZoneService.FindZoneByName(name)
+	for _, z in ipairs(queryZones()) do
+		if z.name == name then return z end
+	end
+	return nil
 end
 
 function ZoneService.GetZone(zoneId)
@@ -285,7 +347,7 @@ end
 -- All zones containing the world point (x, y, z). y is unused.
 function ZoneService.GetZonesAtPoint(pos)
 	local out = {}
-	for _, z in ipairs(zones) do
+	for _, z in ipairs(queryZones()) do
 		if zoneContainsXZ(z, pos.X, pos.Z) then
 			table.insert(out, z)
 		end
@@ -319,7 +381,7 @@ function ZoneService.IsAnyZoneLawfulAtPlayer(player)
 	local hrp = playerHRP(player)
 	if not hrp then return false end
 	local x, z = hrp.Position.X, hrp.Position.Z
-	for _, z0 in ipairs(zones) do
+	for _, z0 in ipairs(queryZones()) do
 		if z0.alignment == "Lawful" and zoneContainsXZ(z0, x, z) then
 			return true
 		end
@@ -540,7 +602,7 @@ local function pollPlayer(p)
 	local activeEliteZoneName = ""
 	local activeEliteMobId = ""
 	local foundEliteZone = false
-	for _, zoneObj in ipairs(zones) do
+	for _, zoneObj in ipairs(queryZones()) do
 		if zoneContainsXZ(zoneObj, x, z) then
 			newInside[zoneObj.id] = zoneObj
 			if not foundMusic and type(zoneObj.musicId) == "string" and zoneObj.musicId ~= "" then
@@ -611,7 +673,7 @@ RunService.Heartbeat:Connect(function(dt)
 	pollAccumulator = pollAccumulator + dt
 	if pollAccumulator < ZoneConfig.OCCUPANCY_TICK_SEC then return end
 	pollAccumulator = 0
-	if #zones == 0 then return end -- nothing to check; cheap early out
+	if #zones == 0 and #transientZones == 0 then return end -- nothing to check; cheap early out
 	for _, p in ipairs(Players:GetPlayers()) do
 		pollPlayer(p)
 	end

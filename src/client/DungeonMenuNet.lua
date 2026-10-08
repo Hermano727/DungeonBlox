@@ -299,6 +299,29 @@ function DungeonMenuNet.requestTrashItem(itemUuid)
 	return DungeonMenuNet.requestInventoryAct({ kind = "TrashItem", uuid = itemUuid })
 end
 
+-- Eat one of a carried food stack straight from the bag (FoodService's EatFromBag). Returns
+-- ok, reason; syncs the snapshot after a bite.
+function DungeonMenuNet.requestEatFromBag(itemUuid)
+	if type(itemUuid) ~= "string" or itemUuid == "" then
+		return false, "bad_item"
+	end
+	local events = ReplicatedStorage:FindFirstChild("GameEvents")
+	local rf = events and events:FindFirstChild("EatFromBag")
+	if not rf or not rf:IsA("RemoteFunction") then
+		return false, "no_rf"
+	end
+	local ok, a, b = pcall(function()
+		return rf:InvokeServer(itemUuid)
+	end)
+	if not ok then
+		return false, "error"
+	end
+	if a then
+		DungeonMenuNet.requestSync()
+	end
+	return a == true, b
+end
+
 function DungeonMenuNet.requestInventoryAct(act)
 	if not rfInventoryAct or not rfInventoryAct:IsA("RemoteFunction") then
 		return false, "no_rf"

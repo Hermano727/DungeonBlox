@@ -16,6 +16,8 @@ HearthstoneConfig.CHANNEL_SECONDS = {
     Neutral = 20,
     Chaotic = 30,
 }
+-- During the tutorial (profile.flags.tutorial not done) the channel is just this long.
+HearthstoneConfig.TUTORIAL_CHANNEL_SECONDS = 3
 HearthstoneConfig.DATASTORE_KEY = "HearthstoneLocations_v1"
 
 -- Replace with your Roblox UserId for admin access to the dev panel.

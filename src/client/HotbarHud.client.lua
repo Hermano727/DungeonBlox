@@ -1,3 +1,4 @@
+local PotionAction = require(game:GetService("ReplicatedStorage"):WaitForChild("PotionAction"))
 local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindConfig"))
 --[[
 	HotbarHud — drives the diamond-tile hotbar shown bottom-center.
@@ -357,6 +358,7 @@ local function sendSelection()
 end
 
 selectSlot = function(i)
+	if PotionAction.IsLocked(player.Character) then return end
 	if isCharacterMenuOpen() or ProfileMenusState.IsOpen()
 		or UserInputService:GetFocusedTextBox() then return end
 	if i < 1 or i > TOOL_SLOTS then return end

@@ -3,6 +3,7 @@ local RunService=game:GetService("RunService")
 local RS=game:GetService("ReplicatedStorage")
 local SSS=game:GetService("ServerScriptService")
 local Config=require(RS:WaitForChild("EnergyConfig"))
+local PotionAction=require(RS:WaitForChild("PotionAction"))
 local HungerConfig=require(RS:WaitForChild("HungerConfig"))
 local EnergyData=require(SSS:WaitForChild("EnergyData"))
 local HungerData=require(SSS:WaitForChild("HungerData"))
@@ -23,7 +24,7 @@ local function setCrouching(p, value)
     local r=c and c:FindFirstChild("HumanoidRootPart")
     local h=c and c:FindFirstChildOfClass("Humanoid")
     if r then r:SetAttribute("IsCrouching", value) end
-    if h then h:SetStateEnabled(Enum.HumanoidStateType.Jumping, not value) end
+    if h then h:SetStateEnabled(Enum.HumanoidStateType.Jumping, not value and not PotionAction.IsLocked(c)) end
 end
 
 local function ensureRemoteFunction(parent, name)
@@ -52,6 +53,7 @@ local function applyWalkSpeed(p)
     local h=p.Character and p.Character:FindFirstChildOfClass("Humanoid") if not h then return end
     if h.Health <= 0 then return end
     local base = Config.NORMAL_SPEED
+    if PotionAction.IsLocked(p.Character) then EnergyData.setSprintHeld(p, false) end
     local root=p.Character:FindFirstChild("HumanoidRootPart")
     local crouching=root and root:GetAttribute("IsCrouching") == true
     p.Character:SetAttribute("IsSprinting", d.isSprintHeld == true and not d.isPanting and not crouching)
@@ -166,6 +168,12 @@ local function connectCharacter(p, character)
     end
     setCrouching(p, false)
     applyWalkSpeed(p)
+    character:GetAttributeChangedSignal(PotionAction.ATTRIBUTE):Connect(function()
+        if p.Character ~= character then return end
+        if PotionAction.IsLocked(character) then EnergyData.setSprintHeld(p, false) end
+        setCrouching(p, false)
+        applyWalkSpeed(p)
+    end)
     character:GetAttributeChangedSignal("EnchantSlowed"):Connect(function()
         if p.Character ~= character then return end
         applyWalkSpeed(p)
@@ -227,6 +235,7 @@ RunService.Heartbeat:Connect(function(dt)
     end
 end)
 RequestSprint.OnServerEvent:Connect(function(p,isHeld)
+    if PotionAction.IsLocked(p.Character) then EnergyData.setSprintHeld(p, false); applyWalkSpeed(p); return end
     if type(isHeld) ~= "boolean" then return end
     local h=p.Character and p.Character:FindFirstChildOfClass("Humanoid")
     if not h or h.Health <= 0 then return end
@@ -237,6 +246,7 @@ RequestSprint.OnServerEvent:Connect(function(p,isHeld)
     applyWalkSpeed(p)
 end)
 RequestCrouch.OnServerEvent:Connect(function(p,wantCrouch)
+    if PotionAction.IsLocked(p.Character) then return end
     if type(wantCrouch) ~= "boolean" then return end
     local h=p.Character and p.Character:FindFirstChildOfClass("Humanoid")
     if not h or h.Health <= 0 then return end
@@ -254,6 +264,7 @@ RequestCrouch.OnServerEvent:Connect(function(p,wantCrouch)
 end)
 
 RequestDash.OnServerInvoke = function(p)
+    if PotionAction.IsLocked(p.Character) then return false end
     if EnergyData.isBlocked(p) or EnergyData.isPanting(p) then
         return false
     end

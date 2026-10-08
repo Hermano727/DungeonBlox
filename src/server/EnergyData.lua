@@ -100,10 +100,10 @@ function EnergyData.applyTick(p,dt)
         end
         return
     end
-    -- While sprinting, regen is suppressed so SPRINT_COST is the actual drain rate.
-    -- (Otherwise a player whose derived energyRegen ≥ SPRINT_COST would have zero
-    -- net drain and could sprint forever — the bug we're fixing here.)
-    local regen = d.isSprintHeld and 0 or baseRegen
+    -- Regen keeps running while sprinting; SPRINT_COST is drained on top of it. That is the
+    -- point of energy-regen gear: once a player's regen reaches SPRINT_COST they can sprint
+    -- forever (2026-10-03, by design; regen used to be switched off while sprinting).
+    local regen = baseRegen
     local drain = d.isSprintHeld and (Config.SPRINT_COST * dt) or 0
     local prev = d.energy
     d.energy = math.clamp(d.energy - drain + regen, 0, Config.MAX_ENERGY)

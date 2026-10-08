@@ -4,9 +4,10 @@
 	The server (SSS/HearthstoneService.StartChannel) runs the channel and publishes it as two
 	attributes on your Player: HearthChannelEnd (workspace:GetServerTimeNow() it completes at)
 	and HearthChannelLength (seconds); both clear when it ends, completed or broken. This only
-	draws them: a bronze plate above the hotbar with the countdown and a filling bar. Out of
-	combat only, Lawful 10 / Neutral 20 / Chaotic 30 s, a hit breaks it (the server flashes
-	"Hearthstone interrupted!").
+	draws them: a bronze plate in the middle of the screen, just under the crosshair (a channel
+	is the thing you're doing right now), with the countdown and a filling bar. Out of combat
+	only, Lawful 10 / Neutral 20 / Chaotic 30 s (3 s in the tutorial); moving or entering combat
+	cancels it (the server decides and flashes why).
 
 	Art: RS/Assets/Images/JournalUI nav_plaque (the plate) and bar_trough (the track).
 ]]
@@ -20,8 +21,8 @@ local JournalUI = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild(
 
 local player = Players.LocalPlayer
 
-local WIDTH, HEIGHT = 340, 70
-local BOTTOM_OFFSET = 128 -- px above the screen's bottom edge, clear of the hotbar
+local WIDTH, HEIGHT = 380, 74
+local BELOW_CENTRE = 90 -- px under the screen's centre, clear of the crosshair
 local FILL = Color3.fromRGB(214, 172, 84)
 
 local function slice(target, key)
@@ -49,8 +50,8 @@ gui.Parent = player:WaitForChild("PlayerGui")
 
 local plate = Instance.new("ImageLabel")
 plate.Name = "Plate"
-plate.AnchorPoint = Vector2.new(0.5, 1)
-plate.Position = UDim2.new(0.5, 0, 1, -BOTTOM_OFFSET)
+plate.AnchorPoint = Vector2.new(0.5, 0)
+plate.Position = UDim2.new(0.5, 0, 0.5, BELOW_CENTRE)
 plate.Size = UDim2.fromOffset(WIDTH, HEIGHT)
 plate.BackgroundColor3 = Color3.fromRGB(22, 16, 11)
 plate.BackgroundTransparency = slice(plate, "nav_plaque") and 1 or 0.1

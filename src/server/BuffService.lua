@@ -10,7 +10,8 @@
 	  - LootService reads getLuckBonusPct() at gear-drop roll time.
 	Unknown buff types are stored (visible to anything that polls list()) but otherwise inert.
 
-	Buffs of the same type stack additively. There is no per-type cap.
+	Buffs of the same type stack in TIME only: a repeat extends the running buff by its duration
+	and keeps the stronger amount; the percentages never add up (2026-10-03).
 ]]
 
 local Players = game:GetService("Players")
@@ -114,12 +115,28 @@ function BuffService.ApplyBuffs(player, buffs)
 	for _, b in ipairs(buffs) do
 		if type(b) == "table" and type(b.type) == "string" then
 			local dur = math.max(0, tonumber(b.duration) or 0)
+			local amount = tonumber(b.amount) or 0
 			if dur > 0 then
-				table.insert(list, {
-					type = b.type,
-					amount = tonumber(b.amount) or 0,
-					expiresAt = now + dur,
-				})
+				-- One entry per type: a repeat adds its TIME, never its strength (2026-10-03).
+				-- Two Swift fish = +25% for twice as long, not +50%. A stronger one raises the
+				-- strength to its own for the whole (extended) time.
+				local existing
+				for _, e in ipairs(list) do
+					if e.type == b.type and e.expiresAt > now then
+						existing = e
+						break
+					end
+				end
+				if existing then
+					existing.expiresAt += dur
+					existing.amount = math.max(existing.amount, amount)
+				else
+					table.insert(list, {
+						type = b.type,
+						amount = amount,
+						expiresAt = now + dur,
+					})
+				end
 			end
 		end
 	end

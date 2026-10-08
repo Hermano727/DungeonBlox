@@ -124,11 +124,13 @@ A named elite (`MobData` `IsNamedElite = true`) plays its own looped track while
 
 **Who hears it:** whoever the elite's boss bar is bound to (`PlayerActiveEliteMob`), which today is the player whose kill spawned it. Another player joining the fight gets neither the bar nor the track — that's pre-existing boss-bar behavior, not a music decision.
 
-**Dy**A named elite despawns after 5 minutes out of combat** (`NAMED_ELITE_IDLE_DESPAWN` in `MobManager`, checked every heartbeat, removed via `MobManager.DespawnNamedElite`). Any hit it takes (`MobClass.TakeDamage`) or lands (`DamageService.ApplyToPlayer`) resets `mob._lastCombatAt`; the clock starts at spawn. No loot, no XP, no kill credit, no death effect: it is removed, not killed, the bar and music end with it, and the one-elite slot frees up. Dying to it no longer despawns it (changed 2026-09-30): the bar is shared by every player now, so one death must not end the fight for the rest. NPC system
+**Dy**A named elite despawns after 5 minutes out of combat** (`NAMED_ELITE_IDLE_DESPAWN` in `MobManager`, checked every heartbeat, removed via `MobManager.DespawnNamedElite`). Any hit it takes (`MobClass.TakeDamage`) or lands (`DamageService.ApplyToPlayer`) resets `mob._lastCombatAt`; the clock starts at spawn. No loot, no XP, no kill credit, no death effect: it is removed, not killed, the bar and music end with it, and the one-elite slot frees up. Dying to it no longer despawns it (changed 2026-09-30): the bar is shared by every player now, so one death must not end the fight for the rest.
+
+## NPC system
 
 Two parallel, non-unified paths — don't conflate:
 
-1. **Bootstrap scripts** (primary): one `SSS/<Type>Bootstrap` per type. Scans `Workspace:GetDescendants()` for **every** matching Model (not just first — old `FindFirstChild(name,true)` bug silently broke all-but-one duplicate town copy), wires `NpcId`/ProximityPrompt/CollectionService tag `"NPC"`/Head.gui dialog.
+1. **Bootstrap scripts** (primary): one `SSS/<Type>Bootstrap` per type. Scans `Workspace:GetDescendants()` for **every** matching Model (not just first — old `FindFirstChild(name,true)` bug silently broke all-but-one duplicate town copy), wires `NpcId`/ProximityPrompt/CollectionService tag `"NPC"`/Head.gui dialog. Types with an `NPCRegistry` `Nametag` entry skip the Head.gui: their tag is client-drawn by `src/client/NpcNametags` (see [UI & Networking](./ui-and-networking.md)).
 2. **SpawnerService + ServerStorage/NPCModels clone (dev-tool, F8 placer):** independent of path 1, known 2nd source of duplicate NPCs (not yet unified). This is the closest thing in the project to a "dev menu" item/NPC spawner — an F8-triggered placer tool, not a full dev menu.
 
 NpcId convention: tutorial copy = `<type>_tutorial`, else first match = canonical (`blacksmith_01`), dupes get numeric suffix.
@@ -141,6 +143,21 @@ NpcId convention: tutorial copy = `<type>_tutorial`, else first match = canonica
 - Innkeeper is NOT a merchant-shop type (`SHOP_NPC_TYPES`) — routes through `HearthstoneClient.openInnkeeperShop()` like Blacksmith routes to `BlacksmithClient`, both via `MerchantShopClient`'s ProximityPromptService hook. Hearthstone remotes: `HearthstoneSync/Purchase/Teleport/Swap` + admin Add/Delete.
 
 For rig type (R15 vs R6) and the Blender/Tripo generation pipeline that produces these models, see [Character & Rigging Pipeline](./character-pipeline.md).
+
+## Replacing an NPC's model (custom skinned NPCs)
+
+**There is no "model version" code.** An NPC's body is just the Model instance in Workspace (Studio owns it, it isn't in `src/`). Its `<Type>Bootstrap` finds it by name (`"The Merchant"`) or `NpcType` attribute and wires the prompt, `NpcId`, the `NPC` tag and the head gui on every server start. To swap a body, replace the instance in Studio and keep the name and attributes; no script changes. Keep the old one in `ServerStorage.NPCModelsBackup`.
+
+A custom skinned NPC (the Auctioneer, the Merchant) needs:
+
+- the skinned `MeshPart` (anchored, `CanCollide = false`) with its `Bone`s, and an `AnimationController > Animator`;
+- an invisible `HumanoidRootPart` (PrimaryPart; the bootstrap fails without it or a `Torso`) holding the `ProximityPrompt`;
+- an invisible `Head` part carrying the name `gui` (the bootstrap creates one if missing);
+- optionally an invisible collider so players can't walk through it.
+
+**Idle:** `IdleAnimationId` on the type's `RS/NPCRegistry` entry; `src/client/NpcIdleAnimations` plays it locally on every client (looped, Idle priority) for each `NPC`-tagged model with an `AnimationController`. A new id is the only change needed.
+
+The full pipeline (mesh fixes, rig, publish, bind frames, the swap): [Model, Rig & Studio Setup](./model-rig-and-studio-setup.md). Worked example: `assets/models/npcs/merchant/rig/README.md`.
 
 ## Crowding (2026-09-29: seat rings removed)
 

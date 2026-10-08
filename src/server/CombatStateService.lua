@@ -106,6 +106,8 @@ function CombatStateService.start()
 			local char = player.Character
 			local hum = char and char:FindFirstChildOfClass("Humanoid")
 			if not hum or hum.Health <= 0 or hum.Health >= hum.MaxHealth then continue end
+			-- Paused by the server (the tutorial's "you're hurt, drink a potion" moment).
+			if player:GetAttribute("RegenPaused") == true then continue end
 
 			local profile = dp().Get(player)
 			if not profile then continue end

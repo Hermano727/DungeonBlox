@@ -161,6 +161,11 @@ task.spawn(function()
 end)
 
 Players.PlayerRemoving:Connect(function(player) states[player] = nil end)
+-- A wiped profile has a fresh map: drop the cached state (it points at the old one).
+ProfileService.ProfileWiped:Connect(function(player)
+	states[player] = nil
+	ResetEvent:FireClient(player)
+end)
 
 -- F8 MAP tab. Wipes the caller's own discoveries and explored cells (the defaults come back
 -- on the next stateFor); the reveal loop then re-discovers whatever zone they stand in.

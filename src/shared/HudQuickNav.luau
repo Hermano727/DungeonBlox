@@ -7,10 +7,16 @@
 		Slot(name, order) -> Frame     lower order = further left
 			ORDER.Settings = 10        (the settings gear, SettingsClient)
 			ORDER.Crosshair = 20       (crosshair on/off, client/Crosshair)
+			ORDER.Inventory / Journal / Hearthstone = 30 / 40 / 50 (client/MenuShortcuts)
 		FollowBelow(frame)             hang the row under `frame` (the minimap does this);
 		                               while that frame is hidden (dungeons), the row moves up
 		                               to the top of the screen instead of leaving a gap
-		BUTTON_SIZE                    the square size every button here uses
+		BUTTON_SIZE                    the square size every button here uses (before SCALE)
+		SCALE                          the whole row is drawn this much bigger (a UIScale), so
+		                               buttons keep authoring in BUTTON_SIZE units
+		OnBottomChanged(fn)            fn(y): the screen y just under the row (key labels
+		                               included), now and whenever it moves; HUD stacked under
+		                               the minimap + row hangs off it (the party panel)
 		Tooltip(button, text)          a small label under the button while hovered
 		                               ("Settings", "Toggle Crosshair")
 
@@ -27,12 +33,18 @@ local QuickNav = {}
 QuickNav.ORDER = {
 	Settings = 10,
 	Crosshair = 20,
+	-- The Tab menu's destinations, one tap each (MenuShortcuts; mostly for touch players).
+	Inventory = 30,
+	Journal = 40,
+	Hearthstone = 50,
 }
 
 QuickNav.MARGIN = 8       -- from the screen's top/right edges when nothing to follow
 QuickNav.GAP = 8          -- under the followed frame (clears its 2px border stroke too)
 QuickNav.PADDING = 6      -- between buttons
 QuickNav.BUTTON_SIZE = 30
+QuickNav.SCALE = 1.3      -- 2026-10-06: the row grew 30% with the minimap
+local KEY_LABEL_ROOM = 16 -- the key letters hanging under some buttons (outside their slot)
 
 local gui, container, followConns
 
@@ -55,6 +67,10 @@ local function ensure()
 	container.AutomaticSize = Enum.AutomaticSize.XY
 	container.BackgroundTransparency = 1
 	container.Parent = gui
+
+	local scale = Instance.new("UIScale")
+	scale.Scale = QuickNav.SCALE
+	scale.Parent = container
 
 	local layout = Instance.new("UIListLayout")
 	layout.FillDirection = Enum.FillDirection.Horizontal
@@ -128,7 +144,7 @@ local function ensureTip()
 	tip.BackgroundTransparency = 0.1
 	tip.BorderSizePixel = 0
 	tip.FontFace = UIFonts.BodyBold
-	tip.TextSize = 13
+	tip.TextSize = math.round(13 * QuickNav.SCALE)
 	tip.TextColor3 = Color3.fromRGB(236, 226, 208)
 	tip.Visible = false
 	tip.ZIndex = 20
@@ -162,6 +178,16 @@ function QuickNav.Tooltip(button, text)
 			tip.Visible = false
 		end
 	end)
+end
+
+function QuickNav.OnBottomChanged(fn)
+	local row = ensure()
+	local function fire()
+		fn(row.AbsolutePosition.Y + row.AbsoluteSize.Y + KEY_LABEL_ROOM * QuickNav.SCALE)
+	end
+	row:GetPropertyChangedSignal("AbsolutePosition"):Connect(fire)
+	row:GetPropertyChangedSignal("AbsoluteSize"):Connect(fire)
+	fire()
 end
 
 return QuickNav

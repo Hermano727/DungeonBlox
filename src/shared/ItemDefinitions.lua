@@ -1,3 +1,4 @@
+local PotionConfig = require(game:GetService("ReplicatedStorage"):WaitForChild("PotionConfig"))
 -- ItemDefinitions
 -- Catalog of every item that can exist in a player inventory.
 -- Weapons reference entries in ReplicatedStorage.WeaponData for their
@@ -51,8 +52,8 @@ local Items = {
 
 	-- Stackable consumables and materials.
 	-- Renamed from HealPotion/MajorPotion 2026-06-22 to match Minor/Medium icon registry naming.
-	MinorPotion  = { Stackable = true,  MaxStack = 100, Kind = "Consumable", Tier = 1, Rarity = "Common", HealAmount = 40, HotbarEquippable = true, ProtectedOnDeath = false, Icon = ConsumableIcons.MINOR_POTION },
-	MediumPotion = { Stackable = true,  MaxStack = 100, Kind = "Consumable", Tier = 3, Rarity = "Rare", HealAmount = 120, HotbarEquippable = true, ProtectedOnDeath = false, Icon = ConsumableIcons.MEDIUM_POTION },
+	MinorPotion  = { Stackable = true,  MaxStack = 100, Kind = "Consumable", Tier = 1, Rarity = "Common", HealAmount = PotionConfig.Tiers.MinorPotion.healAmount, HotbarEquippable = true, ProtectedOnDeath = false, Icon = ConsumableIcons.MINOR_POTION },
+	MediumPotion = { Stackable = true,  MaxStack = 100, Kind = "Consumable", Tier = 3, Rarity = "Rare", HealAmount = PotionConfig.Tiers.MediumPotion.healAmount, HotbarEquippable = true, ProtectedOnDeath = false, Icon = ConsumableIcons.MEDIUM_POTION },
 	EtherFlask  = { Stackable = true,  MaxStack = 100, Kind = "Consumable", Tier = 4, Rarity = "Epic", EnergyAmount = 60, HotbarEquippable = true, ProtectedOnDeath = false },
 	Arrow       = { Stackable = true,  MaxStack = 100, Kind = "Ammo",       Tier = 1, Rarity = "Common", HotbarEquippable = true, ProtectedOnDeath = false },
 	Coal        = { Stackable = true,  MaxStack = 100, Kind = "Material",   Tier = 1, Rarity = "Common", DisplayName = "Coal", HotbarEquippable = false, ProtectedOnDeath = false, Icon = "rbxassetid://257670479" },
@@ -126,14 +127,23 @@ local Items = {
 
 	-- Food (Kind="Food"). HotbarEquippable; right-click hold while equipped to eat (TimeToEat seconds).
 	-- Fish are a sub-class (SubKind="Fish") with TimeToEat=0 for instant eat.
-	Fish        = { Stackable = true, MaxStack = 100, Kind = "Food", SubKind = "Fish", Tier = 1, Rarity = "Common",   DisplayName = "Fish",        HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 1, TimeToEat = 0,
-	                Buffs = { { type = "WalkSpeedPct", amount = 10, duration = 15 } } },
-	SwiftFish   = { Stackable = true, MaxStack = 100, Kind = "Food", SubKind = "Fish", Tier = 2, Rarity = "Uncommon", DisplayName = "Swift Fish",  HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 2, TimeToEat = 0,
-	                Buffs = { { type = "WalkSpeedPct", amount = 25, duration = 30 } } },
-	LuckyFish   = { Stackable = true, MaxStack = 100, Kind = "Food", SubKind = "Fish", Tier = 2, Rarity = "Uncommon", DisplayName = "Lucky Fish",  HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 1, TimeToEat = 0,
-	                Buffs = { { type = "LuckPct", amount = 15, duration = 30 } } },
-	GoldenFish  = { Stackable = true, MaxStack = 100, Kind = "Food", SubKind = "Fish", Tier = 3, Rarity = "Rare",     DisplayName = "Golden Fish", HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 2, TimeToEat = 0,
-	                Buffs = { { type = "WalkSpeedPct", amount = 20, duration = 30 }, { type = "LuckPct", amount = 15, duration = 30 } } },
+	-- Raw fish (2026-10-03): caught by spear-fishing, cooked at a fire (CookingConfig.RECIPES).
+	-- An ingredient, not food: Kind "Material" so no eating path (held, bag, quick-eat) accepts
+	-- it and it can't go on the hotbar. Cook it first. Still sells to the Merchant.
+	Fish        = { Stackable = true, MaxStack = 100, Kind = "Material", SubKind = "RawFish", Tier = 1, Rarity = "Common",   DisplayName = "Raw Fish",        HotbarEquippable = false, ProtectedOnDeath = false, Icon = ConsumableIcons.FISH },
+	SwiftFish   = { Stackable = true, MaxStack = 100, Kind = "Material", SubKind = "RawFish", Tier = 2, Rarity = "Uncommon", DisplayName = "Raw Swift Fish",  HotbarEquippable = false, ProtectedOnDeath = false, Icon = ConsumableIcons.SWIFT_FISH },
+	LuckyFish   = { Stackable = true, MaxStack = 100, Kind = "Material", SubKind = "RawFish", Tier = 2, Rarity = "Uncommon", DisplayName = "Raw Lucky Fish",  HotbarEquippable = false, ProtectedOnDeath = false, Icon = ConsumableIcons.LUCKY_FISH },
+	GoldenFish  = { Stackable = true, MaxStack = 100, Kind = "Material", SubKind = "RawFish", Tier = 3, Rarity = "Rare",     DisplayName = "Raw Golden Fish", HotbarEquippable = false, ProtectedOnDeath = false, Icon = ConsumableIcons.GOLDEN_FISH },
+
+	-- Cooked fish (2026-10-03). T1_CookedFish is the plain quick-eat fish (Keys.QuickEat); the
+	-- special ones carry the buffs and are eaten from the bag (right click, Eat).
+	T1_CookedFish       = { Stackable = true, MaxStack = 100, Kind = "Food", SubKind = "Fish", Tier = 1, Rarity = "Common",   DisplayName = "Cooked Fish",        HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 3, TimeToEat = 0, Icon = ConsumableIcons.T1_COOKED_FISH },
+	T2_CookedSwiftFish  = { Stackable = true, MaxStack = 100, Kind = "Food", SubKind = "Fish", Tier = 2, Rarity = "Uncommon", DisplayName = "Cooked Swift Fish",  HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 3, TimeToEat = 0, Icon = ConsumableIcons.T2_COOKED_SWIFT_FISH,
+	                        Buffs = { { type = "WalkSpeedPct", amount = 25, duration = 60 } } },
+	T2_CookedLuckyFish  = { Stackable = true, MaxStack = 100, Kind = "Food", SubKind = "Fish", Tier = 2, Rarity = "Uncommon", DisplayName = "Cooked Lucky Fish",  HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 3, TimeToEat = 0, Icon = ConsumableIcons.T2_COOKED_LUCKY_FISH,
+	                        Buffs = { { type = "LuckPct", amount = 15, duration = 60 } } },
+	T3_CookedGoldenFish = { Stackable = true, MaxStack = 100, Kind = "Food", SubKind = "Fish", Tier = 3, Rarity = "Rare",     DisplayName = "Cooked Golden Fish", HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 4, TimeToEat = 0, Icon = ConsumableIcons.T3_COOKED_GOLDEN_FISH,
+	                        Buffs = { { type = "WalkSpeedPct", amount = 20, duration = 60 }, { type = "LuckPct", amount = 15, duration = 60 } } },
 
 	-- Regular (non-fish) food: TimeToEat > 0, no buffs by default.
 	Bread       = { Stackable = true, MaxStack = 100, Kind = "Food", Tier = 1, Rarity = "Common",   DisplayName = "Bread",       HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 2, TimeToEat = 2.0 },

@@ -107,15 +107,16 @@ end
 -- subStats    = item.subStats dict (pierce, critical, execute, vsMon, vsPly, elemDmg)
 -- hpFrac      = mob.CurrentHealth / mob.MaxHealth  (0-1)
 -- targetType  = "Mob" | "Player"
+-- forceCrit   = server-decided only (a tutorial ScriptedRigs "crit"); never from a remote
 -- Returns damage and resolved bonus metadata for confirmed-hit presentation.
-function DamageService.ComputeWeaponFinal(roll, subStats, hpFrac, targetType)
+function DamageService.ComputeWeaponFinal(roll, subStats, hpFrac, targetType, forceCrit)
 	local subs = subStats or {}
 
 	-- Piercing is flat damage on every hit (2026-09-30; it used to be a percent).
 	local pierce = tonumber(subs.pierce) or 0
 	local base   = roll + pierce
 
-	local isCrit  = math.random() < ((tonumber(subs.critical) or 0) / 100)
+	local isCrit  = forceCrit == true or math.random() < ((tonumber(subs.critical) or 0) / 100)
 	local critMod = isCrit and (base * 0.5) or 0
 
 	local isExe       = math.random() < ((tonumber(subs.execute) or 0) / 100)

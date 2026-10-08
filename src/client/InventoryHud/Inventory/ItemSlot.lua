@@ -1,7 +1,7 @@
 --!strict
---  ItemSlot -- shared item rendering (icon/rarity border/count badge) + click/right-click/
---  hover wiring, used by both InvSlots (bag) and PlayerPreview (equip boxes). No durability
---  bar yet -- first pass covers equip/swap only, per spec.
+--  ItemSlot -- shared item rendering (icon/rarity border/count badge/durability bar) +
+--  click/right-click/hover wiring, used by the bag (InvSlots), shops, the bank and the Enchanting
+--  Station. The equip sockets (PlayerPreview) draw their own, with the same DurabilityBar.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
 local React = require(ReplicatedStorage.Packages.React)
@@ -9,6 +9,7 @@ local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"
 local RarityBorder = require(script.Parent:WaitForChild("RarityBorder"))
 local LegendaryGlow = require(script.Parent:WaitForChild("LegendaryGlow"))
 local EnchantBadge = require(script.Parent:WaitForChild("EnchantBadge"))
+local DurabilityBar = require(script.Parent:WaitForChild("DurabilityBar"))
 local e = React.createElement
 
 local EMPTY_BORDER_COLOR = Color3.fromRGB(90, 76, 58)
@@ -28,6 +29,13 @@ export type ItemSlotProps = {
 	-- true where the caller draws its own "+N" chip (the Enchanting Station, whose preview
 	-- slot shows the NEXT level), so the two don't stack.
 	hideEnchant: boolean?,
+	-- Optional overrides for callers that draw ItemSlot at a different scale (the bag: a 508-unit
+	-- slot contain-fit down to ~85 px, where an 8-unit outline shrinks to ~1.4 px). Defaults keep
+	-- every other caller (shops, Enchanting Station) exactly as it was.
+	borderThickness: number?,
+	iconScale: number?,
+	-- Rounds the outline to match a rounded pocket behind the slot (the bag's).
+	cornerRadius: number?,
 }
 
 local function ItemSlot(props: ItemSlotProps)
@@ -43,13 +51,17 @@ local function ItemSlot(props: ItemSlotProps)
 
 	-- Selected (currently held/picked-up) always wins as a flat white outline; otherwise
 	-- rarity-colored gradient border for an occupied slot, plain muted border when empty.
-	-- Thickness matches PlayerPreview's EquipmentSlot (8) -- these are two independent
-	-- RarityBorder call sites, not a shared constant, so a bag-slot-only bump here is
-	-- exactly how they drift apart again. See the CLAUDE.md note on this.
+	-- Default thickness 8 (10 held). The bag passes its own (borderThickness) because it draws
+	-- at ~0.17x scale; PlayerPreview's sockets draw their own round rings, so there's no second
+	-- square-box copy of this number to keep in step.
+	local thickness = props.borderThickness or 8
+	if props.cornerRadius then
+		children.Corner = e("UICorner", { CornerRadius = UDim.new(0, props.cornerRadius) })
+	end
 	if props.selected then
-		children.Stroke = e(RarityBorder, { color = SELECTED_BORDER_COLOR, thickness = 10 })
+		children.Stroke = e(RarityBorder, { color = SELECTED_BORDER_COLOR, thickness = thickness + math.max(2, thickness * 0.25) })
 	elseif item then
-		children.Stroke = e(RarityBorder, { rarity = rarity, thickness = 8 })
+		children.Stroke = e(RarityBorder, { rarity = rarity, thickness = thickness })
 	else
 		children.Stroke = e(RarityBorder, { color = EMPTY_BORDER_COLOR, thickness = 8 })
 	end
@@ -64,11 +76,14 @@ local function ItemSlot(props: ItemSlotProps)
 		-- GetIconForItem (not the itemId-only GetIcon) so procedurally generated mob drops --
 		-- which never carry an itemId -- still resolve an icon via their tier + weapon/armor kind.
 		local icon = ItemDefinitions.GetIconForItem(item)
+		local broken = DurabilityBar.IsBroken(item)
 		if type(icon) == "string" and icon ~= "" then
 			children.Icon = e("ImageLabel", {
 				-- Icon should take up the majority of the slot -- bumped from 0.8 to 0.92.
 				Image = icon,
-				Size = UDim2.fromScale(0.92, 0.92),
+				ImageColor3 = broken and DurabilityBar.BROKEN_ICON_TINT or Color3.new(1, 1, 1),
+				ImageTransparency = broken and DurabilityBar.BROKEN_ICON_ALPHA or 0,
+				Size = UDim2.fromScale(props.iconScale or 0.92, props.iconScale or 0.92),
 				Position = UDim2.fromScale(0.5, 0.5),
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				BackgroundTransparency = 1,
@@ -93,6 +108,7 @@ local function ItemSlot(props: ItemSlotProps)
 		if not props.hideEnchant then
 			children.EnchantBadge = EnchantBadge.ForItem(item)
 		end
+		children.Durability = DurabilityBar.ForItem(item)
 
 		local count = math.floor(tonumber(item.count) or 1)
 		if count > 1 then
@@ -111,11 +127,16 @@ local function ItemSlot(props: ItemSlotProps)
 		end
 	end
 
+	local uuid = item and item.uuid or nil
 	return e("ImageButton", {
 		Size = UDim2.fromOffset(size, size),
 		BackgroundTransparency = 1,
 		AutoButtonColor = false,
 		Image = "",
+		-- Which item this slot shows, so the tutorial can point at it ("item:<uuid>").
+		ref = function(rbx)
+			if rbx then rbx:SetAttribute("ItemUuid", uuid) end
+		end,
 		[React.Event.Activated] = props.onClick,
 		[React.Event.MouseEnter] = props.onHoverStart and function(_rbx, x, y)
 			if props.onHoverStart then props.onHoverStart(x, y) end

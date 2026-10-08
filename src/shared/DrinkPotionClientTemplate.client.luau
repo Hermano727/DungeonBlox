@@ -15,19 +15,11 @@ local RS = game:GetService("ReplicatedStorage")
 
 local conns = {}
 
-local function getEvent()
-	local ge = RS:FindFirstChild("GameEvents")
-	if not ge then return nil end
-	local ev = ge:FindFirstChild("DrinkPotionRequest")
-	if ev and ev:IsA("RemoteEvent") then return ev end
-	return nil
-end
-
+local DrinkRequest = require(RS:WaitForChild("PotionDrinkRequest"))
 local function fireDrink()
 	local uuid = tool:GetAttribute("DungeonItemUuid")
 	if type(uuid) ~= "string" or uuid == "" then return end
-	local ev = getEvent()
-	if ev then ev:FireServer(uuid) end
+	DrinkRequest.Drink(uuid)
 end
 
 tool.Equipped:Connect(function()

@@ -58,6 +58,10 @@ LootDropVisuals.ByCurrency = {
 -- unlike rolled gear.
 LootDropVisuals.ByItemId = {
 	T1KeyFragment = { AssetId = "107802065311979", PrefabName = "T1KeyFragment" },
+	-- The small potion (2026-10-02): a one-mesh, palette-textured ground version of the held vial
+	-- (assets/models/potions/T1_MinorPotion/build_drop.py), 1.65 studs tall. The held tool uses
+	-- the four-part vial in ServerStorage.PotionModels instead (EquippedHotbar).
+	MinorPotion = { AssetId = "132923337627930", PrefabName = "T1_MinorPotion" },
 } :: { [string]: VisualEntry }
 
 LootDropVisuals.ByGearItemId = {} :: { [string]: VisualEntry }

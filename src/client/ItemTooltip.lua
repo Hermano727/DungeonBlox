@@ -1,3 +1,4 @@
+local PotionConfig = require(game:GetService("ReplicatedStorage"):WaitForChild("PotionConfig"))
 --[[
     ItemTooltip
     Shared tooltip panel for inventory and hotbar item hover.
@@ -252,6 +253,9 @@ local function appendCatalogEffectRows(itemId, n)
 		end
 	elseif def.Kind == "Consumable" then
 		local heal = tonumber(def.HealAmount)
+		if PotionConfig.Tiers[itemId] then
+			table.insert(rows, {str = string.format("After drinking: %d HP/s for %ds", heal / PotionConfig.HealTicks, PotionConfig.HealTicks * PotionConfig.HealTickInterval), color = COLOR_META, size = 11, bold = false})
+		end
 		if heal and heal > 0 then
 			table.insert(rows, { str = string.format("Restores HP  +%d", heal), color = COLOR_PRIMARY, size = 15, bold = true })
 		end

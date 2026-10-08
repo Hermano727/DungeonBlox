@@ -73,8 +73,9 @@ local root = ReactRoblox.createRoot(gui)
 -- otherwise reopening would resume wherever you last left it (e.g. still on
 -- the Skills sub-panel), which reads as a bug more than a feature here.
 local closeGeneration = 0
+local openTo = nil -- { id, seq }: a requested destination (ProfileMenusState.RequestOpen)
 local function render()
-	root:render(React.createElement(Inventory, { resetKey = closeGeneration }))
+	root:render(React.createElement(Inventory, { resetKey = closeGeneration, openTo = openTo }))
 end
 render()
 
@@ -157,6 +158,20 @@ end)
 
 player.CharacterAdded:Connect(function()
 	setOpen(false)
+end)
+
+-- Open straight at a tab (the minimap's quick buttons, the tutorial). The same tab again closes.
+local openSeq = 0
+ProfileMenusState.OpenRequested:Connect(function(destination)
+	if type(destination) ~= "string" or InteractionLock.IsLocked() then return end
+	if open and ProfileMenusState.GetDestination() == destination then
+		setOpen(false)
+		return
+	end
+	openSeq += 1
+	openTo = { id = destination, seq = openSeq }
+	render()
+	setOpen(true)
 end)
 
 print("[InventoryHud] React root mounted")
