@@ -13,7 +13,6 @@ local UserInputService = game:GetService("UserInputService")
 local MenuMouse = require(ReplicatedStorage:WaitForChild("CursorUtils"))
 local PartyConfig = require(ReplicatedStorage:WaitForChild("PartyConfig"))
 local PartyRequestUtil = require(ReplicatedStorage:WaitForChild("PartyRequestUtil"))
-local QuickNav = require(ReplicatedStorage:WaitForChild("HudQuickNav"))
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -42,7 +41,7 @@ end
 local hudGui = Instance.new("ScreenGui")
 hudGui.Name = "PartyHUD"
 hudGui.ResetOnSpawn = false
-hudGui.IgnoreGuiInset = true -- screen space, like the quick-nav row it hangs under
+hudGui.IgnoreGuiInset = false -- y = 0 is just under Roblox's top bar (its menu buttons)
 hudGui.DisplayOrder = 125
 hudGui.Enabled = false
 hudGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
@@ -50,8 +49,10 @@ hudGui.Parent = playerGui
 
 local hudPanel = Instance.new("Frame")
 hudPanel.Name = "Panel"
-hudPanel.AnchorPoint = Vector2.new(1, 0)
-hudPanel.Position = UDim2.new(1, -8, 0.20, 0) -- until the row reports where it ends (below)
+-- Top left, under Roblox's own buttons: the top right belongs to the minimap and its button
+-- row, which it used to collide with (2026-10-11).
+hudPanel.AnchorPoint = Vector2.new(0, 0)
+hudPanel.Position = UDim2.new(0, 12, 0, 8)
 hudPanel.Size = UDim2.new(0, 220, 0, 0)
 hudPanel.AutomaticSize = Enum.AutomaticSize.Y
 hudPanel.BackgroundColor3 = Color3.fromRGB(18, 13, 13)
@@ -59,11 +60,6 @@ hudPanel.BackgroundTransparency = 0.10
 hudPanel.BorderSizePixel = 0
 hudPanel.ZIndex = 1
 hudPanel.Parent = hudGui
--- Hang under the minimap and its button row, wherever they end (they grew 30% on 2026-10-06
--- and would have run into a fixed 20%-down panel).
-QuickNav.OnBottomChanged(function(y)
-	hudPanel.Position = UDim2.new(1, -8, 0, y + 10)
-end)
 Instance.new("UICorner", hudPanel).CornerRadius = UDim.new(0, 8)
 local hudStroke = Instance.new("UIStroke", hudPanel)
 hudStroke.Color = Color3.fromRGB(90, 65, 40)
@@ -507,18 +503,26 @@ declineBtn.ZIndex = 3
 Instance.new("UICorner", declineBtn).CornerRadius = UDim.new(0, 8)
 
 local pendingInviterUserId = nil
+-- The invite's own hold on the free cursor, separate from the party panel's (setOpen). It used
+-- to acquire on EVERY invite (a second invite = two holds, one release) and to skip its release
+-- while the panel was open: both leaked a hold, leaving the cursor stuck free (2026-10-11).
+local inviteHoldsCursor = false
 
 local function showInvite(inviterName, inviterUserId)
 	pendingInviterUserId = inviterUserId
 	inviteBody.Text = string.format("%s invited you to join their party.", inviterName)
 	inviteGui.Enabled = true
-	MenuMouse.acquire()
+	if not inviteHoldsCursor then
+		inviteHoldsCursor = true
+		MenuMouse.acquire()
+	end
 end
 
 local function hideInvite()
 	inviteGui.Enabled = false
 	pendingInviterUserId = nil
-	if not open then
+	if inviteHoldsCursor then
+		inviteHoldsCursor = false
 		MenuMouse.release()
 	end
 end
@@ -719,18 +723,27 @@ local function applyState(payload)
 		return
 	end
 
+	-- Everyone in ANY party on the server (the invite list's "in another party").
 	partyUserIdSet = {}
-	local ids = {}
 	if type(payload.partyUserIds) == "table" then
 		for _, uid in ipairs(payload.partyUserIds) do
 			partyUserIdSet[uid] = true
-			table.insert(ids, tostring(uid))
 		end
 	end
-	-- Local-only attribute (never replicated): client/Nametags marks party members from it.
-	player:SetAttribute("PartyMemberIds", table.concat(ids, ","))
 
 	myParty = payload.myParty
+	-- Local-only attribute (never replicated): client/Nametags marks YOUR party members from it.
+	-- Built from your own party, not the server-wide set above: after you left, a friend still
+	-- sat in their own party, so their tag kept saying PARTY on your screen (2026-10-11).
+	local ids = {}
+	if type(myParty) == "table" and type(myParty.members) == "table" then
+		for _, row in ipairs(myParty.members) do
+			if type(row) == "table" and row.userId ~= player.UserId then
+				table.insert(ids, tostring(row.userId))
+			end
+		end
+	end
+	player:SetAttribute("PartyMemberIds", table.concat(ids, ","))
 	refreshHud()
 	refreshAllNameTags()
 	if open then

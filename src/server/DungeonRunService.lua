@@ -27,6 +27,9 @@ local DungeonProfile= require(ServerScriptService:WaitForChild("ProfileService")
 local WorldLoot     = require(ServerScriptService:WaitForChild("WorldLootService"))
 local ItemIdentity  = require(ReplicatedStorage:WaitForChild("ItemIdentity"))
 local InventoryAudit = require(ServerScriptService:WaitForChild("InventoryAudit"))
+local ClearConfig   = require(ReplicatedStorage:WaitForChild("DungeonClearConfig"))
+local DevRoster     = require(ReplicatedStorage:WaitForChild("DevRoster"))
+local DevRunDrops   = require(ServerScriptService:WaitForChild("DevRunDrops"))
 
 local DungeonRunService = {}
 
@@ -70,13 +73,13 @@ local evStart, evEnd, evSummary, evExit = ensureRemotes()
 -- The destination rides along in the summary so the UI can say "sent to bank".
 ------------------------------------------------------------------
 
-local function dropAtPlayerWhenAlive(player, template, scatterIndex)
+-- `dropSpec` is a WorldLootService.SpawnMobDrop spec ({ kind = "item_template" | "item_id", ... }).
+local function dropAtPlayerWhenAlive(player, dropSpec, scatterIndex)
     local function drop(character)
         local root = character and character:WaitForChild("HumanoidRootPart", 10)
         if not root or not player.Parent then return end
         pcall(function()
-            WorldLoot.SpawnMobDrop(root.Position, player.UserId,
-                { kind = "item_template", template = template }, scatterIndex)
+            WorldLoot.SpawnMobDrop(root.Position, player.UserId, dropSpec, scatterIndex)
         end)
     end
     local character = player.Character
@@ -106,7 +109,7 @@ routeRunDrop = function(player, template, originCtx, scatterIndex)
         :format(player.Name, tostring(template.name)))
     -- Stamp it now so it keeps a dungeon-reward origin through the world orb.
     ItemIdentity.Stamp(template, originCtx)
-    dropAtPlayerWhenAlive(player, template, scatterIndex)
+    dropAtPlayerWhenAlive(player, { kind = "item_template", template = template }, scatterIndex)
     return "ground"
 end
 
@@ -174,8 +177,14 @@ local END_BANNERS = {
     left    = "DungeonFailed", -- walking out of a run is failing it
 }
 
-function DungeonRunService.EndRunFor(player, reason)
+-- `opts` (optional):
+--   deferSummary = true   don't fire DungeonRunSummary yet; the caller sends the returned
+--                         payload itself (DungeonRunService.SendSummary) once it knows when to.
+--                         The clear sequence uses this: the panel waits for the show to end.
+-- Returns (granted, summaryPayload).
+function DungeonRunService.EndRunFor(player, reason, opts)
     if not player then return nil end
+    opts = opts or {}
     local run = DungeonScore.GetRun(player) -- read before EndRun clears it
     local summary = DungeonScore.EndRun(player, reason or "cleared", nil)
     if not summary then return nil end
@@ -195,21 +204,61 @@ function DungeonRunService.EndRunFor(player, reason)
     end
     InventoryAudit.Note(player, ("run cashed out (%s), %d drop(s)"):format(tostring(reason), #(summary.items or {})))
 
-    -- Grant each drop and build a display list that says where it WENT.
+    -- Grant each drop and build a display list that says where it WENT. Low rarities for the
+    -- run's tier are scrapped instead (DungeonClearConfig.AUTO_SCRAP_MAX_RARITY), priced by the
+    -- Merchant's own salvage formula and granted as ONE stack after the loop.
     local granted = {}
+    local scrap = { itemId = nil, qty = 0, fromCount = 0 }
     local originCtx = { by = player, kind = ItemIdentity.SOURCE.DUNGEON_REWARD, src = "run_" .. tostring(reason) }
-    for index, item in ipairs(summary.items or {}) do
-        local okTpl, template = pcall(function() return item:toGrantTemplate() end)
+
+    -- The real rolls, then (cleared runs, devs only) the F8 Dungeon tab's queued extras. The extras
+    -- are appended AFTER the roll, never fed into it: summary.rarities / the pity streaks / the
+    -- Journal's luck numbers above never see them, and they are stamped with the DEV_TOOL origin.
+    local entries = {}
+    for _, item in ipairs(summary.items or {}) do
+        table.insert(entries, { item = item, origin = originCtx })
+    end
+    if (reason or "cleared") == "cleared" then
+        local devOrigin = { by = player, kind = ItemIdentity.SOURCE.DEV_TOOL, src = "dev_run_drop" }
+        for _, item in ipairs(DevRunDrops.Take(player, summary.tier, summary.tier * 5)) do
+            table.insert(entries, { item = item, origin = devOrigin })
+        end
+    end
+
+    for index, entry in ipairs(entries) do
+        local okTpl, template = pcall(function() return entry.item:toGrantTemplate() end)
         if okTpl and template and Types.ValidateItemTemplate(template) then
-            local destination = routeRunDrop(player, template, originCtx, index)
-            if destination then
-                table.insert(granted, {
-                    name        = template.name,
-                    rarity      = template.rarity,
-                    level       = template.level,
-                    destination = destination,
-                })
+            if ClearConfig.IsAutoScrapped(template.tier or summary.tier, template.rarity) then
+                local scrapId, qty = DungeonProfile.SalvageYield(template)
+                scrap.itemId = scrap.itemId or scrapId
+                if scrapId == scrap.itemId then
+                    scrap.qty += qty
+                    scrap.fromCount += 1
+                end
+            else
+                local destination = routeRunDrop(player, template, entry.origin, index)
+                if destination then
+                    table.insert(granted, {
+                        name        = template.name,
+                        rarity      = template.rarity,
+                        level       = template.level,
+                        tier        = template.tier,
+                        type        = template.type,
+                        itemId      = template.itemId,
+                        equipSlot   = template.equipSlot,
+                        tags        = template.tags,
+                        destination = destination,
+                    })
+                end
             end
+        end
+    end
+    if scrap.qty > 0 then
+        local okScrap, errScrap = DungeonProfile.GrantItemId(player, scrap.itemId, scrap.qty, originCtx)
+        if not okScrap then
+            warn(("[DungeonRunService] %s: auto-scrap grant failed (%s), dropping it at their feet")
+                :format(player.Name, tostring(errScrap)))
+            dropAtPlayerWhenAlive(player, { kind = "item_id", itemId = scrap.itemId, count = scrap.qty }, 0)
         end
     end
 
@@ -239,20 +288,26 @@ function DungeonRunService.EndRunFor(player, reason)
         end
     end
 
-    evSummary:FireClient(player, {
+    local payload = {
         reason    = reason,
+        tier      = summary.tier,
         score     = summary.finalScore,
         kills     = summary.kills,
         drops     = granted,
+        scrap     = scrap.qty > 0 and scrap or nil,
         coins     = coins,
         coinsToBank = coinsToBank,
         xp        = xp,
         coinsLost = summary.coinsLost or 0,
         xpLost    = summary.xpLost or 0,
         -- The full-screen end banner (RS/Assets/Images/Banners key; the client's
-        -- DungeonCompleteBanner), and the summary panel waits for it.
-        Banner    = END_BANNERS[reason],
-    })
+        -- DungeonCompleteBanner), and the summary panel waits for it. A clear that
+        -- plays the in-world sequence has no banner: the Benediction is the "complete".
+        Banner    = (not opts.deferSummary) and END_BANNERS[reason] or nil,
+    }
+    if not opts.deferSummary then
+        evSummary:FireClient(player, payload)
+    end
 
     print(("[DungeonRunService] %s ended (%s): %d score, %d kills, %d drop(s)")
         :format(player.Name, tostring(reason), summary.finalScore, summary.kills, #granted))
@@ -265,7 +320,15 @@ function DungeonRunService.EndRunFor(player, reason)
         end
         if not anyLeft then activeRun = nil end
     end
-    return granted
+    return granted, payload
+end
+
+-- Sends a summary EndRunFor held back (opts.deferSummary). `showAt` (server clock, optional):
+-- the client keeps the panel closed until then -- the clear sequence's end.
+function DungeonRunService.SendSummary(player, payload, showAt)
+    if not (player and player.Parent and type(payload) == "table") then return end
+    payload.showAt = showAt
+    evSummary:FireClient(player, payload)
 end
 
 ------------------------------------------------------------------
@@ -363,11 +426,15 @@ end
 -- Dev remotes
 ------------------------------------------------------------------
 
+-- F6 / F7 (DungeonRunHud). Dev only: without this check any client could cash its run out
+-- as "cleared" at any moment and collect the coins, XP and clear count.
 evStart.OnServerEvent:Connect(function(player)
+    if not DevRoster.IsDev(player) then return end
     DungeonRunService.StartRun({ player }, 1)
 end)
 
 evEnd.OnServerEvent:Connect(function(player)
+    if not DevRoster.IsDev(player) then return end
     DungeonRunService.EndRunFor(player, "cleared")
 end)
 

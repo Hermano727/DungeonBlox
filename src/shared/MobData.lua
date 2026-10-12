@@ -81,34 +81,46 @@ MobData[1] = {
         -- solo run on exactly 1500.
         BaseHP = 1875,
         HPScaleWithLevel = false,
-        BaseDamage = 26,             -- its ordinary swing; was 5 (hugging it cost nothing)
+        BaseDamage = 52,             -- the bite (2026-10-11: doubled from 26; was 5 once, hugging it cost nothing)
         BaseScore = 500,
         LootPool = "CommonDrop",     -- trash loot; the Mythic is rolled separately
         MobID = "MiasmaBoss",
-        Telegraph = "MiasmaMaul",    -- purple ring during the windup (MobTelegraphConfig)
-        PlayerKnockbackMultiplier = 11, -- x MobClass's base shove (4 studs/s for 0.15s): a real knock back
+        -- Its ordinary swing is a BITE (MobAnimConfig.MiasmaBoss.Attack): no ground ring any more
+        -- (MiasmaMaul is gone, 2026-10-11), the gape is the tell. Frontal only: anyone outside
+        -- this half-angle at the snap is missed (MobClass:IsTargetInFrontCone).
+        MeleeHalfAngle = 60,
+        -- Bite sounds (SSS/MobCombatSfx): the chomp on every bite, the wet crunch when it lands.
+        CombatSounds = { Swing = "MiasmaBiteChomp", WeaponHit = "MiasmaBiteHit" },
+        PlayerKnockbackMultiplier = 5.5, -- x the base shove (PlayerKnockback, 4 studs/s for 0.15s); halved from 11 (2026-10-11)
         Armor = 20,
         AggroRange = 90,             -- big room, big boss
         ReturnDistance = 250,        -- must not leash out of the arena
-        AttackRange = 6,             -- effective reach = this + GetHitRadius (~16 at ModelScale 0.45),
-                                     -- so ~22 studs: just past the model's own edge
-        AttackCooldown = 2.0,
+        -- The bite's reach is ONE STUD SHORT of a sword's, so a player can kite at the edge of
+        -- their own reach (2026-10-11). Effective reach = this + GetHitRadius (17.85 at
+        -- ModelScale 0.45) = ~28.4 studs from its centre; a 12-stud sword ray reaches its front
+        -- surface (17.4 from the centre at eye height, measured on the model) from ~29.5.
+        -- Retune both if ModelScale or the sword's MaxRange changes.
+        AttackRange = 10.5,
+        AttackCooldown = 1.2,        -- from bite start; the bite itself is 1.0 s (was 2.0)
         MoveSpeed = 8 * 1.33,        -- +33% (2026-09-29): was 8
         JumpHeight = 0,              -- MUST stay 0 or MobClassRegistry sends it to HoppingMobClass
         MovementClass = "DungeonBoss",
         KnockbackMultiplier = 0,     -- immovable
         IsBoss = true,
         NeverDeaggro = true,         -- no leash, however far players run (encounter + dev spawns)
-        -- 2026-09-27: the eye-weighted rig (same bone names + 157 eye bones, so every existing
-        -- clip still drives it). The previous rig stays in MobModels as "MiasmaBoss" (fallback).
-        ModelName = "MiasmaBossEyeRig",
+        -- 2026-10-11: the v3 jaw rig (a real hinged jaw + head, 10 bones, plus named socket
+        -- bones the client FX and the encounter look up: LowerJaw_/Throat_Center_Front,
+        -- LowerJaw_Center_Core, Crown_Center_Core, Belly_Center_Core, Base_* edge ring).
+        -- assets/models/mobs/dungeon bosses/miasma/v3/README.md. The v2 lattice rig stays in
+        -- MobModels as "MiasmaBossEyeRig" (it only plays the v2 ids kept in comments).
+        ModelName = "MiasmaBossJawRig",
         ModelScale = 0.45, -- 0.67 x 0.67 (two 33% cuts) of the authored model; also scales the latch + defeat models
         CeilingLatchModelName = "MiasmaCeilingLatch", -- separate model for the spawn-intro ceiling hang
         DefeatFlatModelName = "MiasmaCeilingLatch",   -- flat puddle rig the defeat sequence swaps to
         InterruptAttackOnHit = false,
     },
     ["MiasmaSlime"] = {
-        Name = "Miasma Slime",
+        Name = "Poisonous Slime",
         Level = 3,
         BaseHP = 150,
         BaseDamage = 24,
@@ -125,15 +137,18 @@ MobData[1] = {
         JumpHeight = 3,
         MovementClass = "Slime",
     },
+    -- The valve's poisoned thorny vine (was "Slime Growth", the PlainsSlime model): it lies over the
+    -- valve and must be hacked through. An HP blob: no attack, no aggro, never knocked back.
     ["MiasmaClog"] = {
-        Name = "Slime Growth",
+        Name = "Poisoned Vine",
         Level = 3,
         BaseHP = 90,
         BaseDamage = 0,
         BaseScore = 0,
         LootPool = "",
         MobID = "MiasmaClog",
-        ModelName = "PlainsSlime",
+        ModelName = "MiasmaVine",       -- ServerStorage.MobModels (assets/models/mobs/dungeon bosses/miasma/vine)
+        KnockbackMultiplier = 0,
         Armor = 0,
         AggroRange = 0,
         ReturnDistance = 0,
@@ -415,6 +430,23 @@ MobData[1]["Kane"] = {
     -- (BaseDamage above), which is what replaced his old proximity/"thorns"
     -- damage: no more taking a hit just for standing next to him.
     Moveset = {
+        -- Fire Tornado (first in the list: the first eligible special wins).
+        -- The Groundbreaker Slam: a 1 s wind-up standing still with a red "!!"
+        -- overhead, the axe hits the ground (slam damage, the ground crumbles),
+        -- then four fire tornadoes spiral out of him (RS/FireTornadoConfig,
+        -- SSS/FireTornadoCast, client/FireTornadoVFX). Tornado damage is per
+        -- tick while inside one.
+        {
+            Id = "FireTornado",
+            Cast = "FireTornado",
+            Animation = "GroundbreakerSlam", -- MobAnimConfig.Kane.Moveset key
+            SlamDamage = 90, -- once, within 8 studs of the impact, before player armor
+            SlamKnockback = 2.5, -- x the baseline player knockback
+            Damage = 40, -- per tornado tick, before player armor
+            TickInterval = 0.5,
+            Cooldown = 18, -- from the end of the slam; the tornadoes then travel 4.5 s
+            FirstDelay = 6, -- not straight away when a fight starts
+        },
         {
             Id = "AxeCombo3Hit", -- MobAnimConfig.Kane.Moveset key
             Damage = 100, -- per connecting swing, before player armor
@@ -453,6 +485,9 @@ MobData[1]["Kane"] = {
     -- so about 0.40s of warning. No cone: IsTargetWithinMeleeReach applies none
     -- to the base attack, so this correctly draws a full ring.
     Telegraph = "KaneSlash",
+    -- Axe sounds (SSS/MobCombatSfx): a whoosh on every swing (ordinary, combo
+    -- impacts, the slam's downswing) and a blade hit only when damage lands.
+    CombatSounds = { Swing = "HeavyWeaponSwing", WeaponHit = "WeaponHitPlayer" },
     MoveSpeed = 10.4, -- was 8; +30% 2026-09-17 so he can actually close distance
     JumpHeight = 0,
     -- Was 0 ("immovable", copied from the MiasmaBoss pattern) -- but Kane is
@@ -480,6 +515,64 @@ MobData[1]["Kane"] = {
     -- of the dedicated top-middle BossHealthBar.client.lua UI, and (b)
     -- attach the orange "named elite" outline Highlight to the model.
     IsNamedElite = true,
+}
+
+-- Miasma's underling (2026-10-10): the poison slime minion. One skinned MeshPart on an 8-bone cage
+-- rig, built, painted and animated by script (assets/models/mobs/dungeon bosses/miasma/underling/,
+-- README there). Three attacks:
+--   * the ordinary swing is the THRUST (body lunges forward, rolls back): MobAnimConfig Attack
+--   * SLAM: hops, slams flat, hits everything around it (full ring, telegraphed)
+--   * SPIT: a ranged cast (SSS/SlimeSpitCast), a poison glob lobbed at a target 10-38 studs away;
+--     poison stacks are applied through SlimeSpitCast.SetHitHandler (the encounter owns poison)
+-- Wired into the Miasma encounter (2026-10-10): phase 1 spawns it, 4 per member at the floor drains.
+MobData[1]["MiasmaUnderling"] = {
+    Name = "Poisonous Slime",
+    Level = 3,
+    BaseHP = 150,
+    BaseDamage = 24,             -- the thrust, before player armor
+    BaseScore = 18,
+    LootPool = "CommonDrop",
+    MobID = "MiasmaUnderling",
+    ModelName = "MiasmaUnderling",
+    Armor = 5,
+    AggroRange = 90,
+    ReturnDistance = 180,
+    AttackRange = 6,             -- the thrust visibly lunges ~2.3 studs past its 2.1-stud body
+    AttackCooldown = 1.4,
+    MoveSpeed = 7,
+    JumpHeight = 0,              -- MUST stay 0, or MobClassRegistry sends it to HoppingMobClass (it crawls)
+    CombatClass = "Moveset",
+    Moveset = {
+        {
+            Id = "Slam",                 -- MobAnimConfig.MiasmaUnderling.Moveset key
+            Damage = 32,
+            SourceDuration = 1.5,        -- the clip: 36 frames at 24 fps
+            HitTimes = { 15 / 24 },      -- lands flat at frame 16
+            HitWindow = 0.2,
+            Cooldown = 7,
+            RangeMultiplier = 1.35,      -- the splat spreads past its ordinary reach
+            -- no HalfAngleDegrees: it hits all the way round
+            Chance = 0.5,                -- in melee range, half the time it slams instead of thrusting
+            FirstDelay = 3,
+            Telegraph = "UnderlingSlam",
+        },
+        {
+            Id = "Spit",
+            Cast = "SlimeSpit",          -- SSS/SlimeSpitCast
+            Animation = "Spit",          -- MobAnimConfig.MiasmaUnderling.Moveset key
+            Ranged = true,               -- offered while chasing, between MinRange and MaxRange (MobMovesetBehaviour)
+            MinRange = 10,
+            MaxRange = 38,
+            Damage = 16,                 -- splash damage, before player armor
+            PoisonStacks = 1,            -- handed to SlimeSpitCast's hit handler
+            SourceDuration = 1.25,       -- the clip: 30 frames
+            ReleaseTime = 14 / 24,       -- the glob leaves the mouth at frame 15
+            SplashRadius = 4,
+            FlightSpeed = 40,            -- studs/s along the ground; flight time clamped 0.35..1.2 s
+            Cooldown = 6,
+            FirstDelay = 1.5,
+        },
+    },
 }
 
 MobData[2]["CaveBatElite"] = {

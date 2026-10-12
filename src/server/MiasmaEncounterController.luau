@@ -29,9 +29,21 @@ local DungeonMobSpawnService = require(ServerScriptService:WaitForChild("Dungeon
 local ZoneService = require(ServerScriptService:WaitForChild("ZoneService"))
 local EncounterSoundtracks = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Sounds"):WaitForChild("EncounterSoundtracks"))
 local TitleCards = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Images"):WaitForChild("TitleCards"))
+local SlimeSpitCast = require(ServerScriptService:WaitForChild("SlimeSpitCast"))
+local Layout = require(ReplicatedStorage:WaitForChild("MiasmaArenaLayout"))
 
 local Controller = {}
 Controller.__index = Controller
+
+-- Live controllers by encounter id: SlimeSpitCast reports a hit by mob and player only, so the
+-- poison it owes is handed to the encounter the slime belongs to (its model's MiasmaEncounterId).
+local controllersById = {}
+SlimeSpitCast.SetHitHandler(function(mob, player, entry)
+	local id = mob and mob.Model and mob.Model:GetAttribute("MiasmaEncounterId")
+	local controller = id and controllersById[id]
+	local stacks = tonumber(entry and entry.PoisonStacks) or 0
+	if controller and not controller.Finished and stacks > 0 then controller.Poison:Add(player, stacks) end
+end)
 
 local function createPart(parent, name, position, size, color, transparency)
 	local part = Instance.new("Part")
@@ -140,6 +152,9 @@ function Controller.new(options)
 	self:_resetStaggerForCycle()
 	self.Poison = PoisonService.new(self.MemberUserIds, self.Event, self.Id)
 	self.Bin:Add(self.Poison)
+	controllersById[self.Id] = self
+	self.Bin:Add(function() if controllersById[self.Id] == self then controllersById[self.Id] = nil end end)
+	self.SkipVotes = {}
 	self.Director = AbilityDirector.new(self)
 	self.Bin:Add(self.Director)
 	self:_createInteractionAnchors()
@@ -266,7 +281,8 @@ function Controller:_createInteractionAnchors()
 	end
 	self:_createValveStations()
 	local sealPos = self.Resolver:Position("ANCHOR_EntranceSeal")
-	self.EntranceSeal = createPart(self.Runtime, "EntranceSealCollision", sealPos, Vector3.new(26, 24, 3), Color3.fromRGB(40, 130, 80), .55)
+	self.EntranceSeal = createPart(self.Runtime, "EntranceSealCollision", sealPos, Vector3.new(26, 24, 3), Color3.fromRGB(70, 72, 70), 0)
+	self.EntranceSeal.Material = Enum.Material.Slate
 	self.EntranceThreshold = createPart(self.Runtime, "EntranceThreshold", self.Resolver:Position("ANCHOR_EntranceThreshold"), Vector3.new(30, 12, 8), Color3.new(), 1)
 	self.EntranceThreshold.CanTouch = true
 	local cistern = self.Resolver:Position("ANCHOR_CisternLiquidPivot")
@@ -333,36 +349,197 @@ function Controller:Start()
 	self.EntranceSeal.Transparency = 1
 	task.spawn(function()
 		self:_awaitBoss()
-		if not self.Finished then
-			self.Bin:Add(self.EntranceThreshold.Touched:Connect(function(hit)
-				local player = Players:GetPlayerFromCharacter(hit.Parent)
-				if player and self.MemberSet[player.UserId] then self:BeginEntranceGrace() end
-			end))
-			task.delay(2, function() if not self.Finished and self.State == Protocol.States.Dormant then self:BeginEntranceGrace() end end)
-		end
+		if not self.Finished then self:_awaitEntry() end
 	end)
 	self.Bin:Add(RunService.Heartbeat:Connect(function(dt) self:_heartbeat(dt) end))
 end
 
-function Controller:BeginEntranceGrace()
-	if self.State ~= Protocol.States.Dormant then return end
-	self:_setState(Protocol.States.EntranceGrace, Config.EntranceGrace)
-	self:_setPhaseMusic(EncounterSoundtracks.MiasmaPhase1) -- phase 1's track, until the drop
-	self:_fire(Protocol.Events.Presentation, { kind = "EntranceGrace", duration = Config.EntranceGrace })
-	local serial = self.StateSerial
-	self:_guardedDelay(Config.EntranceGrace, function() self:_sealAndStartAct1() end, serial)
+-- How far from the arena centre the gate stands (flat). A member closer than this (less the
+-- cutscene's inset) is inside the room.
+function Controller:_gateRadius()
+	local centre = self._arenaCentre or self.Resolver:Position("ANCHOR_Miasma")
+	return flatDistance(self.Resolver:Position("ANCHOR_EntranceSeal"), centre)
 end
 
-function Controller:_sealAndStartAct1()
+-- Waits for the party to walk into the room, then plays the opening. It starts when everyone alive is
+-- past the gate line, or GatherWait seconds after the first member is, so one slow player cannot
+-- hold the run.
+function Controller:_awaitEntry()
+	local cfg = Config.EntranceCutscene
+	local centre = self.Resolver:Position("ANCHOR_Miasma")
+	local insideRadius = self:_gateRadius() - cfg.InsetStuds
+	local firstInsideAt
+	while not self.Finished and self.State == Protocol.States.Dormant do
+		local total, inside = 0, 0
+		self:_forEachMember(function(player)
+			local humanoid, root = humanoidAndRoot(player)
+			if humanoid and root and humanoid.Health > 0 and player:GetAttribute("DungeonSpectating") == nil then
+				total += 1
+				if flatDistance(root.Position, centre) <= insideRadius then inside += 1 end
+			end
+		end)
+		if inside > 0 then firstInsideAt = firstInsideAt or os.clock() end
+		if inside > 0 and (inside >= total or os.clock() - firstInsideAt >= cfg.GatherWait) then
+			self:BeginEntranceCutscene()
+			return
+		end
+		task.wait(.25)
+	end
+end
+
+-- The valve station nearest the entrance: the one the opening shows.
+function Controller:_showcaseStation()
+	local seal = self.Resolver:Position("ANCHOR_EntranceSeal")
+	local best, bestDistance
+	for _, gate in ipairs(self.ValveGates) do
+		local plate = gate.Station and gate.Station:GetAnchor("PlateCentre")
+		if plate then
+			local distance = flatDistance(plate, seal)
+			if not bestDistance or distance < bestDistance then best, bestDistance = gate.Station, distance end
+		end
+	end
+	return best
+end
+
+-- The four poison outfall pipes (one over each gate bay, MiasmaArenaLayout.Outfall): poison pours
+-- from each mouth, high on the wall, down to a pool at the floor. Phase 1's slimes drop out of them.
+-- { index, mouth (the pipe), pool (where the stream lands), dir (flat, from the pool toward the arena centre) }.
+function Controller:_drainSpots()
+	local spots = {}
+	local centre = self.Resolver:Position("ANCHOR_Miasma")
+	for index = 1, 4 do
+		local mouth = self.Resolver:ToWorld(Layout.OutfallMouth(index))
+		local pool = mouth - Vector3.new(0, Layout.Outfall.Drop - .4, 0)
+		local toRoom = Vector3.new(centre.X - pool.X, 0, centre.Z - pool.Z)
+		table.insert(spots, { index = index, mouth = mouth, pool = pool, dir = toRoom.Magnitude > .01 and toRoom.Unit or Vector3.new(0, 0, 1) })
+	end
+	return spots
+end
+
+-- Freezes and shields every living member for the opening. Returns the function that undoes it
+-- (idempotent), which the normal end, a skip and a teardown all call.
+function Controller:_freezeForEntrance()
+	local frozen = {}
+	self:_forEachMember(function(player)
+		local humanoid = humanoidAndRoot(player)
+		if humanoid and humanoid.Health > 0 and player:GetAttribute("MiasmaInvulnerable") ~= true then
+			table.insert(frozen, { player = player, humanoid = humanoid, walk = humanoid.WalkSpeed, jump = humanoid.JumpPower })
+			humanoid.WalkSpeed = 0
+			humanoid.JumpPower = 0
+			player:SetAttribute("MiasmaInvulnerable", true)
+		end
+	end)
+	local released = false
+	local function release()
+		if released then return end
+		released = true
+		for _, entry in ipairs(frozen) do
+			if entry.humanoid.Parent and entry.humanoid.Health > 0 then
+				entry.humanoid.WalkSpeed = entry.walk
+				entry.humanoid.JumpPower = entry.jump
+			end
+			if entry.player.Parent then entry.player:SetAttribute("MiasmaInvulnerable", nil) end
+		end
+	end
+	self.Bin:Add(release)
+	return release
+end
+
+function Controller:BeginEntranceCutscene()
+	if self.State ~= Protocol.States.Dormant then return end
+	local cfg = Config.EntranceCutscene
+	self:_setState(Protocol.States.EntranceGrace, cfg.Duration)
+	self:_setPhaseMusic(EncounterSoundtracks.MiasmaPhase1) -- phase 1's track, until the drop
+	self._unfreezeEntrance = self:_freezeForEntrance()
+	self._entranceActive = true
+	table.clear(self.SkipVotes)
+
+	local station = self:_showcaseStation()
+	local seal = self.Resolver:Position("ANCHOR_EntranceSeal")
+	local times = {}
+	for key, value in pairs(cfg) do
+		if type(value) == "number" then times[key] = value end
+	end
+	-- The drain the camera visits: the pipe nearest the entrance, next to the station shown.
+	local drains, drainShow = self:_drainSpots(), 1
+	for i, spot in ipairs(drains) do
+		if flatDistance(spot.pool, seal) < flatDistance(drains[drainShow].pool, seal) then drainShow = i end
+	end
+	-- The altar nearest the shown station: the opening points out that poison is cleansed there.
+	local altar, altarDistance = self.Resolver:Position("ANCHOR_CleanseAltar_NW"), nil
+	for _, name in ipairs({ "ANCHOR_CleanseAltar_NW", "ANCHOR_CleanseAltar_SE" }) do
+		local position = self.Resolver:Position(name)
+		local reference = station and station:GetAnchor("PlateCentre") or seal
+		local distance = flatDistance(position, reference)
+		if not altarDistance or distance < altarDistance then altar, altarDistance = position, distance end
+	end
+	self:_fire(Protocol.Events.Presentation, {
+		kind = "EntranceCutscene", startsAt = workspace:GetServerTimeNow(), duration = cfg.Duration, times = times,
+		plate = station and station:GetAnchor("PlateCentre") or self.Resolver:Position("ANCHOR_Miasma"),
+		wheel = station and station:GetAnchor("WheelCentre") or self.Resolver:Position("ANCHOR_Miasma"),
+		tablet = station and station.Tablet or nil, plateGlow = station and station.PlateGlow or nil,
+		station = station and station.Model or nil, seal = seal, centre = self.Resolver:Position("ANCHOR_Miasma"),
+		drains = drains, drainShow = drainShow, altar = altar, partySize = self.StartingPartySize,
+	})
+
+	-- The gate: invisible until it starts to move, slides down shut (the client adds the dust and the
+	-- shake), and only blocks at the slam.
+	local serial = self.StateSerial
+	local closed = self.EntranceSeal.Position
+	self._entranceClosed = closed
+	self.EntranceSeal.Position = closed + Vector3.new(0, cfg.GateRise, 0)
+	self:_guardedDelay(cfg.GateStart, function()
+		self.EntranceSeal.Transparency = 0
+		TweenService:Create(self.EntranceSeal, TweenInfo.new(cfg.GateSlam - cfg.GateStart, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Position = closed }):Play()
+	end, serial)
+	self:_guardedDelay(cfg.GateSlam, function() self.EntranceSeal.CanCollide = true end, serial)
+	self:_guardedDelay(cfg.Duration, function() self:_startAct1AfterOpening() end, serial)
+end
+
+-- Hold Space to skip: every living member must be holding it. The vote count goes out to everyone's
+-- prompt; when it is unanimous the opening ends on the spot (gate shut, phase 1 starts).
+function Controller:_voteSkipEntrance(player, held)
+	if not self._entranceActive or self.State ~= Protocol.States.EntranceGrace then return end
+	self.SkipVotes[player.UserId] = held and true or nil
+	local living = self:_livingPlayers()
+	local votes = 0
+	for _, member in ipairs(living) do
+		if self.SkipVotes[member.UserId] then votes += 1 end
+	end
+	self:_fire(Protocol.Events.Presentation, { kind = "EntranceSkipVotes", votes = votes, needed = #living })
+	if #living > 0 and votes >= #living then self:_skipEntrance() end
+end
+
+function Controller:_skipEntrance()
+	if not self._entranceActive then return end
+	self.StateSerial += 1 -- cancels the opening's pending steps (the gate tween, the slam, the normal end)
+	local seal = self.EntranceSeal
+	seal.Position = self._entranceClosed or seal.Position
+	seal.Transparency = 0
+	self:_fire(Protocol.Events.Presentation, { kind = "EntranceCutsceneSkipped" })
+	self:_startAct1AfterOpening()
+end
+
+-- The opening is over (it ran out, or everyone skipped it): the gate is shut behind the party,
+-- everyone is released, and phase 1 starts at once. Nobody is moved, except a straggler still outside
+-- the gate line (frozen where they stood), who is stepped just inside it.
+function Controller:_startAct1AfterOpening()
+	if not self._entranceActive then return end
+	self._entranceActive = false
+	if self._unfreezeEntrance then self._unfreezeEntrance() end
 	local living = self:_livingPlayers()
 	if #living == 0 then self:Fail("PartyWipe") return end
-	local gather = self.Resolver:Position("ANCHOR_PartyGather")
-	for i, player in ipairs(living) do
+	local centre = self.Resolver:Position("ANCHOR_Miasma")
+	local gateRadius = self:_gateRadius()
+	for _, player in ipairs(living) do
 		local _, root = humanoidAndRoot(player)
-		if root then root.CFrame = CFrame.new(gather + Vector3.new((i - 1) * 4, 3, 0)) end
+		if root and flatDistance(root.Position, centre) > gateRadius - 1 then
+			local out = Vector3.new(root.Position.X - centre.X, 0, root.Position.Z - centre.Z)
+			local inside = centre + out.Unit * (gateRadius - 8)
+			root.CFrame = CFrame.new(inside.X, root.Position.Y, inside.Z)
+		end
 	end
 	self.EntranceSeal.CanCollide = true
-	self.EntranceSeal.Transparency = .35
 	self:_enableAltars(true)
 	self:BeginAct1()
 end
@@ -528,11 +705,17 @@ function Controller:_updateBodyContact()
 			local flat = Vector3.new(offset.X, 0, offset.Z)
 			local above = playerRoot.Position.Y - (root.Position.Y - height * .5)
 			if flat.Magnitude < radius + 1 and above > -3 and above < height and now - (self._contactAt[player] or 0) >= cfg.ContactCooldown then
-				self._contactAt[player] = now
-				-- Deeper in = harder out, so walking into it repeatedly never works.
-				local depth = math.clamp(1 - flat.Magnitude / radius, 0, 1)
-				shovePlayer(playerRoot, flat, cfg.ContactShoveSpeed * (1 + depth), cfg.ContactShoveSeconds, 6)
-				if (cfg.ContactPoisonStacks or 0) > 0 then self.Poison:Add(player, cfg.ContactPoisonStacks) end
+				-- Touching the surface is free (no shove, see Config.Melee); only a player
+				-- genuinely inside the solid is eased back out to its edge, flat (no hop).
+				local inside = flat.Magnitude < radius - (cfg.InsideEjectDepth or .5)
+				if inside then
+					self._contactAt[player] = now
+					shovePlayer(playerRoot, flat, cfg.InsideEjectSpeed or 24, cfg.ContactShoveSeconds)
+				end
+				if (cfg.ContactPoisonStacks or 0) > 0 then
+					self._contactAt[player] = now
+					self.Poison:Add(player, cfg.ContactPoisonStacks)
+				end
 			end
 		end
 	end
@@ -559,14 +742,48 @@ function Controller:_telegraph(kind, position, radius, duration, _color)
 	self:_fire(Protocol.Events.Telegraph, { kind = kind, position = position, radius = radius, duration = duration })
 end
 
+-- One poisonous slime in this encounter at `position`, with an optional spawn intro (invulnerable
+-- and still) while it plops out of a drain.
+function Controller:_spawnSlime(position, introSeconds)
+	local mob = self:_spawnMob(self.SlimeSpawner, "MiasmaUnderling", position, false)
+	if mob and mob.Model then
+		mob.Model:SetAttribute("MiasmaEncounterId", self.Id)
+		if introSeconds and introSeconds > 0 and mob.SetSpawnIntroState then
+			mob:SetSpawnIntroState(true)
+			task.delay(introSeconds, function()
+				if mob.SetSpawnIntroState and mob:IsAlive() then mob:SetSpawnIntroState(false) end
+			end)
+		end
+	end
+	return mob
+end
+
+-- Phase 1's opening wave: every outfall pipe drops one poisonous slime per party member down its
+-- poison stream (4 members = 16), so the party is outnumbered from the first second. Clients draw the
+-- fall (Presentation "SlimeDrop"); the real slimes appear in the pool as it ends, stunned for a moment.
+local SLIME_FALL_SECONDS = 1.1
+function Controller:_spawnDrainWave()
+	local spots = self:_drainSpots()
+	self:_fire(Protocol.Events.Presentation, {
+		kind = "SlimeDrop", fall = SLIME_FALL_SECONDS, perDrain = self.StartingPartySize, drains = spots,
+	})
+	local serial = self.StateSerial
+	self:_guardedDelay(SLIME_FALL_SECONDS, function()
+		for _, spot in ipairs(spots) do
+			local side = spot.dir:Cross(Vector3.yAxis)
+			for member = 1, self.StartingPartySize do
+				local offset = spot.dir * (2 + (member - 1) % 3 * 1.4) + side * (((member - 1) % 5) - 2) * 1.5
+				self:_spawnSlime(spot.pool + offset + Vector3.new(0, 1.5, 0), 1.4)
+			end
+		end
+	end, serial)
+end
+
 function Controller:_spawnSlimeLanding(position)
 	self:_telegraph("SlimeLanding", position, 5, Config.SlimeLandingWarning, Color3.fromRGB(95, 220, 60))
 	task.delay(Config.SlimeLandingWarning, function()
 		if self.Finished or (self.State ~= Protocol.States.Act1Survival and self.State ~= Protocol.States.Act1Cleanup) then return end
-		local mob = self:_spawnMob(self.SlimeSpawner, "MiasmaSlime", position + Vector3.new(0, 16, 0), false)
-		if mob and mob.Model then
-			mob.Model:SetAttribute("MiasmaEncounterId", self.Id)
-		end
+		self:_spawnSlime(position + Vector3.new(0, 16, 0))
 		self:_damageNear(position, 5, Config.Damage.SlimeLanding, 1, 16)
 	end)
 end
@@ -670,8 +887,8 @@ end
 
 function Controller:BeginAct1()
 	self:_setState(Protocol.States.Act1Survival, Config.Act1Duration)
-	self.SlimeSpawner = self:_newEncounterSpawner("MiasmaSlime", Math.SlimeLivingCap(self.StartingPartySize))
-	self:_spawnAct1Wave(self.StartingPartySize)
+	self.SlimeSpawner = self:_newEncounterSpawner("MiasmaUnderling", Math.SlimeLivingCap(self.StartingPartySize))
+	self:_spawnDrainWave()
 	local serial = self.StateSerial
 	task.spawn(function()
 		local elapsed, nextWave, nextVolley = 0, Config.Act1InitialWaveDelay, 7
@@ -921,9 +1138,19 @@ function Controller:_createValveStations()
 		fire = function(eventName, payload, player) self:_fire(eventName, payload, player) end,
 		isEligible = function(player) return player ~= nil and self.MemberSet[player.UserId] == true end,
 		canOperate = function() return not self.Finished and self.State == Protocol.States.Act2Puzzle end,
-		spawnClog = function(position)
+		spawnClog = function(position, gate)
 			if not self.ClogSpawner then return nil end
-			return self:_spawnMob(self.ClogSpawner, "MiasmaClog", position, true)
+			local mob = self:_spawnMob(self.ClogSpawner, "MiasmaClog", position, true)
+			if mob and mob.Model then
+				-- A poisoned vine lying along the valve's wall, each one turned a little differently.
+				local frame = gate and gate.Station and gate.Station:GetFrame()
+				local _, stationYaw = (frame or CFrame.identity):ToOrientation()
+				local yaw = stationYaw + (math.random() - .5) * 1.4
+				pcall(function()
+					mob.Model:PivotTo(CFrame.new(mob.Model:GetPivot().Position) * CFrame.Angles(0, yaw, 0))
+				end)
+			end
+			return mob
 		end,
 		onPrimed = function(gate) self:_onGatePrimed(gate) end,
 	}
@@ -1099,16 +1326,11 @@ function Controller:BeginPurge()
 	self:_cancelAbility()
 	self:_setState(Protocol.States.CycleResetWarning, Config.Gates.PurgeWarningDuration + Config.Gates.RecoveryDuration)
 	for index = 1, 4 do self.ValveGates[index]:ReleaseOperator("Purge") end
-	local safe = self.Resolver:SafeAreaPositions()
-	for _, position in ipairs(safe) do self:_telegraph("PurgeSafe", position, Config.Arena.SafeAreaRadius, Config.Gates.PurgeWarningDuration, Color3.fromRGB(90,220,220)) end
-	self:_fire(Protocol.Events.Presentation, { kind = "PurgeWarning", duration = Config.Gates.PurgeWarningDuration, safeAreas = safe })
+	-- The flood's safe zones were removed (2026-10-10): until that mechanic is designed, a purge only
+	-- seizes the valves and resets the cycle, with no damage and no poison.
+	self:_fire(Protocol.Events.Presentation, { kind = "PurgeWarning", duration = Config.Gates.PurgeWarningDuration })
 	local serial = self.StateSerial
 	self:_guardedDelay(Config.Gates.PurgeWarningDuration, function()
-		for _, player in ipairs(self:_livingPlayers()) do
-			local _, root = humanoidAndRoot(player); local protected = false
-			for _, position in ipairs(safe) do if root and flatDistance(root.Position, position) <= Config.Arena.SafeAreaRadius then protected = true break end end
-			if not protected then DamageService.ApplyToPlayer(player, Config.Damage.Purge, { Kind = "MiasmaPurge" }, nil, true); self.Poison:Add(player, 2) end
-		end
 		self:_clearGateCycle()
 		self:_guardedDelay(Config.Gates.RecoveryDuration, function() self:BeginGateCycle() end)
 	end, serial)
@@ -1275,6 +1497,8 @@ end
 function Controller:CastSubmerge()
 	if not self.Boss then return end
 	local abilitySerial=self:_startAbility(); self.Boss:SetEncounterControlled(true); self.Boss:SetEncounterLocked(true,true); self.Boss:PlayEncounterAnimation("Submerge",false)
+	local sinkAt = self.Boss.GetPosition and self.Boss:GetPosition()
+	if sinkAt then DamageService.PlayEffectAt("MiasmaSubmerge", sinkAt, 300) end
 	local pools={}; local track=self:_abilityTiming(Config.Abilities.Submerge.TrackTime); local start=os.clock()
 	while self.AbilitySerial == abilitySerial and os.clock()-start<track do
 		-- Hide the body only once the submerge clip has finished sinking it (clip is 1.2s).
@@ -1283,17 +1507,61 @@ function Controller:CastSubmerge()
 		task.wait(.1)
 	end
 	if self.Finished or self.AbilitySerial ~= abilitySerial then return end
-	local warning=self:_abilityTiming(Config.Abilities.Submerge.EruptionWarning)
-	for _,position in pairs(pools) do self:_telegraph("SubmergePool",position,Config.Abilities.Submerge.Radius,warning,Color3.fromRGB(90,20,120)) end
+	local cfg = Config.Abilities.Submerge
+	local warning = self:_abilityTiming(cfg.EruptionWarning)
+	local impact = cfg.EruptSlamImpact or .5
+	-- The circles warn right up to the slam (the clip's burst + rear come first).
+	for _,position in pairs(pools) do self:_telegraph("SubmergePool",position,cfg.Radius,warning + impact,Color3.fromRGB(90,20,120)) end
+	-- Still hidden: move under the target's circle, so it erupts and slams THERE.
+	local slamAt = self:_moveUnderEruption(pools)
 	task.wait(warning)
 	if self.Finished or self.AbilitySerial ~= abilitySerial then return end
-	for _,position in pairs(pools) do self:_damageNear(position,Config.Abilities.Submerge.Radius,Config.Abilities.Submerge.RawDamage,2,18) end
-	self.Boss:SetEncounterVisible(true); self.Boss:PlayEncounterAnimation("Emerge",false)
-	-- Hold the boss (locked, invulnerable) through the whole 1.2s emerge clip so the AI can't
-	-- start chasing/attacking and cut it off; only then hand control back.
-	task.wait(Config.Abilities.Submerge.EmergeClipSeconds)
+	self.Boss:SetEncounterVisible(true); self.Boss:PlayEncounterAnimation("EruptSlam", false, 0)
+	task.wait(impact)
+	if self.Finished or self.AbilitySerial ~= abilitySerial then return end
+	for _,position in pairs(pools) do self:_damageNear(position,cfg.Radius,cfg.RawDamage,2,18) end
+	local bossPosition = self.Boss.GetPosition and self.Boss:GetPosition()
+	self:_fire(Protocol.Events.Presentation, {
+		kind = "EruptSlam", position = slamAt or bossPosition,
+		radius = self:_bossLandingVisualRadius(),
+		boss = self.Boss and self.Boss.Model, -- so the client's floor check skips the body
+	})
+	-- Hold the boss (locked, invulnerable) through the rest of the clip so the AI can't start
+	-- chasing/attacking and cut it off; only then hand control back.
+	task.wait(math.max(0, (cfg.EruptClipSeconds or 1.3) - impact))
 	if self.Finished or self.AbilitySerial ~= abilitySerial or not self.Boss then return end
 	self.Boss:SetEncounterControlled(false); self.Boss:SetEncounterLocked(false,false); self._abilityLocked=false
+end
+
+-- The submerge move's eruption point: the circle of the player Miasma is after (its threat
+-- target, Controller:_pickTarget), else any other circle, skipping protected spots (valves,
+-- altars). Moves the HIDDEN boss there, facing the arena centre, and returns the spot; nil
+-- (it stays where it sank) when every circle is protected.
+function Controller:_moveUnderEruption(pools)
+	local boss = self.Boss
+	local model = boss and boss.Model
+	local root = model and model.PrimaryPart
+	if not root then return nil end
+	local order, players = {}, {}
+	for player in pairs(pools) do table.insert(players, player) end
+	local first = self:_pickTarget(players)
+	if first then table.insert(order, first) end
+	for _, player in ipairs(players) do
+		if player ~= first then table.insert(order, player) end
+	end
+	for _, player in ipairs(order) do
+		local spot = pools[player]
+		if spot and not self.Resolver:IsProtected(spot) then
+			local groundY = boss:FindGroundY(spot.X, spot.Z, root.Position.Y)
+			local at = Vector3.new(spot.X, groundY + (boss._feetToRootHeight or 0), spot.Z)
+			local centre = self.Resolver:Position("ANCHOR_Miasma")
+			local look = Vector3.new(centre.X - at.X, 0, centre.Z - at.Z)
+			local facing = look.Magnitude > 1 and CFrame.lookAt(at, at + look) or CFrame.new(at) * root.CFrame.Rotation
+			model:PivotTo(facing)
+			return Vector3.new(spot.X, groundY, spot.Z)
+		end
+	end
+	return nil
 end
 
 function Controller:_spawnSacks(threshold)
@@ -1581,7 +1849,8 @@ function Controller:_heartbeat(dt)
 	self:_guardedUpdate("shroud", self._updateShroud, self, dt or 0)
 	self:_guardedUpdate("bodyContact", self._updateBodyContact, self)
 	local now = workspace:GetServerTimeNow()
-	if self.State == Protocol.States.Act1Survival or self.State == Protocol.States.Act1Cleanup then self:_updateSlimeProjectiles(now) end
+	-- (The encounter's own slime lob, _updateSlimeProjectiles, is retired: the poisonous slime spits for itself,
+	-- SlimeSpitCast, and its hits are handed to the poison service above.)
 	local endsAt = self.StateModel:GetAttribute(Protocol.Attributes.StateEndsAt) or 0
 	if self.State == Protocol.States.Act1Survival and endsAt > now then
 		local remaining = math.clamp((endsAt - now) / Config.Act1Duration, 0, 1)
@@ -1678,6 +1947,13 @@ function Controller:_finish(outcome, reason, presentation)
 	self.Shroud = nil
 	self:_safeStep("bossBars", self._clearBossBars, self)
 	self:_safeStep("playerLocks", self._releasePlayerLocks, self)
+	-- The heartbeat stops at Finished, so the invisible body collider would stay solid where Miasma
+	-- stood (blocking the clear show's ring area and catching dropped items). Remove it.
+	self:_safeStep("bodyCollider", function()
+		local collider = self._bodyCollider
+		self._bodyCollider = nil
+		if collider then collider.CanCollide = false; collider:Destroy() end
+	end)
 	self:_safeStep("presentation", self._fire, self, Protocol.Events.Presentation, presentation)
 end
 
@@ -1695,6 +1971,8 @@ function Controller:HandleRequest(player, request, payload)
 		for _, altar in ipairs(self.Altars) do altar:Cancel(player) end
 	elseif request==Protocol.Requests.CancelValve then
 		self:CancelValve(player,"Cancelled")
+	elseif request==Protocol.Requests.SkipEntrance then
+		self:_voteSkipEntrance(player, payload == true)
 	elseif request==Protocol.Requests.MazeSample and type(payload)=="table" then
 		local gate = ValveGate.FindByOperator(self.ValveGates, player)
 		if gate and self.State == Protocol.States.Act2Puzzle then gate:HandleSample(player, payload) end

@@ -223,11 +223,11 @@ function ProfileTypes.DefaultProfile()
 			cooldownUntil = 0,  -- os.time() when teleport cooldown expires
 		},
 
-		-- PvP alignment. Players default to Lawful; changing it triggers a 5-minute cooldown
-		-- (enforced server-side in ProfileService.SetAlignment).
+		-- PvP alignment (RS/AlignmentConfig). Players default to Lawful; changed in a safe zone
+		-- (ProfileService.SetAlignment); dying Neutral/Chaotic forces Lawful for a while.
 		alignment = {
 			current       = "Lawful",  -- "Lawful" | "Neutral" | "Chaotic"
-			cooldownUntil = 0,         -- os.time() epoch; while now < this, no change allowed
+			cooldownUntil = 0,         -- os.time() epoch; while now < this, only Lawful is allowed (the death lock)
 		},
 
 		-- Treasure chest: 9×6 slots; `chestUnlockedRows` rows are usable (rest locked until purchased).

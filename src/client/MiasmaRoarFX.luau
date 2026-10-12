@@ -252,7 +252,7 @@ local function playRoarOnce(id)
 	local sound = Instance.new("Sound")
 	sound.Name = "MiasmaRoar"
 	sound.SoundId = id
-	sound.SoundGroup = SfxService.GetEffectsGroup() -- Master x Effects sliders
+	sound.SoundGroup = SfxService.GetGroupFor("MiasmaRoar") -- Master x Creatures
 	sound.Parent = SoundService
 	local done = false
 	local function cleanup()

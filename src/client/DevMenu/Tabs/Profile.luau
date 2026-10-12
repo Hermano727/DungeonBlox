@@ -1,8 +1,9 @@
 --[[
-	DevProfileTab -- the F8 dev panel's PROFILE tab (DevClient mode "Profile").
+	Profile (was DevProfileTab) -- the F8 dev menu's PROFILE tab (DevMenu, group Player).
 
 	Set your own Combat / Mining / Fishing level exactly (0 XP into it, saved to the profile),
-	and refill Health / Energy / Hunger, all via the admin-gated DevProfileAction remote
+	refill Health / Energy / Hunger, and bypass / clear the alignment death lock, all via the
+	admin-gated DevProfileAction remote
 	(ProfileBootstrap). Every button acts on its own; DevClient hides its shared confirm button
 	on this tab. Lives outside DevClient because that script is at Luau's 200-locals limit.
 
@@ -10,11 +11,13 @@
 	ctx: parent, y, w, h, lbl, mkB, mkI (DevClient's UI helpers), acc, gold, status(msg, isErr).
 ]]
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local SkillXPShared = require(ReplicatedStorage:WaitForChild("SkillXPShared"))
 
-local DevProfileTab = {}
+local DevProfileTab = { key = "Profile", label = "Profile", group = "Player" }
+local player = Players.LocalPlayer
 
 local SKILLS = {
 	{ key = "Combat", branch = "combat" },
@@ -144,6 +147,26 @@ function DevProfileTab.Build(ctx)
 	end
 	stepBtn.Activated:Connect(jump)
 	stepBox.FocusLost:Connect(function(enter) if enter then jump() end end)
+
+	-- Alignment: dying Neutral/Chaotic locks you to Lawful for 2 / 5 min (RS/AlignmentConfig).
+	-- Bypass skips that lock for this session (you're still reset to Lawful); Clear lifts a
+	-- lock you already have.
+	local y6 = y5 + 100
+	lbl(sec, "ALIGNMENT DEATH LOCK", 12, y6, 240, 16, 11, ctx.acc, true)
+	local bypassBtn = mkB(sec, "", 12, y6 + 20, half, 32)
+	local function showBypass()
+		local on = player:GetAttribute("DevAlignmentLockBypass") == true
+		bypassBtn.Text = on and "Lock: BYPASSED" or "Lock: ON"
+		bypassBtn.BackgroundColor3 = on and Color3.fromRGB(40, 100, 60) or Color3.fromRGB(80, 70, 60)
+	end
+	showBypass()
+	player:GetAttributeChangedSignal("DevAlignmentLockBypass"):Connect(showBypass)
+	bypassBtn.Activated:Connect(function()
+		local on = player:GetAttribute("DevAlignmentLockBypass") ~= true
+		act("alignmentLockBypass", { on = on }, on and "Death lock bypassed (this session)" or "Death lock back on")
+	end)
+	local clearLockBtn = mkB(sec, "Clear lock now", 12 + half + 8, y6 + 20, half, 32, Color3.fromRGB(60, 80, 110))
+	clearLockBtn.Activated:Connect(function() act("alignmentLockClear", nil, "Alignment lock cleared") end)
 
 	return sec
 end

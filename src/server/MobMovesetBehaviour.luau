@@ -51,11 +51,33 @@
 	one (off cooldown, in reach, passes its Chance roll) wins, so order the
 	array from most situational to most generic.
 
+	CASTS: an entry with `Cast = "<name>"` is not a clip with hit frames but a
+	handler from CASTS below (e.g. SSS/FireTornadoCast). It has no animation
+	requirement: the mob stands still for handler.Duration(entry) seconds while
+	handler.Update runs, and the handler owns its own damage. Dying or
+	despawning mid-cast calls handler.Finish so it can cancel.
+
+		{
+			Id = "FireTornado",      -- label only for casts
+			Cast = "FireTornado",    -- key in CASTS
+			Damage = 40,             -- whatever the handler reads
+			Cooldown = 18,
+			FirstDelay = 6,          -- optional, any entry: not offered until this
+			                         -- many seconds after the mob first gets a chance
+		}
+
 	NOTE: specials are started from the base class's Attacking state, which
 	requires the mob to already be within its ordinary AttackRange. A
 	RangeMultiplier above 1 therefore widens where a running special can still
-	CONNECT, not where it can open. A true "lunge from out of range" opener
-	would need its own entry point in the state machine.
+	CONNECT, not where it can open.
+
+	RANGED specials (2026-10-10, first user: the Miasma underling's spit) are the
+	exception: an entry with `Ranged = true` is never picked in melee range, and is
+	offered instead while the mob CHASES its target (Walking state), when the
+	target is between MinRange and MaxRange (flat studs) with a clear line of
+	sight. The mob turns to face it and starts the special in place.
+
+		{ Id = "Spit", Cast = "SlimeSpit", Ranged = true, MinRange = 10, MaxRange = 38, ... }
 ]]
 
 local ServerScriptService = game:GetService("ServerScriptService")
@@ -63,8 +85,19 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local MobAnimController = require(ServerScriptService:WaitForChild("MobAnimController"))
 local DamageService = require(ServerScriptService:WaitForChild("DamageService"))
 local MobTelegraph = require(ServerScriptService:WaitForChild("MobTelegraph"))
+local MobCombatSfx = require(ServerScriptService:WaitForChild("MobCombatSfx"))
+
+-- Cast handlers by name (see CASTS in the header).
+local CASTS = {
+	FireTornado = require(ServerScriptService:WaitForChild("FireTornadoCast")),
+	SlimeSpit = require(ServerScriptService:WaitForChild("SlimeSpitCast")),
+}
 
 local MobMovesetBehaviour = {}
+
+-- Read-only view for the dev animation showcase (SSS/AnimationShowcase), so a new cast shows up
+-- there with no second list to edit.
+MobMovesetBehaviour.Casts = CASTS
 
 -- One extended class per base class, built on demand and reused. Without the
 -- cache every spawn would mint a fresh class table for the same base.
@@ -113,17 +146,7 @@ function MobMovesetBehaviour.Extend(baseClass)
 		end
 		local halfAngle = entry.HalfAngleDegrees
 		if not halfAngle then return true end
-		local root = self.Model and self.Model.PrimaryPart
-		local character = targetHumanoid.Parent
-		local targetRoot = character and character:FindFirstChild("HumanoidRootPart")
-		if not root or not targetRoot then return false end
-		local offset = targetRoot.Position - root.Position
-		local horizontal = Vector3.new(offset.X, 0, offset.Z)
-		if horizontal.Magnitude < 0.05 then return true end
-		local look = root.CFrame.LookVector
-		local forward = Vector3.new(look.X, 0, look.Z)
-		if forward.Magnitude < 0.05 then return false end
-		return forward.Unit:Dot(horizontal.Unit) >= math.cos(math.rad(halfAngle))
+		return self:IsTargetInFrontCone(targetHumanoid, halfAngle)
 	end
 
 	-- First eligible special, or nil to fall through to the ordinary swing.
@@ -133,7 +156,11 @@ function MobMovesetBehaviour.Extend(baseClass)
 		local now = tick()
 		self._movesetReadyAt = self._movesetReadyAt or {}
 		for index, entry in ipairs(entries) do
-			if now >= (self._movesetReadyAt[index] or 0)
+			if self._movesetReadyAt[index] == nil and entry.FirstDelay then
+				self._movesetReadyAt[index] = now + entry.FirstDelay
+			end
+			if not entry.Ranged
+				and now >= (self._movesetReadyAt[index] or 0)
 				and self:IsTargetWithinMovesetReach(targetHumanoid, entry)
 				and ((entry.Chance or 1) >= 1 or math.random() < entry.Chance)
 			then
@@ -144,6 +171,29 @@ function MobMovesetBehaviour.Extend(baseClass)
 	end
 
 	function class:StartMoveset(entry, index)
+		if entry.Cast then
+			local handler = CASTS[entry.Cast]
+			if not handler then
+				warn("[MobMovesetBehaviour] unknown Cast " .. tostring(entry.Cast))
+				return false
+			end
+			local state = handler.Begin(self, entry)
+			if not state then return false end
+			local duration = handler.Duration(entry)
+			-- Stands still for the channel: UpdateAI stops stepping while _moveset
+			-- is set, and this stops the legs.
+			MobAnimController.setWalking(self, false)
+			self._moveset = {
+				entry = entry,
+				index = index,
+				cast = handler,
+				castState = state,
+				deadline = tick() + duration + 0.5,
+			}
+			self._attackLockedUntil = tick() + duration
+			return true
+		end
+
 		local track = MobAnimController.getMovesetTrack(self, entry.Id)
 		-- Length stays 0 until the asset loads. Never run a special off an
 		-- unloaded clip -- the mob would stand there dealing invisible hits.
@@ -186,6 +236,15 @@ function MobMovesetBehaviour.Extend(baseClass)
 			MobTelegraph.Begin(self, entry.Telegraph, offsets,
 				MobTelegraph.ReachFor(self, entry.RangeMultiplier), entry.HalfAngleDegrees)
 		end
+
+		-- A swing whoosh before each impact (armed mobs, MobData CombatSounds), same timebase as
+		-- the telegraph above; silent once this special is over (interrupt, death).
+		local started = self._moveset
+		for _, hitTime in ipairs(entry.HitTimes or {}) do
+			MobCombatSfx.SwingIn(self, (hitTime * started.timeScale) / speed, function()
+				return self._moveset == started
+			end)
+		end
 		return true
 	end
 
@@ -202,7 +261,9 @@ function MobMovesetBehaviour.Extend(baseClass)
 		-- Make the ordinary swing wait a full AttackCooldown after a special,
 		-- so a combo never ends with an instant free hit.
 		self.LastAttackTime = tick()
-		if active.track.IsPlaying then
+		if active.cast then
+			active.cast.Finish(self, active.castState)
+		elseif active.track.IsPlaying then
 			active.track:Stop(0.1)
 		end
 	end
@@ -211,6 +272,12 @@ function MobMovesetBehaviour.Extend(baseClass)
 	function class:UpdateMoveset(players)
 		local active = self._moveset
 		if not active then return end
+		if active.cast then
+			if active.cast.Update(self, active.castState) or tick() >= active.deadline then
+				self:FinishMoveset()
+			end
+			return
+		end
 		if not active.track.IsPlaying or tick() >= active.deadline then
 			self:FinishMoveset()
 			return
@@ -231,7 +298,8 @@ function MobMovesetBehaviour.Extend(baseClass)
 					local character = player.Character
 					local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 					if self:IsTargetWithinMovesetReach(humanoid, entry) and player.Character == character then
-						DamageService.ApplyToPlayer(player, entry.Damage or self.Stats.BaseDamage, self)
+						local dealt = DamageService.ApplyToPlayer(player, entry.Damage or self.Stats.BaseDamage, self)
+						MobCombatSfx.WeaponHit(self, player, dealt)
 						-- No PlayerKnockbackMultiplier on the entry means each impact
 						-- shoves exactly as hard as this mob's ordinary swing.
 						self:ApplyPlayerHitstun(character, entry.PlayerKnockbackMultiplier)
@@ -239,6 +307,43 @@ function MobMovesetBehaviour.Extend(baseClass)
 				end
 			end
 		end
+	end
+
+	-- Ranged specials (Ranged = true): offered while chasing, from MinRange to MaxRange with a
+	-- clear line of sight. Returns true if one started.
+	function class:TryRangedMoveset()
+		if self.AIState ~= "Walking" then return false end
+		local entries = movesetEntries(self)
+		local player = self.TargetPlayer
+		local character = player and player.Character
+		local targetRoot = character and character:FindFirstChild("HumanoidRootPart")
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		local root = self.Model and self.Model.PrimaryPart
+		if not entries or not targetRoot or not root or not humanoid or humanoid.Health <= 0 then return false end
+		local offset = targetRoot.Position - root.Position
+		local distance = Vector3.new(offset.X, 0, offset.Z).Magnitude
+		local now = tick()
+		self._movesetReadyAt = self._movesetReadyAt or {}
+		for index, entry in ipairs(entries) do
+			if entry.Ranged then
+				if self._movesetReadyAt[index] == nil and entry.FirstDelay then
+					self._movesetReadyAt[index] = now + entry.FirstDelay
+				end
+				if now >= (self._movesetReadyAt[index] or 0)
+					and distance >= (entry.MinRange or 0) and distance <= (entry.MaxRange or 30)
+					and ((entry.Chance or 1) >= 1 or math.random() < entry.Chance)
+				then
+					local params = RaycastParams.new()
+					params.FilterType = Enum.RaycastFilterType.Exclude
+					params.FilterDescendantsInstances = { self.Model, character }
+					if not workspace:Raycast(root.Position, offset, params) then
+						self:FaceToward(targetRoot.Position)
+						if self:StartMoveset(entry, index) then return true end
+					end
+				end
+			end
+		end
+		return false
 	end
 
 	-- Called by the base attack state once in range and facing the target.
@@ -265,6 +370,9 @@ function MobMovesetBehaviour.Extend(baseClass)
 		if self._moveset then
 			-- Committed to this facing and position until the clip ends, so
 			-- stepping behind the mob mid-special dodges the rest of it.
+			return
+		end
+		if self:TryRangedMoveset() then
 			return
 		end
 		return baseClass.UpdateAI(self, deltaTime, players, activeMobs)

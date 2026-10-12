@@ -54,10 +54,19 @@ end
 --[[
     Drops[MobID] = {
         Tier, Level          -- what the gear generates as (the elite's own level)
-        Pool = { entry, ... } -- each rolls its own DropChance
+        OneDrop              optional { EquivalentRarity }: ONE roll per kill at that DropChance,
+                             a hit drops exactly ONE entry picked by its Weight (default 1), so
+                             never two pieces from one kill. Without it each entry rolls its
+                             own DropChance independently.
+        Pool = { entry, ... }
 
     entry fields:
-        Key                  unique id for logs/debugging
+        Key                  unique id for logs/debugging (and the item's provenance stamp)
+        Mythic               optional: a RS/MythicItemDefs key. The piece is then a Mythic built
+                             by MythicItemBuilder from that def (its BaseStatsAs and guaranteed
+                             SubStats); only Key (+ Weight / EquivalentRarity for the drop) is
+                             read here. Kane's set works this way.
+        Weight               OneDrop only: relative pick weight (default 1)
         DisplayName          optional; overrides the generated name
         Kind                 "Weapon" | "Armor"
         WeaponType/ArmorSlot passed straight to ItemGenerator
@@ -75,71 +84,33 @@ NamedEliteLootDefs.Drops = {
     Kane = {
         Tier  = 1,
         Level = 12, -- Kane's own level; base stats scale off it as usual
+        -- Kane's Mythic set (2026-10-09), built from RS/MythicItemDefs: Rare base stats; the waraxe
+        -- guarantees fire damage 4-6, critical 3-4, vs. Players 5-8; the armour and the shield
+        -- guarantee str + vit + block (T1 3-4%).
+        -- ONE roll per kill at the Rare-equivalent chance (T1 1/32); a hit drops exactly one piece:
+        -- the waraxe 1/3 (weight 5 of 15), one of the five armour pieces 2/3 (weight 2 each).
+        OneDrop = { EquivalentRarity = "Rare" },
         Pool = {
-            {
-                Key              = "KaneAxe",
-                DisplayName      = "Kane's Axe",
-                Kind             = "Weapon",
-                WeaponType       = "Axe",
-                EquivalentRarity = "Rare",
-                SubStats = {
-                    { id = "critical", min = 6, max = 9 },
-                    { id = "elemDmg",  min = 3, max = 5 }, -- the "fire damage" roll
-                    { id = "vsMon",    min = 5, max = 8 },
-                },
-            },
-            -- Armor: Helm/Chest/Legs/Boots only. Kane drops no shield, so no
-            -- entry rolls dmgRed/HPs (those are shield-exclusive anyway).
-            {
-                Key              = "KaneHelm",
-                DisplayName      = "Kane's Helm",
-                Kind             = "Armor",
-                ArmorSlot        = "Helm",
-                EquivalentRarity = "Rare",
-                SubStats = {
-                    { id = "str",   highRollStandard = true },
-                    { id = "vit",   highRollStandard = true },
-                    { id = "block", min = 2, max = 4 },
-                },
-            },
-            {
-                Key              = "KaneChest",
-                DisplayName      = "Kane's Chestplate",
-                Kind             = "Armor",
-                ArmorSlot        = "Chest",
-                EquivalentRarity = "Rare",
-                SubStats = {
-                    { id = "str",   highRollStandard = true },
-                    { id = "vit",   highRollStandard = true },
-                    { id = "block", min = 2, max = 4 },
-                },
-            },
-            {
-                Key              = "KaneLegs",
-                DisplayName      = "Kane's Greaves",
-                Kind             = "Armor",
-                ArmorSlot        = "Legs",
-                EquivalentRarity = "Rare",
-                SubStats = {
-                    { id = "str",   highRollStandard = true },
-                    { id = "vit",   highRollStandard = true },
-                    { id = "block", min = 2, max = 4 },
-                },
-            },
-            {
-                Key              = "KaneBoots",
-                DisplayName      = "Kane's Sabatons",
-                Kind             = "Armor",
-                ArmorSlot        = "Boots",
-                EquivalentRarity = "Rare",
-                SubStats = {
-                    { id = "str",   highRollStandard = true },
-                    { id = "vit",   highRollStandard = true },
-                    { id = "block", min = 2, max = 4 },
-                },
-            },
+            { Key = "KaneForsakenWaraxe",    Mythic = "KaneForsakenWaraxe",    Weight = 5 },
+            { Key = "KaneTatteredScarf",     Mythic = "KaneTatteredScarf",     Weight = 2 },
+            { Key = "KaneBattlewornTunic",   Mythic = "KaneBattlewornTunic",   Weight = 2 },
+            { Key = "KaneRaiderTrousers",    Mythic = "KaneRaiderTrousers",    Weight = 2 },
+            { Key = "KaneWarTornBoots",      Mythic = "KaneWarTornBoots",      Weight = 2 },
+            { Key = "KaneSplinteredBulwark", Mythic = "KaneSplinteredBulwark", Weight = 2 },
         },
     },
+}
+
+-- Pieces that no longer drop but may still sit in inventories: their provenance key (origin.d)
+-- must keep resolving to the authored substat windows they rolled in, or a substat rebalance
+-- (ItemStatRanges) would clamp them to the generic tier window. Kane's first set (high-roll Rare,
+-- replaced by his Mythic set 2026-10-09).
+NamedEliteLootDefs.Retired = {
+    KaneAxe   = { SubStats = { { id = "critical", min = 6, max = 9 }, { id = "elemDmg", min = 3, max = 5 }, { id = "vsMon", min = 5, max = 8 } } },
+    KaneHelm  = { SubStats = { { id = "str", highRollStandard = true }, { id = "vit", highRollStandard = true }, { id = "block", min = 2, max = 4 } } },
+    KaneChest = { SubStats = { { id = "str", highRollStandard = true }, { id = "vit", highRollStandard = true }, { id = "block", min = 2, max = 4 } } },
+    KaneLegs  = { SubStats = { { id = "str", highRollStandard = true }, { id = "vit", highRollStandard = true }, { id = "block", min = 2, max = 4 } } },
+    KaneBoots = { SubStats = { { id = "str", highRollStandard = true }, { id = "vit", highRollStandard = true }, { id = "block", min = 2, max = 4 } } },
 }
 
 function NamedEliteLootDefs.GetDrops(mobId)

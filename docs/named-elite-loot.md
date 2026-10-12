@@ -6,7 +6,7 @@ aliases: [High Roll Equivalent, Elite Gear]
 
 # Named Elite Loot
 
-Signature gear dropped by named elites (`MobData` `IsNamedElite`). This is **not** the dungeon Mythic system — see the comparison at the bottom.
+Signature gear dropped by named elites (`MobData` `IsNamedElite`). The drop side (a flat chance, world loot for the killer) is this system; the piece itself is either built here ("high roll <rarity> equivalent", below) or, with a `Mythic` key on the pool entry, built as a Mythic from `RS/MythicItemDefs`. Kane's set is Mythic since 2026-10-09. See the comparison with the dungeon Mythic path at the bottom.
 
 | Piece | Where |
 |---|---|
@@ -14,12 +14,32 @@ Signature gear dropped by named elites (`MobData` `IsNamedElite`). This is **not
 | Roll + build + drop | `SSS/NamedEliteLootService` |
 | Hook | `LootService.onMobDied`, after the Mythic roll |
 | Base-stat "high roll" | `ItemGenerator` `options.highRoll` |
+| Mythic pieces (`Mythic` key on an entry) | `RS/MythicItemDefs` + `SSS/MythicItemBuilder.Build` |
+
+## Mythic pieces from a named elite (Kane's set)
+
+Kane's def has `OneDrop = { EquivalentRarity = "Rare" }`: **one** roll per kill at 1/32 (T1 Rare chance), and a hit drops **exactly one** piece picked by `Weight`: the waraxe 1/3 (5 of 15), one of the five armour pieces 2/3 (2 each, so 2/15 apiece). Never two pieces from one kill. A pool entry like `{ Key = "KaneForsakenWaraxe", Mythic = "KaneForsakenWaraxe", Weight = 5 }` is then built by `NamedEliteLootService.BuildItem`, which hands it to `MythicItemBuilder.Build(entry.Mythic)`, the same factory the dungeon bosses use:
+
+- base stats roll as an ordinary item of the def's `BaseStatsAs` rarity (Kane: Rare, T1, level 12), anywhere in the Rare range, **not** high-rolled;
+- the def's `SubStats` are guaranteed, nothing random on top: an authored `{ min, max }`, or `useStandardRoll` for the registry's own tier window;
+- rarity shows as `Mythic`.
+
+| Kane's set (`MythicItemDefs`) | Slot | Guaranteed substats |
+|---|---|---|
+| Kane's Forsaken Waraxe | Axe | fire (`elemDmg`) 4-6, critical 3-4%, vs. Players 5-8% |
+| Kane's Tattered Scarf | Helm | str, vit (standard Rare T1 roll), block 3-4% |
+| Kane's Battleworn Tunic | Chest | same as the scarf |
+| Kane's Raider Trousers | Legs | same |
+| Kane's War-torn Boots | Boots | same |
+| Kane's Splintered Bulwark | Shield | same (base stats roll as a Rare shield: HP, HP/s, damage reduction) |
+
+The Axe's 1.10 weapon multiplier on `elemDmg` floors back to the same 4 / 5 / 6. Block comes from `ARMOR_BONUS_EFFECTS.block.ranges` (T1-T3 3-4, T4 4-5, T5 4-6). New named-elite Mythics: a def in `MythicItemDefs` (with a `SourceMobID`, NOT in its `DropTable`, which is the dungeon path) plus a pool entry with `Mythic` here. Every one shows up in the F8 Mythic tab.
 
 ## Terminology: "high roll <rarity> equivalent gear"
 
 An item generated at a **real rarity**, at that rarity's **maximum base-stat roll**, then scaled by level as usual.
 
-Worked through with Kane's axe — a **high roll Rare equivalent**, T1, level 12:
+Worked through with Kane's first axe (retired 2026-10-09 for his Mythic set) — a **high roll Rare equivalent**, T1, level 12:
 
 1. **Rare T1 weapon damage** is `min = {11,12}`, `max = {12,13}` (`ItemConfig.WEAPON_DMG_RANGES`). An ordinary Rare rolls anywhere inside those.
 2. **High roll takes the top of each**: min becomes `12`, max becomes `13`. Never 11.
@@ -49,7 +69,7 @@ chance = 1 / ceil(BASE_CHANCE_DENOMINATOR[tier] * RARITY_DENOMINATOR_MULT[rarity
 
 The multiplier grows the **denominator**, so better gear is rarer. Rounding is always **up**, so a multiplier can only ever make a drop rarer, never (through rounding) more common.
 
-**Every pool entry rolls independently.** The table above really is "the chance to get that drop" — an elite with five authored items is not splitting one roll five ways. Kane's five pieces at 1/32 each work out to roughly a 15% chance of at least one piece per kill.
+**Every pool entry rolls independently.** The table above really is "the chance to get that drop" — an elite with five authored items is not splitting one roll five ways. (A def with `OneDrop` is the exception: one roll for the whole set, one piece at most. Kane's set works that way.)
 
 Drops land on the ground as world loot for the killing player only, like ordinary overworld gear.
 
@@ -77,7 +97,7 @@ It reads the **modern** `ProfileService` profile, not the legacy `PlayerDataMana
 | Where | Overworld | Instanced dungeon |
 | Who gets it | The killing player | Every player alive at boss death |
 | Delivery | World-loot orb on the ground | Straight to inventory, shown in the run summary |
-| Rarity | Real rarities, high-rolled | `Mythic`, above Legendary |
+| Rarity | Real rarities, high-rolled; or `Mythic` via a `Mythic` key (Kane) | `Mythic`, above Legendary |
 | Gated by | Flat per-item chance (elite spawn is what the pity feeds) | Flat chance per player |
 
 Both are deliberately flat-chance with no loot pity. The pity in the named-elite loop is on the elite **spawning** (see [Mob & NPC System](./mob-and-npc-system.md)), not on its drops.
@@ -104,4 +124,4 @@ Two consequences worth knowing:
 
 ## Drop provenance
 
-Each dropped template is stamped by `ItemIdentity` at drop time with `origin.d = entry.Key` (`"KaneAxe"`, `"KaneChest"`, ...). That is not cosmetic: `ItemStatRanges` reads it to resolve this piece's **authored** substat window instead of the generic per-tier one. Kane's Axe rolls 6-9% critical where the generic T1 window is 2-3, so without the def key a substat rebalance sweep would clamp every named-elite drop down to the generic maximum. See [Item Identity & Substat Ranges](./item-identity-and-ranges.md).
+Each dropped template is stamped by `ItemIdentity` at drop time with `origin.d = entry.Key` (`"KaneForsakenWaraxe"`, ...; a Mythic entry's Key equals its `MythicItemDefs` key, which is how its windows resolve). That is not cosmetic: `ItemStatRanges` reads it to resolve this piece's **authored** substat window instead of the generic per-tier one. Kane's Axe rolls 6-9% critical where the generic T1 window is 2-3, so without the def key a substat rebalance sweep would clamp every named-elite drop down to the generic maximum. Keys that no longer drop but may still be owned (Kane's first set: `KaneAxe`, `KaneHelm`, `KaneChest`, `KaneLegs`, `KaneBoots`) stay resolvable through `NamedEliteLootDefs.Retired`; retire a key there instead of deleting it. See [Item Identity & Substat Ranges](./item-identity-and-ranges.md).

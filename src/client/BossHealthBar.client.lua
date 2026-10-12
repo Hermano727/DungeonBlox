@@ -14,7 +14,8 @@
 
     Reads the same server-authoritative attributes MobManager.server.lua
     already broadcasts every Heartbeat for the bottom-stack bar:
-      EliteActive, EliteCurrentHealth, EliteMaxHealth, CurrentEliteMobId
+      EliteActive, EliteCurrentHealth, EliteMaxHealth, EliteBarMobId (the bar's own copy of
+      the mob id, written only by MobManager; CurrentEliteMobId is shared with ZoneService)
     (CurrentEliteMobId is kept pointed at the REAL active mob's own MobID
     while EliteActive is true, not just whichever id the current zone is
     configured for -- see MobManager.server.lua's OnHeartbeat comment).
@@ -492,7 +493,9 @@ local function refresh()
         maxHp = 1
     end
 
-    local mobId = player:GetAttribute("CurrentEliteMobId")
+    -- EliteBarMobId, not CurrentEliteMobId: ZoneService rewrites that one every tick (see
+    -- MobManager), which made the name flicker.
+    local mobId = player:GetAttribute("EliteBarMobId")
     local name = "Elite"
     if type(mobId) == "string" and mobId ~= "" then
         local stats = MobData.FindMobById(mobId)
@@ -602,7 +605,7 @@ task.defer(refreshStagger)
 player:GetAttributeChangedSignal("EliteActive"):Connect(refresh)
 player:GetAttributeChangedSignal("EliteCurrentHealth"):Connect(refresh)
 player:GetAttributeChangedSignal("EliteMaxHealth"):Connect(refresh)
-player:GetAttributeChangedSignal("CurrentEliteMobId"):Connect(refresh)
+player:GetAttributeChangedSignal("EliteBarMobId"):Connect(refresh)
 task.defer(refresh)
 
 print("[BossHealthBar] ready")

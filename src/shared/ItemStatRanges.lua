@@ -55,10 +55,14 @@ local function buildAuthoredIndex()
 	local index = {}
 	for _, drops in pairs(NamedEliteLootDefs.Drops or {}) do
 		for _, entry in ipairs(drops.Pool or {}) do
-			if type(entry.Key) == "string" then
+			-- A Mythic entry carries no SubStats here: its key resolves through MythicItemDefs below.
+			if type(entry.Key) == "string" and entry.SubStats then
 				index[entry.Key] = entry.SubStats
 			end
 		end
+	end
+	for key, retired in pairs(NamedEliteLootDefs.Retired or {}) do
+		index[key] = retired.SubStats
 	end
 	for key, def in pairs(MythicItemDefs.Items or {}) do
 		if type(key) == "string" then

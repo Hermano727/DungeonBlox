@@ -234,6 +234,23 @@ local function findVisualPrefab(prefabName)
 	return prefab
 end
 
+-- Clients can't read ServerStorage, so the display prefabs are mirrored once into
+-- ReplicatedStorage.<LootDropVisuals.REPLICA_FOLDER> for client-built loot visuals (the dungeon
+-- clear sequence's relics). Studio still owns the originals; this copy is runtime-only.
+task.spawn(function()
+	local source = ServerStorage:WaitForChild("LootDropVisuals", 30)
+	if not source or ReplicatedStorage:FindFirstChild(LootDropVisuals.REPLICA_FOLDER) then return end
+	local replica = source:Clone()
+	replica.Name = LootDropVisuals.REPLICA_FOLDER
+	for _, d in ipairs(replica:GetDescendants()) do
+		if d:IsA("BasePart") then
+			d.Anchored = true
+			d.CanCollide, d.CanTouch, d.CanQuery = false, false, false
+		end
+	end
+	replica.Parent = ReplicatedStorage
+end)
+
 -- Looks up whether this drop has a registered custom visual, matching it to
 -- the SAME identity WorldLootService.SpawnMobDrop already uses per kind.
 local function resolveVisualEntry(kind, dropSpec)
@@ -242,30 +259,7 @@ local function resolveVisualEntry(kind, dropSpec)
 	elseif kind == "item_id" then
 		return LootDropVisuals.GetForItemId(dropSpec.itemId)
 	elseif kind == "item_template" then
-		local template = dropSpec.template
-		local entry = LootDropVisuals.GetForGearTemplate(template)
-		if entry or type(template) ~= "table" then
-			return entry
-		end
-		-- Catalog gear (TrainingBoots, ...) carries an itemId but no slot tag, so the
-		-- tag lookup misses it; fall back to its slot (equipSlot, then the catalog Slot).
-		local def = type(template.itemId) == "string" and ItemDefinitions.Get(template.itemId) or nil
-		for _, slot in ipairs({ template.equipSlot, def and def.Slot }) do
-			if type(slot) == "string" and LootDropVisuals.ByGearTag[slot] then
-				return LootDropVisuals.ByGearTag[slot]
-			end
-		end
-		-- Catalog weapons (the Training Sword) have neither a weapon-kind tag nor a slot the
-		-- table knows ("Weapon"): find their kind by the tool prefab they hold
-		-- (ItemConfig.WEAPON_DROP_PREFAB_BY_TYPE, e.g. Sword -> TrainingSword).
-		local prefab = template.toolPrefabName or (def and def.ToolPrefabName)
-		if type(prefab) == "string" then
-			for kind, kindPrefab in pairs(ItemConfig.WEAPON_DROP_PREFAB_BY_TYPE) do
-				if kindPrefab == prefab and LootDropVisuals.ByGearTag[kind] then
-					return LootDropVisuals.ByGearTag[kind]
-				end
-			end
-		end
+		return LootDropVisuals.ResolveForTemplate(dropSpec.template)
 	end
 	return nil
 end

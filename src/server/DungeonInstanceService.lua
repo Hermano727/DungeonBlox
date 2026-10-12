@@ -38,6 +38,15 @@ local DungeonProfile      = require(ServerScriptService:WaitForChild("ProfileSer
 local HearthstoneService  = require(ServerScriptService:WaitForChild("HearthstoneService"))
 local InventoryAudit      = require(ServerScriptService:WaitForChild("InventoryAudit"))
 local StatusCleanse       = require(ServerScriptService:WaitForChild("StatusCleanse"))
+local ClearConfig         = require(ReplicatedStorage:WaitForChild("DungeonClearConfig"))
+
+-- Loaded at boot (protected: a failure here must never take this service, or ProfileBootstrap
+-- that requires it, down with it) so its remotes -- DungeonClearSequence, MythicBroadcast --
+-- exist before any client could miss the first fire.
+task.spawn(function()
+	local ok, err = pcall(require, ServerScriptService:WaitForChild("DungeonClearSequence", 10))
+	if not ok then warn("[DungeonInstanceService] DungeonClearSequence failed to load: " .. tostring(err)) end
+end)
 
 local ensureFolder         = RemoteUtils.EnsureFolder
 local ensureRemoteEvent    = RemoteUtils.EnsureRemoteEvent
@@ -74,7 +83,7 @@ local finishInstance
 
 -- Miasma: how long the party can stay (loot, regroup) after the kill before being sent home,
 -- and the pause after a party wipe before everyone respawns at their hearthstone.
-local MIASMA_EXIT_SECONDS = 15 -- ~4.6s of it is the Dungeon Complete banner
+local MIASMA_EXIT_SECONDS = 15 -- floor; a clear runs the sequence's length + ClearConfig.LEAVE_WINDOW
 local MIASMA_WIPE_BEAT_SECONDS = 2
 
 ----------------------------------------------------------------------
@@ -333,10 +342,28 @@ end
 -- goes and every debuff / effect is wiped (SSS/StatusCleanse). A new dungeon type or exit
 -- path gets this for free as long as it removes members through removePlayerFromInstance
 -- or finishInstance; nothing dungeon-specific has to remember its own cleanup.
+-- Miasma is dead: every member still INSIDE the run is cleansed (the same StatusCleanse the F8
+-- dev button and every dungeon exit use) and healed to full. "Inside" is checked three ways so a
+-- member who died in the fight and left (or anyone who is gone, spectating or dead) gets nothing:
+-- still in instance.members, still flagged InDungeon (releaseMember clears it) and still mapped
+-- to this instance. They can't walk off and have it waiting for them.
+local function restorePartyAfterClear(instance)
+	for _, plr in ipairs(DungeonInstanceService.GetLiveMembers(instance)) do
+		if plr:GetAttribute("InDungeon") and playerToInstance[plr.UserId] == instance.instanceId then
+			StatusCleanse.All(plr, "DungeonCleared") -- not "DungeonEnded": the clear show still plays
+			local humanoid = plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
+			if humanoid and humanoid.Health > 0 then humanoid.Health = humanoid.MaxHealth end
+		end
+	end
+end
+
 local function releaseMember(player, reason)
 	if not player then return end
 	player:SetAttribute("InDungeon", nil)
 	StatusCleanse.All(player, reason)
+	-- Any encounter-layer music the run pushed (the clear sequence's victory layer) stops here.
+	local okZone, ZoneService = pcall(require, ServerScriptService:WaitForChild("ZoneService", 2))
+	if okZone and ZoneService and ZoneService.SetEncounterMusic then pcall(ZoneService.SetEncounterMusic, player, "") end
 end
 
 -- Puts a still-connected member back at their hearthstone BEFORE their realm is destroyed.
@@ -560,25 +587,45 @@ local function launchDungeon(instance)
 				spawnerHandle = instance.spawnerHandle,
 				runLevel = instance.runLevel,
 				onFinished = function(outcome, reason)
-					-- Cleared: cash everyone out NOW (the summary shows the moment Miasma dies)
-					-- and start the exit countdown with its Leave Now button; when it runs out
-					-- the instance finishes and anyone left is sent home. Failed (party wipe):
-					-- a short beat on the last death, then everyone respawns at home.
-					local delaySeconds = outcome == "cleared" and MIASMA_EXIT_SECONDS or MIASMA_WIPE_BEAT_SECONDS
-					if outcome == "cleared" then
+					-- Cleared: the clear sequence (SSS/DungeonClearSequence) cashes everyone out
+					-- NOW (drops granted at once, summaries held until the show ends), plays the
+					-- in-world show, and the exit countdown with its Leave Now button runs over
+					-- the show plus a short window; when it runs out the instance finishes and
+					-- anyone left is sent home. Failed (party wipe): a short beat on the last
+					-- death, then everyone respawns at home.
+					if outcome ~= "cleared" then
+						task.delay(MIASMA_WIPE_BEAT_SECONDS, function()
+							if activeInstances[instance.instanceId] == instance then finishInstance(instance, outcome, reason) end
+						end)
+						return
+					end
+					local okRestore, errRestore = pcall(restorePartyAfterClear, instance)
+					if not okRestore then warn("[DungeonInstanceService] party restore failed: " .. tostring(errRestore)) end
+					task.spawn(function()
+						local delaySeconds = MIASMA_EXIT_SECONDS
+						local okSeq, ClearSequence = pcall(require, ServerScriptService:WaitForChild("DungeonClearSequence", 5))
+						local okPlay, endsAt = false, nil
+						if okSeq and ClearSequence then okPlay, endsAt = pcall(ClearSequence.Play, instance) end
+						if okPlay and type(endsAt) == "number" then
+							delaySeconds = math.max(MIASMA_EXIT_SECONDS, endsAt - Workspace:GetServerTimeNow() + ClearConfig.LEAVE_WINDOW)
+						else
+							-- The show failed: never strand the loot. Cash out the old way.
+							warn("[DungeonInstanceService] clear sequence failed, plain cash-out: " .. tostring(endsAt or ClearSequence))
+						end
 						local okRun, runSvc = pcall(require, ServerScriptService:WaitForChild("DungeonRunService", 5))
 						local present = {}
 						for uid in pairs(instance.members) do
 							local plr = Players:GetPlayerByUserId(uid)
 							if plr then
 								table.insert(present, plr)
+								-- A no-op for anyone the sequence already cashed out.
 								if okRun and runSvc and runSvc.EndRunFor then pcall(runSvc.EndRunFor, plr, "cleared") end
 							end
 						end
 						if okRun and runSvc and runSvc.ShowExitCountdown then pcall(runSvc.ShowExitCountdown, present, delaySeconds) end
-					end
-					task.delay(delaySeconds, function()
-						if activeInstances[instance.instanceId] == instance then finishInstance(instance, outcome, reason) end
+						task.delay(delaySeconds, function()
+							if activeInstances[instance.instanceId] == instance then finishInstance(instance, outcome, reason) end
+						end)
 					end)
 				end,
 			})
@@ -1045,6 +1092,25 @@ end
 
 function DungeonInstanceService.IsSpectating(player)
 	return isSpectating(player)
+end
+
+-- The IN_PROGRESS instance `player` belongs to, or nil outside a run. Server-only: LootService's
+-- Mythic roll (who is eligible) and the clear sequence (its Judgement log) key off it.
+function DungeonInstanceService.GetInstanceForPlayer(player)
+	local instanceId = player and playerToInstance[player.UserId]
+	local instance = instanceId and activeInstances[instanceId]
+	if instance and instance.state == DungeonTypes.State.IN_PROGRESS then return instance end
+	return nil
+end
+
+-- The members still in the fight: connected, in the instance, not spectating (dead).
+function DungeonInstanceService.GetLiveMembers(instance)
+	local live = {}
+	for _, uid in ipairs(instance and instance.memberUserIds or {}) do
+		local plr = Players:GetPlayerByUserId(uid)
+		if plr and instance.members[uid] and not isSpectating(plr) then table.insert(live, plr) end
+	end
+	return live
 end
 
 return DungeonInstanceService

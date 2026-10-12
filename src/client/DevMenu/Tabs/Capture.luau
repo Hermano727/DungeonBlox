@@ -1,5 +1,5 @@
 --[[
-	DevCaptureMode -- the F8 dev panel's CAPTURE tab (DevClient mode "Capture"), dev-only.
+	Capture (was DevCaptureMode) -- the F8 dev menu's CAPTURE tab (DevMenu, group Media), dev-only.
 
 	A clean, cinematic camera for recording marketing clips (TikTok / Shorts / Reels):
 	  - Hides every ScreenGui and the Roblox core UI (HudHider), the crosshair and the cursor.
@@ -29,11 +29,11 @@ local ContextActionService = game:GetService("ContextActionService")
 local TweenService = game:GetService("TweenService")
 
 local CameraOverrideState = require(ReplicatedStorage:WaitForChild("CameraOverrideState"))
-local HudHider = require(script.Parent:WaitForChild("HudHider"))
+local HudHider = require(script:FindFirstAncestorWhichIsA("PlayerScripts"):WaitForChild("HudHider"))
 
 local player = Players.LocalPlayer
 
-local DevCaptureMode = {}
+local DevCaptureMode = { key = "Capture", label = "Capture", group = "Media" }
 
 local MODES = { "Free", "Orbit", "Follow" }
 local KEY_MODE = Enum.KeyCode.G
@@ -353,6 +353,15 @@ function DevCaptureMode.Build(ctx)
 	end)
 
 	return sec
+end
+
+-- DevMenu asks every tab on F8: while capturing, F8 ends capture (and leaves the menu closed).
+function DevCaptureMode.InterceptToggle()
+	if DevCaptureMode.IsActive() then
+		DevCaptureMode.Stop()
+		return true
+	end
+	return false
 end
 
 return DevCaptureMode

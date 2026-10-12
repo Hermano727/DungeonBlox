@@ -4,7 +4,7 @@ In-game developer tools: what each one does, how it's gated, where its code live
 
 ## Who can use them
 
-**Add or remove devs in `RS/DevRoster.IDS` only.** Everything else reads from it: `DevClient`, `DevService`, `DayNightService`, `UIDevTool`, and `HearthstoneConfig.ADMIN_IDS`, which is just `DevRoster.IDS`. Hand-copying the list is how it drifted before (DevClient's copy was empty, so F8 silently did nothing on live servers).
+**Add or remove devs in `RS/DevRoster.IDS` only.** Everything else reads from it: `DevMenu`, `DevService`, `DayNightService`, `UIDevTool`, and `HearthstoneConfig.ADMIN_IDS`, which is just `DevRoster.IDS`. Hand-copying the list is how it drifted before (the old F8 client's copy was empty, so F8 silently did nothing on live servers).
 
 `DevRoster.IsDev(player)` is true for anyone on the list **and for everyone in a Studio session**. So local testing never needs a roster edit, and everyone in Team Create counts as a dev.
 
@@ -16,7 +16,7 @@ All binds live in `RS/KeybindConfig`, except the dungeon-run keys.
 
 | Key | Tool | Script | Gate |
 |---|---|---|---|
-| **F8** | DevPlacer (main dev panel) | `client/DevClient.client.lua` | DevRoster |
+| **F8** | Dev menu (main dev panel) | `client/DevMenu` | DevRoster |
 | **F7** | Hearthstone Dev Panel | `client/HearthstoneDevMenu.client.lua` | ADMIN_IDS (= DevRoster) |
 | **F10** | Item Grant menu | `client/ItemGrantDevMenu.client.lua` | ADMIN_IDS (= DevRoster) |
 | **F6** | UIDevTool (UI art / armor weld nudging) | `client/UIDevTool.client.lua` | DevRoster |
@@ -27,17 +27,37 @@ All binds live in `RS/KeybindConfig`, except the dungeon-run keys.
 
 ---
 
-## F8: DevPlacer
+## F8: the dev menu
 
-The main dev panel. It's a left-docked panel with a row of mode tabs, a section for the active tab, one shared confirm button, and a **Managed Spawners** list.
+The main dev panel: a large Journal-styled window (about 90% of the screen, book-cover frame).
+- **Header:** the active tab's group and name, **Hide tabs**, and **X**.
+- **Tab list:** one row per group (World / Items / Player / Media), the group's name then its chips; a group that outgrows its row wraps under itself. **Hide tabs** folds the whole list away to give the body the room.
+- **Body:** the active tab, with a **Managed** list column on the right for tabs that place things.
+- **Footer:** the status line and the tab's action button.
 
-- **Client:** `client/DevClient.client.lua` (the whole UI, input handling, and zone drawing)
-- **Server:** `server/DevService.server.lua` (creates the `GameEvents/Dev*` remotes and validates every request)
+- **Client:** `client/DevMenu` (a folder; see *Architecture* below)
+- **Server:** `server/DevService.server.lua` (creates the `GameEvents/Dev*` remotes and validates every request), `server/AnimationShowcase.server.luau` (the Showcase tab)
 - **Persistence:** `MobDevSpawnStore`, `NpcDevSpawnStore`, `ZoneDevStore`, all built on `DevStoreListBase` (one DataStore key per place: `place_<PlaceId>`)
 
-### Tabs
+### Architecture (2026-10-08, was one 1,700-line DevClient)
 
-The tab row is data-driven. Add a `{ key, label, color, colorOff }` entry to `MODES` and the buttons lay out and wrap on their own. `immediate = true` means the tab's button fires right away instead of entering click-to-place.
+| Module | Owns |
+|---|---|
+| `DevMenu` (init.client) | open/close, the free cursor and right-mouse look, Hide Panel (explore), fly bookkeeping, placement state, tab switching, and routing F8 / Esc / F / world clicks / zone keys to the active tab. The tab contract is documented at the top of this file. |
+| `Shell` | the window: header, grouped collapsible tab list, body host, Managed column, footer, and the floating help strip shown while drawing or flying |
+| `Ui` | colours, fonts (`UIFonts`), Journal art (`applyArt`), `lbl` / `mkB` / `mkI` / `section` |
+| `Placement` | the placement ghost, the aim point, fly physics |
+| `SpawnerList` | the Managed column (rows, zone editors, your position) |
+| `Lists` | mob / elite / NPC catalogues reflected off the game data (`MOB_ID_WHITELIST` lives here) |
+| `TabList` | which tabs exist, in order |
+| `Tabs/<Name>` | one module per tab |
+
+**Adding a tab:** a module in `Tabs/` returning `{ key, label, group, Build(ctx) }`, then add its name to `TabList`.
+- **Optional hooks:** `ActionLabel` / `OnAction` for the footer button, and `listType` for the Managed column.
+- **Click-to-place tabs:** set `places = true` and use `SetupGhost` / `OnAim` / `OnWorldClick` / `OnKey`.
+- No other file changes. The window groups and lays the new tab out itself.
+
+### Tabs
 
 | Tab | Kind | What it does |
 |---|---|---|
@@ -48,12 +68,14 @@ The tab row is data-driven. Add a `{ key, label, color, colorOff }` entry to `MO
 | **TIME** | immediate | Sets the day/night clock by hour/minute or a preset (Dawn/Noon/Dusk/Midnight). Setting a time pauses the auto cycle; **Resume Auto Cycle** restarts it. |
 | **GEAR** | immediate | Rolls procedural gear through `ItemGenerator` (the same engine mob drops use): kind (Random/Weapon/Armor), subtype, level, rarity, substat count, count (1-20), and **Force Substat** -- pin a substat to an exact value (`critical @ 100` for a guaranteed-crit test weapon), or **+** it onto a list to pin several at once (crit AND lifesteal AND block). |
 | **ITEMS** | immediate | An icon grid of every entry in `ItemDefinitions.Items`. Set a quantity and click an icon to grant it. |
-| **MYTHIC** | immediate | Grants the real hand-authored mythic from `MythicItemDefs` with its fixed substats, not a random roll labeled Mythic. |
-| **PROFILE** | immediate | Sets your Combat / Mining / Fishing level exactly and refills HP / energy / hunger (`client/DevProfileTab`). |
-| **MAP** | immediate | **Reset My Map** (click twice): forgets your discovered regions and explored ground, then re-discovers the region you're in, which replays the discovery banner and peek (`client/DevMapTab`, `MinimapDevAction`). See [World Map & Minimap](./minimap.md). |
+| **MYTHIC** | immediate | Grants the real hand-authored mythic from `MythicItemDefs` with its fixed substats, not a random roll labeled Mythic. Also holds the **Boss Mythic roll** button (Normal / Force win / Force loss), shared with the Dungeon tab (`DevMenu/MythicForce`). |
+| **DUNGEON** | immediate | The **Boss Mythic roll** button; **extra clear drops** (queue items of a chosen rarity, Common to Legendary, for YOUR next clear); and **fake party members** (up to 3 stand-ins that join your next clear as extra braziers, each with its own drops and Mythic outcome), so the show can be tested alone. Extras are auto-scrapped like real drops (T1/T2 scrap Common and Uncommon: queue Rare or better to see the ring). See *Dungeon drop queue* below. |
+| **PROFILE** | immediate | Sets your Combat / Mining / Fishing level exactly and refills HP / energy / hunger (`DevMenu/Tabs/Profile`). Alignment death lock: **Lock: ON / BYPASSED** skips the 2 / 5 min lock after dying Neutral/Chaotic for this session (you're still reset to Lawful; `DevAlignmentLockBypass` attribute), **Clear lock now** lifts a current one. |
+| **MAP** | immediate | **Reset My Map** (click twice): forgets your discovered regions and explored ground, then re-discovers the region you're in, which replays the discovery banner and peek (`DevMenu/Tabs/Map`, `MinimapDevAction`). See [World Map & Minimap](./minimap.md). |
 | **CAPTURE** | immediate | **Capture mode** for recording clips: a clean screen and a cinematic camera. See *Capture mode* below. |
+| **SHOWCASE** | immediate | The **animation showcase**: every mob with a model on its own pedestal, every registered clip and cast playable on repeat. See *Animation showcase* below. |
 
-**Capture mode** (`client/DevCaptureMode`, the CAPTURE tab):
+**Capture mode** (`DevMenu/Tabs/Capture`, the CAPTURE tab):
 - **Screen:** hides every ScreenGui and the Roblox core UI (`HudHider`), plus the crosshair and cursor, and shows your own character fully (first person hides your accessories and face locally).
 - **G cycles the camera:**
   - FREE: fly anywhere, smoothed. WASD, Q / E down / up, Shift fast, Ctrl slow; your character stays put.
@@ -61,9 +83,20 @@ The tab row is data-driven. Add a `{ key, label, color, colorOff }` entry to `MO
   - FOLLOW: a smooth third-person camera while you play normally.
 - **Other keys:** **H** slow motion (every ParticleEmitter at 0.3x), **[ ]** field of view, scroll = fly speed (FREE) or distance (ORBIT / FOLLOW).
 - **On screen:** the key help shows for 3.5 s, then the screen is clean.
-- **Exiting:** **F8 exits** (DevClient routes F8 to it while it's on), and everything is restored: camera handed back facing the same way, FOV, HUD, cursor, particle speeds, your character's local transparency.
+- **Exiting:** **F8 exits** (the Capture tab's `InterceptToggle` takes F8 while it's on), and everything is restored: camera handed back facing the same way, FOV, HUD, cursor, particle speeds, your character's local transparency.
 
-**MOB only lists fully modeled mobs.** `MOB_ID_WHITELIST` in `DevClient` (currently `PlainsSlime`, `SmallSkeleton`) filters the placement list. `MobData` isn't changed, and existing spawners still use every MobID. Add a mob to the whitelist once it has a real model.
+### Dungeon drop queue
+
+`SSS/DevRunDrops`, reached through the `DevDungeonDrops` remote (DevService is only the door). Built so it cannot affect real play:
+- **Server-only state:** the queue is a local table in that module. No attribute, profile field or remote reply carries it except the dev's own "what is queued" readout.
+- **DevRoster re-checked on every entry point** (Add / Clear / List / Take). A non-dev, or someone removed from the roster, can neither queue nor receive anything, and a non-dev's queue is dropped.
+- **Consumed in one place:** `DungeonRunService.EndRunFor`, for the player being cashed out, on a `cleared` run only. The extras are appended AFTER the real roll: `LootPityService`, the dry streaks, `summary.rarities` (the Journal's luck stats) and the score never see them.
+- **Stamped as dev items:** granted with `ItemIdentity.SOURCE.DEV_TOOL` / `src = "dev_run_drop"`, so they are separable in the durable item serial. Mythic is excluded: it has its own path (the Boss Mythic roll / Mythic tab).
+- The queue persists until a clear consumes it or **Clear queue** (it dies with the session).
+
+**Fake party members** (`SSS/DevFakeParty`, `DevFakeParty` remote): same gating. A fake is a name, a list of drops and a Mythic outcome (real odds / always wins / always loses). `DungeonClearSequence.Play` adds each fake of every DevRoster member of the instance as one more member (userId far above any real one), so they get a brazier, their drops join the Reliquary Ring, and they are a stop on every Mythic relic hop (rolled through `MythicItemBuilder.TryRollForMob` on a COPY of the mythic log). They have no Player or profile: nothing is granted, saved or scrapped into a bag, `LootPityService` never sees them, and `MythicBroadcast` skips them. Unlike the drop queue, a fake's loadout persists across clears until removed.
+
+**MOB only lists fully modeled mobs.** `MOB_ID_WHITELIST` in `DevMenu/Lists` (currently `PlainsSlime`, `SmallSkeleton`) filters the placement list. `MobData` isn't changed, and existing spawners still use every MobID. Add a mob to the whitelist once it has a real model.
 
 **MOB and ELITE are deliberately separate.** A named elite is a single server-wide world event with a boss bar and its own soundtrack, not a camp you place a radius spawner for. They used to share the MOB tab, where "Force Spawn Elite" fired whichever ordinary mob happened to be selected. `DevService` now refuses a `NamedElite` spawn for any mob without `IsNamedElite`, so the split is enforced server-side, not just hidden in the UI.
 
@@ -74,6 +107,28 @@ The tab row is data-driven. Add a `{ key, label, color, colorOff }` entry to `MO
 **ITEMS and MYTHIC need no code changes for new content.** ITEMS reflects `ItemDefinitions.Items` and MYTHIC reflects `MythicItemDefs.Items`, so new entries there appear automatically.
 
 **GEAR and ITEMS used to be one tab.** Its shared confirm button stayed wired to the gear spawn, so pressing it after picking a catalog item spawned random gear. That's why ITEMS hides the shared button and has each icon grant itself. Keep new catalog-style tabs off the shared button.
+
+### Animation showcase
+
+The SHOWCASE tab (`DevMenu/Tabs/Showcase`) and `server/AnimationShowcase.server.luau`.
+
+**The platform:**
+- `Workspace.AnimationShowcase`, far off the map at (0, 600, -60000), built by the server the first time a dev opens the tab.
+- Every `MobData` mob with a model in `ServerStorage.MobModels` stands on its own nameplated pedestal, idling.
+- Display copies carry `ShowcaseMobID`, not `MobID`, so combat and other systems ignore them.
+
+**What a mob can play:**
+- Every clip registered for it in `MobAnimConfig`: plain ids, lists like `Walk#2`, and each `Moveset` clip. They play at their real fight speed: `AttackSpeed` for Attack, the Moveset entry's `Speed` for a Moveset clip.
+- Every cast special in its `MobData` Moveset whose handler has `Showcase()`. Kane's Fire Tornado replays the whole cast with all its effects and sounds, but no damage.
+
+**Play** repeats until **Stop** or another Play. The server replays clips each time they end, so everyone standing there sees the same thing.
+
+**Picking a mob:**
+- Click it in the list to be taken to its pedestal.
+- While you're on the platform, the tab follows you and selects the pedestal you stand nearest.
+- **Return to where I was** puts you back where you were before your first jump there.
+
+New mobs, clips and casts appear with no showcase edit. A new cast only needs a `Showcase(model, mobId, entry, trackFor)` on its handler.
 
 ### Placing mobs and NPCs
 
@@ -108,9 +163,9 @@ The panel frees the cursor. **Hold right mouse** to temporarily lock it back to 
 
 Lists what the **active tab** manages, sorted by distance from you, with coordinates: ZONE lists zones, MOB lists mob camps, NPC lists NPC markers. Tabs that place nothing (TIME/GEAR/ITEMS/MYTHIC) hide the list. **x** deletes an entry.
 
-**Your own position** sits right-aligned on that list's header (`YOU  x, y, z`), so the distance-sorted rows below have something to be relative to. It ticks at 4Hz from a plain `task.spawn` loop at the bottom of `DevClient`, deliberately NOT from `refreshList` -- that function round-trips to the server for the entire list, which is far too heavy to run just to move a coordinate readout. It hides itself whenever the list does.
+**Your own position** sits right-aligned on that list's header (`YOU  x, y, z`), so the distance-sorted rows below have something to be relative to. It ticks at 4Hz from a plain `task.spawn` loop in `SpawnerList`, deliberately NOT from `Refresh` -- that function round-trips to the server for the entire list, which is far too heavy to run just to move a coordinate readout. It hides itself whenever the list does.
 
-Zone rows have a second line of in-place editors, all going through the one `DevUpdateZone` remote (no redraw needed):
+Zone rows have two more lines of in-place editors, all going through the one `DevUpdateZone` remote (no redraw needed):
 
 | Control | Does |
 |---|---|

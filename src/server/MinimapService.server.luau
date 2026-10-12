@@ -13,7 +13,16 @@
 	              the one north of it is lighter, lower is darker.
 
 	Remotes (ReplicatedStorage.GameEvents):
-	  MinimapStateRequest  RF  -> { discovered = { [zoneId] = true }, revealed = { [key] = buffer } }
+	  MinimapStateRequest  RF  -> { discovered = { [zoneId] = true }, revealed = { [key] = buffer },
+	                              markers = { { id, type, x, z } } }
+	  MinimapMarkerAction  RF  ("add", type, x, z) -> true, marker | false, err
+	                           ("remove", id) -> true | false, err
+	                           ("retype", id, type) -> true | false, err
+	                           ("track", id or nil) -> true | false, err   (one tracked pin, saved)
+	                           ("clear") -> true                          (every pin)
+	                           Player markers (placed on the M map), saved in profile.map.markers,
+	                           x / z in map cells. Validated here: a known type, a finite spot on
+	                           the map, at most MinimapConfig.PlayerMarkerMax.
 	  MinimapChunkRequest  RF  (keys) -> { [key] = buffer of CHUNK*CHUNK*3 bytes RGB }
 	  MinimapDevAction     RF  ("reset") -> ok, err   dev-only (DevRoster): wipes YOUR map
 	  MinimapReset         RE  S -> C: the map was reset; the client forgets and reloads
@@ -51,6 +60,7 @@ end
 local StateRequest = remoteFunction("MinimapStateRequest")
 local ChunkRequest = remoteFunction("MinimapChunkRequest")
 local DevAction = remoteFunction("MinimapDevAction")
+local MarkerAction = remoteFunction("MinimapMarkerAction")
 local ResetEvent = GameEvents:FindFirstChild("MinimapReset")
 if not ResetEvent then
 	ResetEvent = Instance.new("RemoteEvent")
@@ -74,6 +84,7 @@ end
 -------------------------------------------------------------------------------------------------
 -- Per-player map state (bitsets live decoded here; the profile holds their base64)
 
+local lastMarkerAt = {} -- [player] = os.clock() of their last marker request (MarkerAction)
 local states = {} -- [player] = { profile, chunks = { [key] = buffer }, dirty = { [key] = true } }
 
 local function mapOf(profile)
@@ -81,6 +92,9 @@ local function mapOf(profile)
 	local map = profile.map
 	map.discovered = type(map.discovered) == "table" and map.discovered or {}
 	map.revealed = type(map.revealed) == "table" and map.revealed or {}
+	map.markers = type(map.markers) == "table" and map.markers or {}
+	map.markerSeq = math.floor(tonumber(map.markerSeq) or 0)
+	if type(map.tracked) ~= "string" then map.tracked = nil end
 	return map
 end
 
@@ -160,21 +174,26 @@ task.spawn(function()
 	end
 end)
 
-Players.PlayerRemoving:Connect(function(player) states[player] = nil end)
+Players.PlayerRemoving:Connect(function(player)
+	states[player] = nil
+	lastMarkerAt[player] = nil
+end)
 -- A wiped profile has a fresh map: drop the cached state (it points at the old one).
 ProfileService.ProfileWiped:Connect(function(player)
 	states[player] = nil
 	ResetEvent:FireClient(player)
 end)
 
--- F8 MAP tab. Wipes the caller's own discoveries and explored cells (the defaults come back
+-- F8 MAP tab. Wipes the caller's own discoveries and explored cells (not their markers) (the defaults come back
 -- on the next stateFor); the reveal loop then re-discovers whatever zone they stand in.
 DevAction.OnServerInvoke = function(player, action)
 	if not DevRoster.IsDev(player) then return false, "not a dev" end
 	if action ~= "reset" then return false, "unknown action" end
 	local profile = ProfileService.Get(player)
 	if not profile then return false, "profile not loaded" end
-	profile.map = { discovered = {}, revealed = {} }
+	local old = type(profile.map) == "table" and profile.map or {}
+	-- Only the exploring is wiped: your own markers stay.
+	profile.map = { discovered = {}, revealed = {}, markers = old.markers, markerSeq = old.markerSeq, tracked = old.tracked }
 	states[player] = nil
 	ResetEvent:FireClient(player)
 	return true
@@ -193,7 +212,90 @@ StateRequest.OnServerInvoke = function(player)
 		if on == true and type(id) == "string" then discovered[id] = true end
 	end
 	for key, buf in pairs(st.chunks) do revealed[key] = buf end
-	return { discovered = discovered, revealed = revealed }
+	local markers = {}
+	for _, m in ipairs(st.map.markers) do
+		if type(m) == "table" and Config.PlayerMarkerType(m.type) and type(m.id) == "string" then
+			table.insert(markers, { id = m.id, type = m.type, x = m.x, z = m.z })
+		end
+	end
+	return { discovered = discovered, revealed = revealed, markers = markers, tracked = st.map.tracked }
+end
+
+-------------------------------------------------------------------------------------------------
+-- Player markers
+
+local MARKER_COOLDOWN = .15 -- seconds between marker requests per player
+
+local function finite(n)
+	return type(n) == "number" and n == n and n > -math.huge and n < math.huge
+end
+
+MarkerAction.OnServerInvoke = function(player, action, a, b, c)
+	local now = os.clock()
+	if now - (lastMarkerAt[player] or 0) < MARKER_COOLDOWN then return false, "too_fast" end
+	lastMarkerAt[player] = now
+	local st = stateFor(player)
+	if not st then return false, "no_profile" end
+	local markers = st.map.markers
+
+	if action == "add" then
+		local kind, x, z = a, b, c
+		if type(kind) ~= "string" or not Config.PlayerMarkerType(kind) then return false, "bad_type" end
+		if not finite(x) or not finite(z) then return false, "bad_position" end
+		local box = bounds()
+		if not box or not Config.CellInBounds(box, math.floor(x), math.floor(z)) then return false, "bad_position" end
+		if #markers >= Config.PlayerMarkerMax then return false, "full" end
+		st.map.markerSeq += 1
+		local marker = {
+			id = "m" .. st.map.markerSeq,
+			type = kind,
+			x = math.floor(x * 10 + .5) / 10,
+			z = math.floor(z * 10 + .5) / 10,
+		}
+		table.insert(markers, marker)
+		return true, { id = marker.id, type = marker.type, x = marker.x, z = marker.z }
+	elseif action == "remove" then
+		local id = a
+		if type(id) ~= "string" then return false, "bad_id" end
+		for i, m in ipairs(markers) do
+			if type(m) == "table" and m.id == id then
+				table.remove(markers, i)
+				if st.map.tracked == id then st.map.tracked = nil end
+				return true
+			end
+		end
+		return false, "not_found"
+	elseif action == "retype" then
+		local id, kind = a, b
+		if type(id) ~= "string" then return false, "bad_id" end
+		if type(kind) ~= "string" or not Config.PlayerMarkerType(kind) then return false, "bad_type" end
+		for _, m in ipairs(markers) do
+			if type(m) == "table" and m.id == id then
+				m.type = kind
+				return true
+			end
+		end
+		return false, "not_found"
+	elseif action == "track" then
+		local id = a
+		if id == nil then
+			st.map.tracked = nil
+			return true
+		end
+		if type(id) ~= "string" then return false, "bad_id" end
+		for _, m in ipairs(markers) do
+			if type(m) == "table" and m.id == id then
+				st.map.tracked = id
+				return true
+			end
+		end
+		return false, "not_found"
+	elseif action == "clear" then
+		table.clear(markers)
+		st.map.tracked = nil
+		return true
+	end
+	return false, "unknown_action"
 end
 
 -------------------------------------------------------------------------------------------------

@@ -16,7 +16,7 @@ local Players           = game:GetService("Players")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 -- Dev roster lives in ReplicatedStorage.DevRoster (shared with DayNightService,
--- DevClient, and HearthstoneConfig so the list can't drift between them).
+-- DevMenu, and HearthstoneConfig so the list can't drift between them).
 local DevRoster = require(ReplicatedStorage:WaitForChild("DevRoster"))
 local isDev = DevRoster.IsDev
 
@@ -46,6 +46,9 @@ local rfList     = makeFunc("DevListSpawners")
 local rfPlaceZone = makeFunc("DevPlaceZone")
 local rfUpdateZone = makeFunc("DevUpdateZone")
 local rfSpawnItem = makeFunc("DevSpawnItem")
+local rfMythicForce = makeFunc("DevMythicForce")
+local rfRunDrops = makeFunc("DevDungeonDrops")
+local rfFakeParty = makeFunc("DevFakeParty")
 
 local MobDevSpawnStore = require(ServerScriptService:WaitForChild("MobDevSpawnStore"))
 local NpcDevSpawnStore = require(ServerScriptService:WaitForChild("NpcDevSpawnStore"))
@@ -655,6 +658,45 @@ local FORCE_SUBSTAT_MAX = 12
 local RARITY_LOOKUP = {}
 for _, r in ipairs(ItemConfig.RARITY_ORDER) do
     RARITY_LOOKUP[r] = true
+end
+
+-- F8 Mythic tab: forces this dev's own boss Mythic rolls (DungeonBossLootService reads the
+-- attribute, re-checking DevRoster). "win" | "loss" | nil (the real roll).
+do
+    local ClearConfig = require(ReplicatedStorage:WaitForChild("DungeonClearConfig"))
+    rfMythicForce.OnServerInvoke = function(player, mode)
+        if not isDev(player) then return { ok = false, error = "unauthorized" } end
+        if mode ~= "win" and mode ~= "loss" then mode = nil end
+        player:SetAttribute(ClearConfig.MYTHIC_FORCE_ATTR, mode)
+        return { ok = true, mode = mode }
+    end
+end
+
+-- F8 Dungeon tab: extra drops of a chosen rarity added to YOUR next dungeon clear. All state and
+-- every check live in DevRunDrops (server-only, DevRoster re-checked there); this is only the door.
+do
+    local DevRunDrops = require(ServerScriptService:WaitForChild("DevRunDrops"))
+    rfRunDrops.OnServerInvoke = function(player, action, rarity, count)
+        if not isDev(player) then return { ok = false, error = "unauthorized" } end
+        if action == "add" then
+            local ok, err = DevRunDrops.Add(player, rarity, count)
+            if not ok then return { ok = false, error = err } end
+        elseif action == "clear" then
+            DevRunDrops.Clear(player)
+        elseif action ~= "get" then
+            return { ok = false, error = "bad_action" }
+        end
+        return { ok = true, queued = DevRunDrops.List(player) }
+    end
+end
+
+-- F8 Dungeon tab: fake party members for the clear show (DevFakeParty re-checks DevRoster itself).
+do
+    local DevFakeParty = require(ServerScriptService:WaitForChild("DevFakeParty"))
+    rfFakeParty.OnServerInvoke = function(player, action, index, a, b)
+        if not isDev(player) then return { ok = false, error = "unauthorized" } end
+        return DevFakeParty.Act(player, action, index, a, b)
+    end
 end
 
 rfSpawnItem.OnServerInvoke = function(player, data)

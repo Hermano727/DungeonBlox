@@ -123,7 +123,7 @@ anchor (for example `ANCHOR_ValveStation_02`) overrides that one position.
 | Station and altar recesses | 24 wide; 13 (stations) or 12 (altars) deep | Station footprint 19 x 13; 8-stud approach rule |
 | Entrance corridor | 16 wide, 16 tall | Primary route, at least 10 wide |
 | Arrival vestibule | 44 x 28 | Eight arrivals spread 4 studs apart along X |
-| Purge safe pads | radius 12, 94 from the centre | One in each non-entrance corner |
+| ~~Purge safe pads~~ | removed 2026-10-10 | See *Flood safe zones removed* below |
 
 Layout by direction (0 degrees = north = entrance, clockwise):
 
@@ -134,7 +134,7 @@ Layout by direction (0 degrees = north = entrance, clockwise):
 - The north corner opens into the entrance corridor and the arrival vestibule
   (realm `SpawnPoint`). The seal sits 124 out, the threshold 130 out, and the
   party gathers 90 north of the centre.
-- The other four corners hold the purge safe pads.
+- The other four corners used to hold the purge safe pads (removed 2026-10-10).
 - Four flush, grated channels (`MiasmaChannel_01..04`) run from each station's
   drain to the centre basin (`MiasmaCenterBasin`). They are level with the floor,
   so there is nothing to jump. A primed gate turns its outer run clean. On
@@ -317,9 +317,38 @@ Use one server-owned controller per active dungeon realm with these states:
 11. `Failed`
 12. `Destroyed`
 
-The first player crossing the room threshold starts a 10-second grace period.
-At its end, move surviving party members inside and seal the entrance. Lock the
-starting party size at this transition.
+**Entrance (2026-10-10):** the opening starts once the party is inside the gate line
+(every living member past the seal by `EntranceCutscene.InsetStuds`, or
+`GatherWait` seconds after the first one is, so a slow player cannot hold the run). It is
+a ~21.7 s cutscene (`BeginEntranceCutscene`, `client/MiasmaEntranceCutscene`, every number in
+`Config.EntranceCutscene`, state `EntranceGrace`), with a caption under each beat:
+1. **A poison outfall pipe** (one over each gate bay, `MiasmaArenaLayout.Outfall`: the pipe high on the wall
+   with the stream of poison falling to a pool): the camera pushes in on the mouth as staged poisonous
+   slimes (two a pipe, client-only blobs) swell in it, strain, then drop out down the stream and splat.
+2. **The pressure plate:** a boulder falls from the ceiling and shatters on it (the plate lights).
+3. **The rune tablet:** its runes light up (a SAMPLE pattern: the real one is rolled later and never sent).
+4. **The valve wheel**, which glows.
+5. **A cleansing altar** lights up: "Cleanse poison at the altars."
+6. **The gate** slides shut behind the party.
+
+Members are frozen and immune for it. **Holding Space** (or A) for `SkipHold` seconds is a vote to skip
+(`Requests.SkipEntrance`, tallied in `_voteSkipEntrance`; everyone's prompt shows "n / m holding"); when
+every living member is holding, the gate shuts at once and phase 1 starts. At the normal end the gate
+collides (it is only visible and solid from the slam), phase 1 starts instantly and **nobody is
+teleported**: the old gather-point teleport is gone. A straggler still outside the gate line is
+stepped just inside it. Lock the starting party size at this transition.
+
+**Phase 1 spawns (2026-10-10):** the old `MiasmaSlime` (PlainsSlime model) is replaced by
+`MiasmaUnderling`, displayed as **Poisonous Slime**. When phase 1 starts every outfall pipe drops one per
+party member down its stream (`_spawnDrainWave`: 1 member = 4 slimes, 4 members = 16; clients draw the
+fall, the real slimes appear in the pool 1.1 s later, stunned for 1.4 s);
+later waves still land from above, refilling to `Math.SlimeLivingCap` (4 per member, max 24). The
+underling's own spit (`SlimeSpitCast`) replaces the encounter's old slime lob: its hits are handed to
+`MiasmaPoisonService` through `SlimeSpitCast.SetHitHandler` (found by the slime's `MiasmaEncounterId`).
+
+**The valve clog** (`MiasmaClog`, "Poisoned Vine") is a thorny poisoned vine lying over the valve,
+`MobModels.MiasmaVine` (assets/models/mobs/dungeon bosses/miasma/vine/): an HP blob with no attack, no
+aggro and no knockback that has to be destroyed.
 
 An individual death removes that player according to the existing dungeon flow.
 The remaining party continues with the original scaling. When no eligible party
@@ -590,6 +619,19 @@ that marks the exact boundary:
 - **Projectiles:** glowing trails and drips.
 - The server no longer spawns its own flat neon warning discs.
 
+## Body, bite and poison presence (2026-10-11)
+
+- **Rig:** the v3 jaw rig, `MobModels.MiasmaBossJawRig`. Clips and rebuild steps are in `assets/models/mobs/dungeon bosses/miasma/v3/README.md`. Every clip keeps the old lengths and beats, so the timings in `MiasmaEncounterConfig` are unchanged.
+- **The ordinary swing is a bite.** No ground ring any more (the `MiasmaMaul` telegraph is off): the gape is the tell. It lunges forward and down and the jaws clamp at 0.4 s (`AttackCooldown` 1.2). Its reach is one stud short of a sword's (`AttackRange` 10.5, ~28.4 studs from its centre vs ~29.5), so kiting at the edge of your reach works. Only a target inside the 60-degree half-angle in front of it is hit (`MeleeHalfAngle`), so stepping round the side during the windup dodges it. Touching its solid body is free: the old 42 studs/s contact shove is gone, and only a player who ends up inside the body is eased back out (`Melee.InsideEjectSpeed`). Poison per landed bite is still `Melee.PoisonStacks`.
+- **Aggro:** `AggroLoop` holds it hunched with the jaw closed and the eyes forward, surging at its target with the mouth open and snapping half shut.
+- **Poison presence** (`client/MiasmaAuraFX`, replacing the orbiting wisps and ooze disc). All of it follows the animated bones, hides while submerged and is put out by the holy water:
+  - vapour seeps off the skirt, flanks and crown and trails behind it;
+  - drool falls from the fangs, heavier the wider the mouth opens, and hits the floor in hissing acid splats;
+  - fuming puddles are left behind as it moves and dry up after 9 s;
+  - its six front/crown eyes glow green and leave light streaks as the head moves (positions found in the texture, `EYES`);
+  - drool landing plays `PoisonDrip` (at most one every 0.28 s).
+  - It is visual only: the puddles do no damage.
+
 ## Miasma combat director
 
 Miasma's room-scale mechanics do not fit the existing animation-timed melee
@@ -640,6 +682,15 @@ As built (2026-09-29). This replaces the original "fast straight projectile" spe
 - Lock the pool in place and show a one-second eruption warning.
 - The eruption deals major armor-mitigated damage and adds two poison stacks.
 - The intended answer is to separate and sprint or dash out, not to jump.
+- **The slam (2026-10-11):** while hidden, Miasma moves under its threat target's circle
+  (`Controller:_moveUnderEruption`, skipping protected valve/altar spots; it stays put if every
+  circle is protected), bursts up out of the floor there and slams down
+  (`Animations.EruptSlam`). Every circle's damage, the `EruptSlam` presentation (the landing
+  slam's shockwave, a lighter jolt) and the `MiasmaSlam` sound land at `EruptSlamImpact` (0.53 s
+  into the clip); the circles warn until then. It sinks with `MiasmaSubmerge`.
+- **Sounds:** `PoisonSpit` when a glob leaves Miasma's mouth (once per volley), at the Enrage spew
+  and on the underling's spit; `PoisonSplat` where globs land; the bite is `MiasmaBiteChomp` on
+  every bite + `MiasmaBiteHit` when it lands (MobData `CombatSounds`).
 
 ### Floating poison sacks
 
@@ -849,3 +900,7 @@ After the untextured gameplay loop passes review:
 Offline checks can validate formulas, state transitions, maze geometry, cleanup,
 and authority boundaries. Only fresh-session Studio playtests validate physics,
 camera comfort, visual clarity, imported assets, and multiplayer replication.
+
+## Flood safe zones removed (2026-10-10)
+
+The four blue rune pads in the non-entrance corners (`Layout.SafeAreas`, the purge's safe zones) are gone: from the layout and its anchors, the builder, `Resolver:SafeAreaPositions`, `Config.Arena.SafeAreaRadius`, the protocol tag, and the built `SafeAreas` folder in the realm template. There is no flood mechanic yet, so **a timeout purge (`BeginPurge`) now only seizes the valves and resets the cycle, with no damage and no poison** (it used to hit everyone outside a safe pad for `Damage.Purge` plus 2 poison). Bring the safe zones back, with the damage, when the flood mechanic is designed.

@@ -21,6 +21,10 @@
 	NPC markers: every NPC with an NPCRegistry Nametag shows as its nametag crest + role icon
 	(RS/NpcMapMarkers, published by SSS/NpcLocations) on uncovered ground. The corner map never
 	names them; the expanded map shows the role name once zoomed to MinimapConfig.NpcNameScale.
+
+	Player markers (your own pins, tracking, the legend): Minimap/PlayerMarkers. The expanded
+	map lives in its own ScreenGui at UILayers.WORLD_MAP, above every HUD row, so nothing can
+	sit on its controls. Scroll zooms toward the cursor; Keys.MapRecentre goes back to you.
 ]]
 
 local AssetService = game:GetService("AssetService")
@@ -47,6 +51,9 @@ local ZoneEntryNotify = GameEvents:WaitForChild("ZoneEntryNotify")
 local StateRequest = GameEvents:WaitForChild("MinimapStateRequest")
 local ChunkRequest = GameEvents:WaitForChild("MinimapChunkRequest")
 local ResetEvent = GameEvents:WaitForChild("MinimapReset")
+local MarkerAction = GameEvents:WaitForChild("MinimapMarkerAction")
+local UILayers = require(ReplicatedStorage:WaitForChild("UILayers"))
+local PlayerMarkers = require(script:WaitForChild("PlayerMarkers"))
 
 local player = Players.LocalPlayer
 local CHUNK, CELL = Config.CHUNK, Config.CELL
@@ -68,6 +75,7 @@ local chunks = {}          -- [key] = { bits, defaultMask, colours, image, dirty
 local renderQueue = {}     -- keys, in order
 local queued = {}
 local labelCache = {}      -- [zoneId] = { x, z }
+local markers              -- Minimap/PlayerMarkers, created further down once the views exist
 
 local function chunkEntry(key)
 	local c = chunks[key]
@@ -208,6 +216,7 @@ stroke(mini, EDGE, 2)
 local miniView = MapView.new(mini, {
 	scale = Config.MiniScale, labelScale = 5, labelMin = 13, labelMax = 18,
 	npcMarkerPx = Config.NpcMarkerMiniPx, -- no npcNameScale: never named on the corner map
+	playerMarkerPx = Config.PlayerMarkerMiniPx,
 })
 
 -- "[M] Map", inside the map's bottom-right corner on a soft dark pill so it reads over any
@@ -248,12 +257,22 @@ big.BackgroundColor3 = PANEL
 big.BorderSizePixel = 0
 big.Visible = false
 big.Active = true
-big.Parent = gui
+-- Its own ScreenGui above every HUD row and banner (UILayers.WORLD_MAP): at the minimap's
+-- layer (30) most of the HUD drew over it and ate its controls' input.
+local bigGui = Instance.new("ScreenGui")
+bigGui.Name = "WorldMapGui"
+bigGui.ResetOnSpawn = false
+bigGui.IgnoreGuiInset = true
+bigGui.DisplayOrder = UILayers.WORLD_MAP
+bigGui.Parent = player:WaitForChild("PlayerGui")
+big.Parent = bigGui
 stroke(big, EDGE, 3)
 local bigView = MapView.new(big, {
 	scale = 2, labelScale = 7, labelMin = 12, labelMax = 40,
 	npcMarkerPerCell = Config.NpcMarkerPerCell, npcMarkerMin = Config.NpcMarkerBigMin,
 	npcMarkerMax = Config.NpcMarkerBigMax, npcNameScale = Config.NpcNameScale,
+	playerMarkerPerCell = Config.PlayerMarkerPerCell, playerMarkerMin = Config.PlayerMarkerBigMin,
+	playerMarkerMax = Config.PlayerMarkerBigMax,
 })
 bigView.clip.Active = true
 
@@ -298,7 +317,10 @@ local function hintRow(text, order)
 	return row
 end
 hintRow(("Zoom  <font color=\"#968F84\">[Scroll]  [%s]  [%s]</font>"):format(keyName(Keys.MapZoomIn), keyName(Keys.MapZoomOut)), 1)
-hintRow(("Close  <font color=\"#968F84\">[%s]</font>"):format(Keys.ToggleMap.Name), 2)
+hintRow("Place marker  <font color=\"#968F84\">[Right click]</font>", 2)
+hintRow(("Marker options  <font color=\"#968F84\">[Click]</font>   Remove  <font color=\"#968F84\">[%s]</font>"):format(Keys.MapDeleteMarker.Name), 3)
+hintRow(("Centre  <font color=\"#968F84\">[%s]</font>   Close  <font color=\"#968F84\">[%s]</font>"):format(Keys.MapRecentre.Name, Keys.ToggleMap.Name), 4)
+hints.Size = UDim2.fromOffset(300, 108)
 
 -------------------------------------------------------------------------------------------------
 -- Rendering chunks
@@ -445,6 +467,7 @@ local function loadSavedState()
 		end
 		refreshMasks()
 		rebuildZones()
+		if markers then markers:Load(state.markers, state.tracked) end
 	end
 end
 
@@ -568,6 +591,7 @@ local function setOpen(open)
 		MenuMouse.acquire()
 	else
 		dragging = false
+		if markers then markers:OnClosed() end
 		pin = nil
 		pinMarker.Visible, pinLabel.Visible = false, false
 		MenuMouse.release()
@@ -591,8 +615,38 @@ InteractionLock.Subscribe(function(locked)
 	if locked and isOpen and InteractionLock.IsHeldByOther(LOCK_OWNER) then setOpen(false) end
 end)
 
-local function zoom(steps)
+-- The map cell at the middle of the expanded view (following you unless panned).
+local function viewCentre()
+	if panX then return panX, panZ end
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if root then return root.Position.X / CELL, root.Position.Z / CELL end
+	return nil, nil
+end
+
+-- The map cell under a point (input / AbsolutePosition space) on the expanded map.
+local function cellAt(point)
+	local cx, cz = viewCentre()
+	if not cx then return nil end
+	local clip = bigView.clip
+	local centre = clip.AbsolutePosition + clip.AbsoluteSize / 2
+	return Vector2.new(cx + (point.X - centre.X) / bigScale, cz + (point.Y - centre.Y) / bigScale)
+end
+
+-- Zooms by `steps` notches. With `point` (the cursor), the ground under it stays put, like
+-- every map app; without one, around the middle.
+local function zoom(steps, point)
+	local old = bigScale
 	bigScale = math.clamp(bigScale * Config.ZoomStep ^ steps, Config.BigMinScale, Config.BigMaxScale)
+	if point and bigScale ~= old then
+		local cx, cz = viewCentre()
+		if cx then
+			local clip = bigView.clip
+			local d = point - (clip.AbsolutePosition + clip.AbsoluteSize / 2)
+			panX = cx + d.X / old - d.X / bigScale
+			panZ = cz + d.Y / old - d.Y / bigScale
+		end
+	end
 	bigView:SetScale(bigScale)
 end
 
@@ -602,7 +656,9 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		if input.KeyCode == Keys.ToggleMap then
 			if bounds then setOpen(not isOpen) end
 		elseif isOpen and input.KeyCode == Keys.CloseMenu then
-			setOpen(false)
+			if not (markers and markers:HandleEscape()) then setOpen(false) end
+		elseif isOpen and input.KeyCode == Keys.MapRecentre then
+			panX, panZ = nil, nil
 		elseif isOpen and Keys.Matches(Keys.MapZoomIn, input.KeyCode) then
 			zoom(1)
 		elseif isOpen and Keys.Matches(Keys.MapZoomOut, input.KeyCode) then
@@ -612,6 +668,7 @@ UserInputService.InputBegan:Connect(function(input, processed)
 end)
 
 bigView.clip.InputBegan:Connect(function(input)
+	if markers and markers:Covers(Vector2.new(input.Position.X, input.Position.Y)) then return end -- a panel, not the ground
 	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 		dragging = true
 		dragFrom = Vector2.new(input.Position.X, input.Position.Y)
@@ -620,7 +677,8 @@ bigView.clip.InputBegan:Connect(function(input)
 end)
 bigView.clip.InputChanged:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.MouseWheel and isOpen then
-		zoom(input.Position.Z > 0 and 1 or -1)
+		local point = UserInputService:GetMouseLocation() - Vector2.new(0, game:GetService("GuiService"):GetGuiInset().Y)
+		zoom(input.Position.Z > 0 and 1 or -1, point)
 	end
 end)
 UserInputService.InputChanged:Connect(function(input)
@@ -657,10 +715,11 @@ local function cellShown(cx, cz)
 end
 
 local npcMarkerKey
+local npcsVisible = true -- the legend's NPCs toggle (PlayerMarkers)
 local function refreshNpcMarkers()
 	if not bounds then return end
 	local list, keys = {}, {}
-	for _, entry in ipairs(NpcMapMarkers.List()) do
+	for _, entry in ipairs(npcsVisible and NpcMapMarkers.List() or {}) do
 		local x, z = entry.position.X / CELL, entry.position.Z / CELL
 		local cx, cz = math.floor(x), math.floor(z)
 		if Config.CellInBounds(bounds, cx, cz) and cellShown(cx, cz) then
@@ -676,6 +735,26 @@ local function refreshNpcMarkers()
 	bigView:SetNpcMarkers(list)
 end
 NpcMapMarkers.Changed:Connect(refreshNpcMarkers)
+
+-------------------------------------------------------------------------------------------------
+-- Player markers (Minimap/PlayerMarkers)
+
+markers = PlayerMarkers.new({
+	big = big,
+	bigView = bigView,
+	miniView = miniView,
+	remote = MarkerAction,
+	getScale = function() return bigScale end,
+	getBounds = function() return bounds end,
+	isOpen = function() return isOpen end,
+	cellAt = cellAt,
+	recentre = function() panX, panZ = nil, nil end,
+	setNpcsVisible = function(visible)
+		npcsVisible = visible
+		npcMarkerKey = nil
+		refreshNpcMarkers()
+	end,
+})
 
 -------------------------------------------------------------------------------------------------
 -- Frame loop
@@ -741,5 +820,8 @@ RunService.RenderStepped:Connect(function()
 				pinLabel.Position = at + UDim2.fromOffset(0, -14)
 			end
 		end
+		markers:Update(px, pz, panX or px, panZ or pz)
+	else
+		markers:Update(nil, nil, nil, nil) -- off the map (a dungeon realm): no pointers, no beacon
 	end
 end)

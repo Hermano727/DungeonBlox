@@ -8,6 +8,7 @@ local MazeUI = require(script.Parent:WaitForChild("MiasmaValveMazeUI"))
 local CleanseUI = require(script.Parent:WaitForChild("MiasmaCleanseUI"))
 local CenterFlashUI = require(script.Parent:WaitForChild("CenterFlashUI"))
 local StatusCleanseClient = require(script.Parent:WaitForChild("StatusCleanseClient"))
+local EntranceCutscene = require(script.Parent:WaitForChild("MiasmaEntranceCutscene"))
 local gameEvents = ReplicatedStorage:WaitForChild("GameEvents")
 local event = gameEvents:WaitForChild("MiasmaEncounterEvent")
 local request = gameEvents:WaitForChild("MiasmaEncounterRequest")
@@ -15,7 +16,7 @@ local request = gameEvents:WaitForChild("MiasmaEncounterRequest")
 -- Why a valve would not take you (Presentation "ValveDenied"), and why it let go of you
 -- (MazeClosed). Reasons with no entry are silent (you pressed Release, you died, ...).
 local DENIED_TEXT = {
-	Choked = "The valve is choked with growth",
+	Choked = "The valve is choked with poisoned vines",
 	Reserved = "Someone is already at this valve",
 	TooFar = "Step closer to the valve",
 	NotNow = "The valve will not turn now",
@@ -32,6 +33,11 @@ local CLOSED_TEXT = {
 }
 
 local currentEncounterId
+
+-- Holding Space during the boss room's opening is a vote to skip it (MiasmaEntranceCutscene).
+EntranceCutscene.SetSkipSender(function(held)
+	if currentEncounterId then request:FireServer(currentEncounterId, Protocol.Requests.SkipEntrance, held == true) end
+end)
 local gui = Instance.new("ScreenGui")
 gui.Name = "MiasmaEncounterGui"
 gui.ResetOnSpawn = false

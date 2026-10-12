@@ -12,6 +12,7 @@
 --
 -- "Armor" everywhere in this codebase is an additive RATING, not a percent.
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
@@ -62,6 +63,25 @@ function DamageService.PlayEffectFor(player, key)
 		return
 	end
 	playEffectSfxEvent:FireClient(player, key)
+end
+
+-- A positional one-shot in the world: every player whose character is within `radius` of
+-- `position` hears it there (SfxNetClient plays it at that point, so distance falls off).
+function DamageService.PlayEffectAt(key, position, radius)
+	if not playEffectSfxEvent or type(key) ~= "string" or typeof(position) ~= "Vector3" then
+		return
+	end
+	radius = radius or 150
+	local sent = 0
+	for _, player in ipairs(Players:GetPlayers()) do
+		local character = player.Character
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		if root and (root.Position - position).Magnitude <= radius then
+			playEffectSfxEvent:FireClient(player, key, position)
+			sent += 1
+		end
+	end
+	return sent
 end
 
 local _dungeonProfile

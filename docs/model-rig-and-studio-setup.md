@@ -16,6 +16,8 @@ Worked examples:
 - **The Merchant** (`assets/models/npcs/merchant/rig/`): the full chain below, fully scripted, idle published through Open Cloud. Copy this folder's scripts for the next NPC.
 - **The Auctioneer** (`assets/models/npcs/auctioneer/Auctioneer Model/`): same rig idea (plus face and finger bones, hand IK), but its idle went in through the Animation Editor.
 
+**Simple creatures skip Tripo altogether:** the Miasma underling (a slime) is generated end to end by one Blender script: revolved profile mesh, texture painted from the surface's 3D coordinates, a translation-bone cage for squash and stretch (Roblox bones can't scale), and its clips. Same upload, bind-measure and clip-export steps as below. See `assets/models/mobs/dungeon bosses/miasma/underling/README.md`.
+
 ## 0. Generate by parts, then fix the source mesh
 
 **Generate the head separately (preferred for NPCs and mobs, 2026-10-07).** A whole-body Tripo generation spends little of its budget on the face: eyes come out smeared, brows and hair bleed skin colour, and repainting only goes so far (the Blacksmith's eyes stayed wrong after a mirror repaint). A separate head generation gives a far sharper face and texture. These are separate GENERATIONS, not Tripo's Segment (still skip that: it splits one mesh into pieces with independent topology).
@@ -99,6 +101,20 @@ python tools/roblox_upload.py <rig>/<Name>_Model.fbx T1_<Name> "description"
 ```
 
 Then in Edit mode, `InsertService:LoadAsset(id)` into ServerStorage. Check you got a MeshPart (with `TextureID`), the full `Bone` hierarchy, and an `AnimationController`. Open Cloud keeps skinning and bones; it adds a `Root` bone (the armature node) above your top bone.
+
+**Two textures means two mesh objects.** Open Cloud imports ONE mesh object with two materials as ONE MeshPart with ONE texture, silently dropping the other (2026-10-09: Kane's separately generated head lost its face texture this way).
+- **Fix:** split by material into separate skinned objects before export. Each imports as its own MeshPart with its own texture, skinned to the same bones. Script: `assets/models/mobs/named elites/kane axe model/split_kane_head.py`.
+- **Keep the importer's layout:** with several mesh objects the bones land in a plain `RootPart`, with Motor6Ds from it to each MeshPart. **Don't move the bones into one of the MeshParts:** the other MeshPart then stops following them. Kane's head stayed at its rest pose while his body animated (2026-10-09, caught by an Edit-mode screenshot, not by checking bones).
+- **Animations that address bones by part name:** rename the holder instead. Kane's clips go through `Kane_SkinnedMesh`, so the holder `RootPart` became `Kane_SkinnedMesh` (hidden, no collision) and the body MeshPart `Kane_Body`.
+- **Match the original export's unit settings.** Check `UnitScaleFactor` in the FBX header: 100 with `FBX_SCALE_UNITS`, but the default writes 1.0.
+
+**Swapping a skinned mob model in place** (Kane, 2026-10-09; full record in that folder's `Kane_UserHead_Split_README.md`):
+1. Move the old model to `ServerStorage.MobModelsBackup`.
+2. Line the new parts up on the old `Root` bone's world frame, and copy the old mesh's physical settings.
+3. Re-point the HumanoidRootPart weld.
+4. Before going live, pose both models mid-clip in Edit mode (`Animator:StepAnimations`) and **screenshot them** (MCP `screen_capture` with a camera position).
+   - Checking bones alone isn't enough: identical bones can still drive a mesh part that doesn't follow them.
+   - Read a bone's pose from `Bone.Transform`. In Edit mode `TransformedWorldCFrame` and `WorldCFrame` both include the pose, so comparing them shows no movement.
 
 ## 4. Measure the bind frames
 

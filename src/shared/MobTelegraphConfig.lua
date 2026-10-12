@@ -132,7 +132,9 @@ local DEBUG_OVERRIDE = {
 }
 
 MobTelegraphConfig.Styles = {
-	-- Miasma's ordinary swing: a thick poison ring the size of its reach.
+	-- Miasma's old ordinary swing: a thick poison ring the size of its reach. Unused since
+	-- the swing became a frontal bite (2026-10-11, the open jaw is the tell); setting MobData
+	-- Telegraph = "MiasmaMaul" again would draw it as the bite's MeleeHalfAngle sector.
 	MiasmaMaul = {
 		Color = Color3.fromRGB(96, 22, 128),
 		Accent = Color3.fromRGB(190, 110, 255),
@@ -150,6 +152,17 @@ MobTelegraphConfig.Styles = {
 		-- full circle at ~5 studs gets pieces a bit over a stud each.
 		Segments = 26,
 		Thickness = 0.24,
+	},
+
+	-- Miasma underling's slam: a full ring (no cone) out to its RangeMultiplier reach, in
+	-- the slime's bruise purple with a toxic green sweep.
+	UnderlingSlam = {
+		Color = Color3.fromRGB(96, 30, 140),
+		Accent = Color3.fromRGB(110, 230, 90),
+		Segments = 28,
+		Thickness = 0.3,
+		OutlineAlpha = 0.3,
+		Tail = 0.4,
 	},
 
 	-- Kane's three-hit axe combo. Drawn as his real 140-degree frontal cone, and

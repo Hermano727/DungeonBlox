@@ -7,10 +7,11 @@
 	on the root closes Settings (Esc does the same). While it is open the HP/energy cluster is
 	hidden (InteractionLock's menu default, RS/HudVitals).
 
-	Audio -- Master, Music, Movement, Effects. All four are live SoundGroup/Sound
-	volumes (see VolumeSettings.luau for exactly what each one drives and why
-	"Movement"/"Effects" replaced the old "SFX"/"VFX" names -- neither was ever
-	a visual-effects control, both are sound buses).
+	Audio -- generated from RS/AudioCategories (2026-10-11): one slider per sound
+	bucket, in titled sections (Master; Environment: Music, Ambient & World;
+	Movement: Player Footsteps, Mount; ...). A new bucket in that registry shows
+	up here, saves and applies with no edit in this file. Each slider is the
+	bucket's SoundGroup volume (Master = SoundService.Main, Music = ZoneMusic).
 
 	Video -- FOV, Sensitivity, Brightness. Backed by VideoSettings.luau.
 	FOV/Sensitivity feed FirstPersonViewModel + the Crouching/Animate2/
@@ -47,9 +48,9 @@ local Lighting         = game:GetService("Lighting")
 local VolumeSettings = require(ReplicatedStorage:WaitForChild("VolumeSettings"))
 local VideoSettings  = require(ReplicatedStorage:WaitForChild("VideoSettings"))
 local CursorManager  = require(ReplicatedStorage:WaitForChild("CursorManager"))
-local SfxService     = require(ReplicatedStorage:WaitForChild("SfxService"))
 local Keys           = require(ReplicatedStorage:WaitForChild("KeybindConfig"))
 local SettingsRanges = require(ReplicatedStorage:WaitForChild("SettingsRanges"))
+local AudioCategories = require(ReplicatedStorage:WaitForChild("AudioCategories"))
 local QuickNav       = require(ReplicatedStorage:WaitForChild("HudQuickNav"))
 local InteractionLock = require(ReplicatedStorage:WaitForChild("InteractionLock"))
 
@@ -203,6 +204,7 @@ local TITLE_H          = 40
 local DONE_GAP         = 18 -- between the grid and the Done button
 local FOOTER_H         = 18
 local HANDLE_W         = 8
+local HEADER_H         = 24 -- a section title on a list page (the Audio page)
 local PANEL_W          = PAD * 2 + BAR_W * 2 + COL_GAP
 
 -- Full-screen dim behind the panel. A TextButton so clicks never reach the world; clicking it
@@ -325,10 +327,91 @@ local function makePage(name, title, parentPage)
 	return { name = name, title = title, parent = parentPage, grid = grid, count = 0 }
 end
 
--- Bars join a page in call order (LayoutOrder): left column, then right, row by row.
-local function addToPage(page, bar)
+-- A page that can carry section titles (the Audio page): a vertical list of titles and rows of
+-- up to two bars, instead of the plain two-column grid. page.height tracks its content.
+local function makeListPage(name, title, parentPage)
+	local page = makePage(name, title, parentPage)
+	page.grid:FindFirstChildOfClass("UIGridLayout"):Destroy()
+	local layout = Instance.new("UIListLayout", page.grid)
+	layout.Padding   = UDim.new(0, ROW_GAP)
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	page.list, page.height = true, 0
+	return page
+end
+
+local function growListPage(page, h)
+	page.height += (page.height > 0 and ROW_GAP or 0) + h
+end
+
+-- Bars join a page in call order (LayoutOrder): left column, then right, row by row. On a list
+-- page a `wide` bar takes a whole row (both columns).
+local function addToPage(page, bar, wide)
 	page.count += 1
 	bar.LayoutOrder = page.count
+	if not page.list then return end
+	if wide or not page.row or page.rowCount >= 2 then
+		local row = Instance.new("Frame")
+		row.Name                   = "Row"
+		row.BackgroundTransparency = 1
+		row.Size                   = UDim2.new(1, 0, 0, BAR_H)
+		row.LayoutOrder            = page.count
+		row.ZIndex                 = 10
+		row.Parent                 = page.grid
+		local rowLayout = Instance.new("UIListLayout", row)
+		rowLayout.FillDirection = Enum.FillDirection.Horizontal
+		rowLayout.Padding       = UDim.new(0, COL_GAP)
+		rowLayout.SortOrder     = Enum.SortOrder.LayoutOrder
+		page.row, page.rowCount = row, 0
+		growListPage(page, BAR_H)
+	end
+	bar.Parent = page.row
+	page.rowCount += 1
+	if wide then
+		bar.Size = UDim2.fromOffset(BAR_W * 2 + COL_GAP, BAR_H)
+		page.rowCount = 2
+	end
+end
+
+-- A section title on a list page: gold capitals on the left, a faint rule filling the rest at its midline.
+local function addSectionTitle(page, text)
+	page.count += 1
+	page.row = nil
+	local header = Instance.new("Frame")
+	header.Name                   = "Section"
+	header.BackgroundTransparency = 1
+	header.Size                   = UDim2.new(1, 0, 0, HEADER_H)
+	header.LayoutOrder            = page.count
+	header.ZIndex                 = 10
+	header.Parent                 = page.grid
+	local headerLayout = Instance.new("UIListLayout", header)
+	headerLayout.FillDirection     = Enum.FillDirection.Horizontal
+	headerLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+	headerLayout.Padding           = UDim.new(0, 10)
+	headerLayout.SortOrder         = Enum.SortOrder.LayoutOrder
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.AutomaticSize          = Enum.AutomaticSize.X
+	label.Size                   = UDim2.new(0, 0, 0, 18)
+	label.FontFace               = UIFonts.DisplayBold
+	label.TextSize               = 15
+	label.TextColor3             = C.Title
+	label.TextStrokeColor3       = C.TextEdge
+	label.TextStrokeTransparency = 0.6
+	label.Text                   = string.upper(text)
+	label.LayoutOrder            = 1
+	label.ZIndex                 = 11
+	label.Parent                 = header
+	local rule = Instance.new("Frame")
+	rule.Name                   = "Rule"
+	rule.Size                   = UDim2.fromOffset(0, 1) -- the flex item below stretches it
+	rule.BackgroundColor3       = C.PanelEdge
+	rule.BackgroundTransparency = 0.3
+	rule.BorderSizePixel        = 0
+	rule.LayoutOrder            = 2
+	rule.ZIndex                 = 11
+	rule.Parent                 = header
+	Instance.new("UIFlexItem", rule).FlexMode = Enum.UIFlexMode.Fill
+	growListPage(page, HEADER_H)
 end
 
 local doneButton = makeBar(panel, "Done", true)
@@ -340,7 +423,7 @@ local function showPage(page)
 	page.grid.Visible = true
 	titleLabel.Text = page.title
 	local rows = math.max(1, math.ceil(page.count / 2))
-	local gridH = rows * BAR_H + (rows - 1) * ROW_GAP
+	local gridH = page.list and page.height or rows * BAR_H + (rows - 1) * ROW_GAP
 	page.grid.Size = UDim2.new(1, -PAD * 2, 0, gridH)
 	local doneY = PAD + TITLE_H + gridH + DONE_GAP
 	doneButton.Position = UDim2.fromOffset((PANEL_W - BAR_W) / 2, doneY)
@@ -348,7 +431,7 @@ local function showPage(page)
 end
 
 local rootPage    = makePage("Root", "Settings")
-local audioTab    = makePage("Audio", "Audio Settings", rootPage)
+local audioTab    = makeListPage("Audio", "Audio Settings", rootPage)
 local videoTab    = makePage("Video", "Video Settings", rootPage)
 local controlsTab = makePage("Controls", "Controls", rootPage)
 
@@ -393,7 +476,7 @@ local function percentFormat(v)
 	return tostring(math.round(v * 100)) .. "%"
 end
 
--- opts: { min, max, format(value)->string, onChange(value), onCommit(value) }
+-- opts: { min, max, format(value)->string, onChange(value), onCommit(value), wide }
 -- onChange fires on every drag frame (instant local feedback -- volume/FOV/
 -- etc apply live). onCommit fires once, when the mouse/touch releases, with
 -- the final value -- that's the one that should hit the network, so a drag
@@ -408,7 +491,7 @@ local function makeSlider(page, label, initValue, opts)
 	local lastValue = initValue
 
 	local bar, text = makeBar(page.grid, "", true)
-	addToPage(page, bar)
+	addToPage(page, bar, opts.wide)
 
 	local fill = Instance.new("Frame")
 	fill.Name                   = "Fill"
@@ -479,22 +562,44 @@ local function makeSlider(page, label, initValue, opts)
 end
 
 ----------------------------------------------------------------------
--- Audio page: Master, Music, Movement, Effects
+-- Audio page: one slider per sound bucket, built from RS/AudioCategories
 ----------------------------------------------------------------------
 
-local mainGroup        = SoundService:WaitForChild("Main")
-local movementSfxGroup = mainGroup:WaitForChild("Character")
+local mainGroup = SoundService:WaitForChild("Main")
 
 local function liveMusicSound()
 	return SoundService:FindFirstChild("ZoneMusic")
 end
 
 -- Per-track volume scale, stamped on the Sound by ZoneClient (see MusicPlayback).
--- Both sliders below write ZoneMusic.Volume directly, so both have to carry it
+-- Master and Music both write ZoneMusic.Volume directly, so both have to carry it
 -- or moving a slider would silently flatten a track that is meant to sit louder
 -- or quieter than the rest.
 local function musicTrackScale(musicSound)
 	return tonumber(musicSound:GetAttribute("TrackVolumeScale")) or 1
+end
+
+local function refreshMusic()
+	local musicSound = liveMusicSound()
+	if musicSound and musicSound.IsPlaying then
+		musicSound.Volume = VolumeSettings.master * VolumeSettings.music * musicTrackScale(musicSound) * VolumeSettings.OUTPUT_GAIN
+	end
+end
+
+-- Writes one bucket's volume to the engine. Master scales everything under Main via SoundGroup
+-- nesting, plus the music (ZoneMusic lives outside Main); Music is the ZoneMusic Sound; every
+-- other bucket is its own group under Main.
+local function applyVolume(id, v)
+	VolumeSettings[id] = v
+	if id == "master" then
+		mainGroup.Volume = v * VolumeSettings.OUTPUT_GAIN
+		refreshMusic()
+	elseif id == "music" then
+		refreshMusic()
+	else
+		local group = AudioCategories.GetGroup(id)
+		if group then group.Volume = v end
+	end
 end
 
 -- Push the saved volumes onto the live SoundGroups once at startup.
@@ -504,71 +609,25 @@ end
 -- what the player had saved -- footsteps blasted at full volume until you
 -- nudged the Movement slider, which is what "fixed" it (2026-09-17 report:
 -- "3% is super loud, set it to 2% then back to 3% and it's fine").
---
--- Only the group-driven buses need this. Music and one-shot effect sounds
--- recompute their own volume from VolumeSettings every time they play
--- (ZoneClient's targetMusicVolume, SfxService.PlayEffect), which is why
--- movement was the one that was audibly wrong.
-local function applySavedVolumes()
-	mainGroup.Volume = VolumeSettings.master * VolumeSettings.OUTPUT_GAIN
-	movementSfxGroup.Volume = VolumeSettings.movement
-	local effectsGroup = SfxService.GetEffectsGroup()
-	if effectsGroup then
-		effectsGroup.Volume = VolumeSettings.effects
+for _, category in ipairs(AudioCategories.CATEGORIES) do
+	if category.id ~= "music" then -- ZoneClient sets the music volume itself when a track starts
+		applyVolume(category.id, VolumeSettings[category.id])
 	end
 end
 
-applySavedVolumes()
-
-makeSlider(audioTab, "Master", VolumeSettings.master, {
-	min = SettingsRanges.volume.master.min,
-	max = SettingsRanges.volume.master.max,
-	onChange = function(v)
-		VolumeSettings.master = v
-		mainGroup.Volume = v * VolumeSettings.OUTPUT_GAIN -- scales everything under Main via SoundGroup nesting
-		local musicSound = liveMusicSound()
-		if musicSound and musicSound.IsPlaying then
-			musicSound.Volume = v * VolumeSettings.music * musicTrackScale(musicSound) * VolumeSettings.OUTPUT_GAIN
-		end
-	end,
-	onCommit = persist("volume", "master"),
-})
-
-makeSlider(audioTab, "Music", VolumeSettings.music, {
-	min = SettingsRanges.volume.music.min,
-	max = SettingsRanges.volume.music.max,
-	onChange = function(v)
-		VolumeSettings.music = v
-		local musicSound = liveMusicSound()
-		if musicSound and musicSound.IsPlaying then
-			musicSound.Volume = VolumeSettings.master * v * musicTrackScale(musicSound) * VolumeSettings.OUTPUT_GAIN
-		end
-	end,
-	onCommit = persist("volume", "music"),
-})
-
-makeSlider(audioTab, "Movement", VolumeSettings.movement, {
-	min = SettingsRanges.volume.movement.min,
-	max = SettingsRanges.volume.movement.max,
-	onChange = function(v)
-		VolumeSettings.movement = v
-		movementSfxGroup.Volume = v
-	end,
-	onCommit = persist("volume", "movement"),
-})
-
-makeSlider(audioTab, "Effects", VolumeSettings.effects, {
-	min = SettingsRanges.volume.effects.min,
-	max = SettingsRanges.volume.effects.max,
-	onChange = function(v)
-		VolumeSettings.effects = v
-		local effectsGroup = SfxService.GetEffectsGroup()
-		if effectsGroup then
-			effectsGroup.Volume = v
-		end
-	end,
-	onCommit = persist("volume", "effects"),
-})
+for _, section in ipairs(AudioCategories.Sections()) do
+	if section.title then addSectionTitle(audioTab, section.title) end
+	for _, category in ipairs(section.items) do
+		local range = SettingsRanges.volume[category.id]
+		makeSlider(audioTab, category.label, VolumeSettings[category.id], {
+			min = range.min,
+			max = range.max,
+			wide = category.wide,
+			onChange = function(v) applyVolume(category.id, v) end,
+			onCommit = persist("volume", category.id),
+		})
+	end
+end
 
 ----------------------------------------------------------------------
 -- Video page: FOV, Sensitivity, Brightness

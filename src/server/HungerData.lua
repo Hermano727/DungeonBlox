@@ -120,6 +120,9 @@ function HungerData.enforceSprintGate(player)
 		return
 	end
 	local d = EnergyData.get(player)
+	if player:GetAttribute("Mounted") then
+		return -- riding: EnergyServer owns the speed (the saddle's)
+	end
 	if d and d.isSprintHeld then
 		EnergyData.setSprintHeld(player, false)
 		local h = player.Character and player.Character:FindFirstChildOfClass("Humanoid")

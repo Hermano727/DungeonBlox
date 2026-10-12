@@ -12,8 +12,16 @@ function Math.SlimeWaveSize(size)
 	return math.ceil(Math.ClampPartySize(size) / 2)
 end
 
+-- Four poisonous slimes per party member (one per floor drain each), up to 24 alive at once. The
+-- opening wave itself (4 per member, 32 for a full party) is exempt: it spawns before the cap counts.
 function Math.SlimeLivingCap(size)
-	return math.min(3 * Math.ClampPartySize(size), 16)
+	return math.min(4 * Math.ClampPartySize(size), 24)
+end
+
+-- Slimes spawned at the floor drains when phase 1 starts: one per drain per member.
+Math.DRAIN_COUNT = 4
+function Math.DrainWaveSize(size)
+	return Math.DRAIN_COUNT * Math.ClampPartySize(size)
 end
 
 function Math.SlimeWaveInterval(elapsed, duration, startInterval, endInterval)

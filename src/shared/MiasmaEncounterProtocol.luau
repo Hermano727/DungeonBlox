@@ -21,6 +21,7 @@ Protocol.Requests = {
 	ReserveValve = "ReserveValve",
 	CancelValve = "CancelValve",
 	MazeSample = "MazeSample",
+	SkipEntrance = "SkipEntrance", -- true while the player holds Space during the opening cutscene, false on release
 }
 
 Protocol.Events = {
@@ -62,7 +63,6 @@ Protocol.Tags = {
 	PressurePlate = "MiasmaPressurePlate",
 	ClogSocket = "MiasmaClogSocket",
 	WaterChannel = "MiasmaWaterChannel",
-	SafeArea = "MiasmaPurgeSafeArea",
 	PoisonDrop = "MiasmaPoisonDrop",
 	SlimeDrop = "MiasmaSlimeDrop",
 	SackEntry = "MiasmaSackEntry",

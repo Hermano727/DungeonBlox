@@ -307,6 +307,27 @@ dashMountLayout.SortOrder = Enum.SortOrder.LayoutOrder
 dashMountLayout.Padding = UDim.new(0, 4)
 dashMountLayout.Parent = dashMount
 
+-- Horse slot (after the dash, 2026-10-11). MountClient builds the key chip (H), the horse icon
+-- and its countdown into it, and shows it only once you own a saddle (a hidden slot drops out
+-- of the row's layout, so the rest stays centred).
+local horseMount = Instance.new("Frame")
+horseMount.Name = "MountIconsMount"
+horseMount.LayoutOrder = 4
+horseMount.Size = UDim2.new(0, 0, 0, PIP_SIZE)
+horseMount.AutomaticSize = Enum.AutomaticSize.X
+horseMount.BackgroundTransparency = 1
+horseMount.Visible = false
+horseMount.Parent = hungerPotionRow
+horseMount:SetAttribute("TutorialTarget", "hud_mount")
+
+local horseMountLayout = Instance.new("UIListLayout")
+horseMountLayout.FillDirection = Enum.FillDirection.Horizontal
+horseMountLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+horseMountLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+horseMountLayout.SortOrder = Enum.SortOrder.LayoutOrder
+horseMountLayout.Padding = UDim.new(0, 4)
+horseMountLayout.Parent = horseMount
+
 ---------------------------------------------------------------------------
 -- ProfileMenus-open layout -- HP, Hunger, and Potions (Energy mirrors this in
 -- EnergyClient.client.lua) relocate as one group while the Inventory/Skills/Stats/

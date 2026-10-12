@@ -10,6 +10,10 @@
 		view:Update(centreCellX, centreCellZ, playerCellX, playerCellZ, lookVector)
 		view:Glow(zoneId)                         -- the "region discovered" pulse
 		view:SetNpcMarkers(list)                  -- NPC crests (RS/NpcMapMarkers), see below
+		view:SetPlayerMarkers(list)               -- your own pins ({ id, type, x, z }), see below
+		view:PlayerMarkerAt(screenPoint)          -- the pin under a point (input space) -> id
+		view:StylePlayerMarkers(hover, selected, tracked, pulse) -- per frame: grow / ring
+		view:PlayerMarkerCentre(id)               -- a pin's centre on screen (input space)
 
 	North is up (world -Z), east is right (+X). Positions are in map cells (world / CELL).
 ]]
@@ -23,6 +27,9 @@ local Config = require(ReplicatedStorage:WaitForChild("MinimapConfig"))
 local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
 local NametagArt = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Images"):WaitForChild("NpcNametagArt"))
 local HudArt = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Images"):WaitForChild("HudArt"))
+local HudIcons = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Icons"):WaitForChild("Hud"):WaitForChild("HudIcons"))
+local ConsumableIcons = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Icons"):WaitForChild("Consumables"):WaitForChild("ConsumableIcons"))
+local ItemConfig = require(ReplicatedStorage:WaitForChild("ItemConfig"))
 
 local MapView = {}
 MapView.__index = MapView
@@ -41,6 +48,17 @@ local NPC_INK = Color3.fromHex("120C08")
 local NPC_RING = 1.16
 local NPC_SHADOW = 1.75
 local NPC_SHADOW_DROP = .1
+
+-- Player marker icons (MVP: existing art; dedicated pins can replace these later). "" or a
+-- missing entry = no image: General draws a bronze diamond pin instead.
+local PLAYER_MARKER_ICONS = {
+	Combat = HudIcons.COMBAT,         -- the game's combat icon (sword and shield)
+	Fishing = ConsumableIcons.FISH,
+	Mining = ItemConfig.TOOL_ICONS.Pickaxe,
+}
+MapView.PLAYER_MARKER_ICONS = PLAYER_MARKER_ICONS
+local MARKER_PLATE = Color3.fromHex("17120E")
+local MARKER_RING_PX = 2
 
 -------------------------------------------------------------------------------------------------
 -- The player arrow, drawn once into a small EditableImage (no uploaded asset needed).
@@ -126,7 +144,8 @@ function MapView.new(parent, options)
 	self.outlineLayer = layer("Outlines", 2)
 	self.labelLayer = layer("Labels", 3)
 	self.npcLayer = layer("NpcMarkers", 4)
-	self.npcMarkers = {} -- [id] = { holder, name, x, z }
+	self.npcMarkers = {} -- [id] = { holder, name, x, z, icon }
+	self.npcGroupLabels = {} -- name lists under grouped crests, rebuilt every layout
 	-- NPC crest size: a fixed npcMarkerPx, or npcMarkerPerCell * scale clamped to
 	-- npcMarkerMin..npcMarkerMax. Names show from npcNameScale up (nil = never).
 	self.npcMarkerPx = options.npcMarkerPx
@@ -134,6 +153,13 @@ function MapView.new(parent, options)
 	self.npcMarkerMin = options.npcMarkerMin or 16
 	self.npcMarkerMax = options.npcMarkerMax or 30
 	self.npcNameScale = options.npcNameScale
+	-- Player markers sit above the NPC crests; sized like them (fixed px, or per cell clamped).
+	self.playerLayer = layer("PlayerMarkers", 5)
+	self.playerMarkers = {} -- [id] = { holder, x, z }
+	self.playerMarkerPx = options.playerMarkerPx
+	self.playerMarkerPerCell = options.playerMarkerPerCell or 7
+	self.playerMarkerMin = options.playerMarkerMin or 18
+	self.playerMarkerMax = options.playerMarkerMax or 30
 
 	local arrow = Instance.new("ImageLabel")
 	arrow.Name = "PlayerArrow"
@@ -278,6 +304,7 @@ function MapView:SetNpcMarkers(list)
 			self.npcMarkers[entry.id] = marker
 		end
 		marker.x, marker.z = entry.x, entry.z
+		marker.icon = entry.icon
 		marker.name.Text = entry.name or ""
 	end
 	for id, marker in pairs(self.npcMarkers) do
@@ -289,17 +316,299 @@ function MapView:SetNpcMarkers(list)
 	self:_layoutNpcMarkers()
 end
 
+-- Crests whose names (or, unnamed, whose crests) would overlap at this zoom merge into one
+-- group: the crests sit side by side at the group's centre, and their names are listed under
+-- the row in the same left-to-right order, each line led by that NPC's icon.
+local NAME_CHAR_PX = 7.5 -- rough width of one name character at TextSize 13 (overlap test only)
+local GROUP_GAP = 3
+
+function MapView:_groupLabel(members, x, y)
+	local frame = Instance.new("Frame")
+	frame.Name = "NpcGroupNames"
+	frame.AnchorPoint = Vector2.new(.5, 0)
+	frame.Position = UDim2.fromOffset(x, y)
+	frame.Size = UDim2.fromOffset(0, 0)
+	frame.AutomaticSize = Enum.AutomaticSize.XY
+	frame.BackgroundTransparency = 1
+	frame.ZIndex = 8
+	frame.Parent = self.npcLayer
+	local layout = Instance.new("UIListLayout")
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+	layout.Parent = frame
+	for k, marker in ipairs(members) do
+		local row = Instance.new("Frame")
+		row.Name = marker.holder.Name
+		row.LayoutOrder = k
+		row.Size = UDim2.fromOffset(0, 16)
+		row.AutomaticSize = Enum.AutomaticSize.X
+		row.BackgroundTransparency = 1
+		row.ZIndex = 8
+		row.Parent = frame
+		local rowLayout = Instance.new("UIListLayout")
+		rowLayout.FillDirection = Enum.FillDirection.Horizontal
+		rowLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+		rowLayout.SortOrder = Enum.SortOrder.LayoutOrder
+		rowLayout.Padding = UDim.new(0, 3)
+		rowLayout.Parent = row
+		if marker.icon and marker.icon.Image ~= "" then
+			local icon = Instance.new("ImageLabel")
+			icon.LayoutOrder = 1
+			icon.Size = UDim2.fromOffset(14, 14)
+			icon.BackgroundTransparency = 1
+			icon.Image = marker.icon.Image
+			icon.ImageRectOffset = marker.icon.Offset
+			icon.ImageRectSize = marker.icon.Size
+			icon.ZIndex = 8
+			icon.Parent = row
+		end
+		local text = Instance.new("TextLabel")
+		text.LayoutOrder = 2
+		text.Size = UDim2.fromOffset(0, 16)
+		text.AutomaticSize = Enum.AutomaticSize.X
+		text.BackgroundTransparency = 1
+		text.FontFace = marker.name.FontFace
+		text.TextSize = 13
+		text.TextColor3 = NPC_NAME
+		text.Text = marker.name.Text
+		text.ZIndex = 8
+		text.Parent = row
+		local stroke = Instance.new("UIStroke")
+		stroke.Color = NPC_INK
+		stroke.Thickness = 1.5
+		stroke.Parent = text
+	end
+	table.insert(self.npcGroupLabels, frame)
+end
+
 function MapView:_layoutNpcMarkers()
+	for _, label in ipairs(self.npcGroupLabels) do label:Destroy() end
+	table.clear(self.npcGroupLabels)
 	local b = self.bounds
 	if not b then return end
 	local s = self.scale
 	local px = self.npcMarkerPx or math.clamp(math.floor(s * self.npcMarkerPerCell + .5), self.npcMarkerMin, self.npcMarkerMax)
 	local named = self.npcNameScale ~= nil and s >= self.npcNameScale
+
+	local list = {}
 	for _, marker in pairs(self.npcMarkers) do
+		marker.px, marker.pz = (marker.x - b.x0) * s, (marker.z - b.z0) * s
+		marker.width = named and math.max(px, #marker.name.Text * NAME_CHAR_PX + 6) or px
+		table.insert(list, marker)
+	end
+	table.sort(list, function(a, c)
+		if a.px ~= c.px then return a.px < c.px end
+		return a.holder.Name < c.holder.Name
+	end)
+
+	-- Union every pair that would overlap into groups.
+	local parent = {}
+	for i = 1, #list do parent[i] = i end
+	local function find(i)
+		while parent[i] ~= i do
+			parent[i] = parent[parent[i]]
+			i = parent[i]
+		end
+		return i
+	end
+	local tall = named and px + 18 or px
+	for i = 1, #list do
+		for j = i + 1, #list do
+			local a, c = list[i], list[j]
+			if math.abs(a.px - c.px) < (a.width + c.width) / 2 + 4 and math.abs(a.pz - c.pz) < tall then
+				parent[find(j)] = find(i)
+			end
+		end
+	end
+	local groups = {}
+	for i, marker in ipairs(list) do
+		local root = find(i)
+		groups[root] = groups[root] or {}
+		table.insert(groups[root], marker) -- stays in left-to-right order
+	end
+
+	for _, members in pairs(groups) do
+		local n = #members
+		local cx, cz = 0, 0
+		for _, marker in ipairs(members) do
+			cx += marker.px
+			cz += marker.pz
+		end
+		cx, cz = cx / n, cz / n
+		for k, marker in ipairs(members) do
+			marker.holder.Size = UDim2.fromOffset(px, px)
+			if n == 1 then
+				marker.holder.Position = UDim2.fromOffset(marker.px, marker.pz)
+			else
+				marker.holder.Position = UDim2.fromOffset(cx + (k - (n + 1) / 2) * (px + GROUP_GAP), cz)
+			end
+			marker.name.Visible = named and n == 1 and marker.name.Text ~= ""
+		end
+		if named and n > 1 then
+			self:_groupLabel(members, cx, cz + px * NPC_RING / 2 + 1)
+		end
+	end
+end
+
+-- One player marker: a dark round plate, a ring in its type's colour, the type's icon. Also
+-- used by the controller for the picker's buttons. Fills `parent` (give it a square size).
+function MapView.BuildPlayerMarkerBadge(parent, typeEntry, zBase)
+	zBase = zBase or 5
+	local plate = Instance.new("Frame")
+	plate.Name = "Plate"
+	plate.AnchorPoint = Vector2.new(.5, .5)
+	plate.Position = UDim2.fromScale(.5, .5)
+	plate.Size = UDim2.new(1, -MARKER_RING_PX * 2, 1, -MARKER_RING_PX * 2)
+	plate.BackgroundColor3 = MARKER_PLATE
+	plate.BorderSizePixel = 0
+	plate.ZIndex = zBase + 1
+	plate.Parent = parent
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(1, 0)
+	corner.Parent = plate
+	local ring = Instance.new("UIStroke")
+	ring.Color = typeEntry.ring
+	ring.Thickness = MARKER_RING_PX
+	ring.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	ring.Parent = plate
+
+	local image = PLAYER_MARKER_ICONS[typeEntry.id]
+	if image and image ~= "" then
+		local icon = Instance.new("ImageLabel")
+		icon.Name = "Icon"
+		icon.AnchorPoint = Vector2.new(.5, .5)
+		icon.Position = UDim2.fromScale(.5, .5)
+		icon.Size = UDim2.fromScale(.72, .72)
+		icon.BackgroundTransparency = 1
+		icon.Image = image
+		icon.ScaleType = Enum.ScaleType.Fit
+		icon.ZIndex = zBase + 2
+		icon.Parent = plate
+	else
+		-- The general pin: a small bronze diamond with a dark edge.
+		local pin = Instance.new("Frame")
+		pin.Name = "Pin"
+		pin.AnchorPoint = Vector2.new(.5, .5)
+		pin.Position = UDim2.fromScale(.5, .5)
+		pin.Size = UDim2.fromScale(.42, .42)
+		pin.Rotation = 45
+		pin.BackgroundColor3 = typeEntry.ring
+		pin.BorderSizePixel = 0
+		pin.ZIndex = zBase + 2
+		pin.Parent = plate
+		local edge = Instance.new("UIStroke")
+		edge.Color = NPC_INK
+		edge.Thickness = 1
+		edge.Parent = pin
+	end
+	return plate
+end
+
+-- Your own markers. `list` = { { id, type, x, z } }, x/z in map cells. Always shown (they're
+-- yours), on the canvas like the NPC crests, so panning costs nothing.
+function MapView:SetPlayerMarkers(list)
+	local keep = {}
+	for _, entry in ipairs(list) do
+		local typeEntry = Config.PlayerMarkerType(entry.type)
+		if typeEntry then
+			keep[entry.id] = true
+			local marker = self.playerMarkers[entry.id]
+			if not marker or marker.type ~= entry.type then
+				if marker then marker.holder:Destroy() end
+				local holder = Instance.new("Frame")
+				holder.Name = entry.id
+				holder.AnchorPoint = Vector2.new(.5, .5)
+				holder.BackgroundTransparency = 1
+				holder.Parent = self.playerLayer
+				if HudArt.GLOW_SOFT ~= "" then
+					local shadow = Instance.new("ImageLabel")
+					shadow.Name = "Shadow"
+					shadow.AnchorPoint = Vector2.new(.5, .5)
+					shadow.Position = UDim2.fromScale(.5, .5 + NPC_SHADOW_DROP)
+					shadow.Size = UDim2.fromScale(NPC_SHADOW, NPC_SHADOW)
+					shadow.BackgroundTransparency = 1
+					shadow.Image = HudArt.GLOW_SOFT
+					shadow.ImageColor3 = BLACK
+					shadow.ImageTransparency = .25
+					shadow.ZIndex = 5
+					shadow.Parent = holder
+				end
+				MapView.BuildPlayerMarkerBadge(holder, typeEntry, 5)
+				-- The tracked pin wears a pulsing ring in its type's colour (StylePlayerMarkers).
+				local track = Instance.new("Frame")
+				track.Name = "TrackRing"
+				track.AnchorPoint = Vector2.new(.5, .5)
+				track.Position = UDim2.fromScale(.5, .5)
+				track.Size = UDim2.fromScale(1.5, 1.5)
+				track.BackgroundTransparency = 1
+				track.Visible = false
+				track.ZIndex = 5
+				track.Parent = holder
+				local trackCorner = Instance.new("UICorner")
+				trackCorner.CornerRadius = UDim.new(1, 0)
+				trackCorner.Parent = track
+				local trackStroke = Instance.new("UIStroke")
+				trackStroke.Color = typeEntry.ring
+				trackStroke.Thickness = 2
+				trackStroke.Parent = track
+				local grow = Instance.new("UIScale")
+				grow.Parent = holder
+				marker = { holder = holder, type = entry.type, scale = grow, track = track, trackStroke = trackStroke }
+				self.playerMarkers[entry.id] = marker
+			end
+			marker.x, marker.z = entry.x, entry.z
+		end
+	end
+	for id, marker in pairs(self.playerMarkers) do
+		if not keep[id] then
+			marker.holder:Destroy()
+			self.playerMarkers[id] = nil
+		end
+	end
+	self:_layoutPlayerMarkers()
+end
+
+function MapView:_layoutPlayerMarkers()
+	local b = self.bounds
+	if not b then return end
+	local s = self.scale
+	local px = self.playerMarkerPx or math.clamp(math.floor(s * self.playerMarkerPerCell + .5), self.playerMarkerMin, self.playerMarkerMax)
+	for _, marker in pairs(self.playerMarkers) do
 		marker.holder.Size = UDim2.fromOffset(px, px)
 		marker.holder.Position = UDim2.fromOffset((marker.x - b.x0) * s, (marker.z - b.z0) * s)
-		marker.name.Visible = named and marker.name.Text ~= ""
 	end
+end
+
+-- Per frame: the hovered / selected pin grows, the tracked one wears a ring that breathes with
+-- `pulse` (0..1).
+function MapView:StylePlayerMarkers(hoverId, selectedId, trackedId, pulse)
+	for id, marker in pairs(self.playerMarkers) do
+		marker.scale.Scale = (id == hoverId or id == selectedId) and 1.3 or 1
+		marker.track.Visible = id == trackedId
+		if id == trackedId then
+			marker.track.Size = UDim2.fromScale(1.35 + .35 * pulse, 1.35 + .35 * pulse)
+			marker.trackStroke.Transparency = .1 + .6 * pulse
+		end
+	end
+end
+
+function MapView:PlayerMarkerCentre(id)
+	local marker = self.playerMarkers[id]
+	if not marker then return nil end
+	return marker.holder.AbsolutePosition + marker.holder.AbsoluteSize / 2
+end
+
+-- The marker under `point` (input / AbsolutePosition space), nearest first, or nil.
+function MapView:PlayerMarkerAt(point)
+	local best, bestDist = nil, math.huge
+	for id, marker in pairs(self.playerMarkers) do
+		local holder = marker.holder
+		local centre = holder.AbsolutePosition + holder.AbsoluteSize / 2
+		local radius = holder.AbsoluteSize.X / 2 + 2
+		local dist = (point - centre).Magnitude
+		if dist <= radius and dist < bestDist then best, bestDist = id, dist end
+	end
+	return best
 end
 
 function MapView:SetBounds(bounds)
@@ -441,6 +750,7 @@ function MapView:Layout()
 		entry.label.TextSize = textSize
 	end
 	self:_layoutNpcMarkers()
+	self:_layoutPlayerMarkers()
 end
 
 -- centre*: the map cell at the middle of the view; player*: where the arrow goes.

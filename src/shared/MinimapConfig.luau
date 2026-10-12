@@ -73,6 +73,30 @@ MinimapConfig.NpcMarkerBigMin = 18
 MinimapConfig.NpcMarkerBigMax = 32
 MinimapConfig.NpcNameScale = 5        -- px per cell (default view is ~2, max 8)
 
+-- Player markers: pins you place yourself (right click the M map), saved with your map
+-- (profile.map.markers, SSS/MinimapService). Shown on both views. Order = the picker's order.
+-- Ring = the coloured ring round the dark plate that tells the types apart at a glance; the
+-- icons are picked in client/Minimap/MapView (asset registries, not here).
+MinimapConfig.PlayerMarkerTypes = {
+	{ id = "General", label = "General", ring = Color3.fromRGB(214, 172, 84) },
+	{ id = "Mining", label = "Mining", ring = Color3.fromRGB(150, 158, 172) },
+	{ id = "Fishing", label = "Fishing", ring = Color3.fromRGB(84, 150, 206) },
+	{ id = "Combat", label = "Combat", ring = Color3.fromRGB(196, 66, 52) },
+}
+MinimapConfig.PlayerMarkerMax = 40     -- per player
+MinimapConfig.PlayerMarkerMiniPx = 18  -- size on the corner map
+MinimapConfig.PlayerMarkerPerCell = 7  -- M map: px per map cell, clamped to Min..Max
+MinimapConfig.PlayerMarkerBigMin = 18
+MinimapConfig.PlayerMarkerBigMax = 30
+
+-- The marker type entry for an id, or nil.
+function MinimapConfig.PlayerMarkerType(id)
+	for _, entry in ipairs(MinimapConfig.PlayerMarkerTypes) do
+		if entry.id == id then return entry end
+	end
+	return nil
+end
+
 MinimapConfig.BYTES_PER_CHUNK = MinimapConfig.CHUNK * MinimapConfig.CHUNK / 8
 
 -------------------------------------------------------------------------------------------------

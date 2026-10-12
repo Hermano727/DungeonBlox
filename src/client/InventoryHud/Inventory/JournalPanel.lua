@@ -6,6 +6,7 @@
 --    Loot Score    per-tier score, dry streaks, and the Activity view -- LootScorePage.lua
 --    Records       lifetime totals, as a ledger -- RecordsPage.lua
 --    Leaderboards  cross-server boards: skills, kills, score -- LeaderboardsPage.lua
+--    Alignment     Lawful / Neutral / Chaotic, changed in safe zones -- AlignmentPage.lua
 --  New page: a component that renders a Journal/Book (carrying `side`), plus one entry in PAGES.
 --
 --  Size (2026-10-01): the page area runs from the sidebar to RIGHT_ROOM short of the right edge
@@ -20,6 +21,7 @@ local SkillsPage = require(script.Parent:WaitForChild("SkillsPage"))
 local StatsPage = require(script.Parent:WaitForChild("StatsPage"))
 local RecordsPage = require(script.Parent:WaitForChild("RecordsPage"))
 local LeaderboardsPage = require(script.Parent:WaitForChild("LeaderboardsPage"))
+local AlignmentPage = require(script.Parent:WaitForChild("AlignmentPage"))
 local JournalParts = script.Parent:WaitForChild("Journal")
 local Sidebar = require(JournalParts:WaitForChild("Sidebar"))
 local Style = require(JournalParts:WaitForChild("Style"))
@@ -34,6 +36,7 @@ local PAGES = {
 	{ id = "lootScore",    label = "Loot Score",   iconArt = "icon_loot_score",   component = LootScorePage },
 	{ id = "records",      label = "Records",      iconArt = "icon_records",      component = RecordsPage },
 	{ id = "leaderboards", label = "Leaderboards", iconArt = "icon_leaderboards", component = LeaderboardsPage },
+	{ id = "alignment",    label = "Alignment",    iconArt = "icon_cat_defense",  component = AlignmentPage },
 }
 local GAP = 22
 -- Free right of the book on EVERY page (the Stats ribbons hang there), so the book keeps one

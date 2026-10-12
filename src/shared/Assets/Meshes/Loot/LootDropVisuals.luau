@@ -149,4 +149,41 @@ function LootDropVisuals.GetForGearTemplate(template: any): VisualEntry?
 	return nil
 end
 
+-- The full gear resolution: GetForGearTemplate, then the fallbacks rolled/catalog gear needs.
+-- Shared (it used to be private to WorldLootService) so the dungeon clear sequence's relics
+-- show the same mesh a world drop of that item would.
+function LootDropVisuals.ResolveForTemplate(template: any): VisualEntry?
+	local entry = LootDropVisuals.GetForGearTemplate(template)
+	if entry or type(template) ~= "table" then
+		return entry
+	end
+	local ReplicatedStorage = game:GetService("ReplicatedStorage")
+	local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
+	local ItemConfig = require(ReplicatedStorage:WaitForChild("ItemConfig"))
+	-- Catalog gear (TrainingBoots, ...) carries an itemId but no slot tag, so the
+	-- tag lookup misses it; fall back to its slot (equipSlot, then the catalog Slot).
+	local def = type(template.itemId) == "string" and ItemDefinitions.Get(template.itemId) or nil
+	for _, slot in ipairs({ template.equipSlot, def and def.Slot }) do
+		if type(slot) == "string" and LootDropVisuals.ByGearTag[slot] then
+			return LootDropVisuals.ByGearTag[slot]
+		end
+	end
+	-- Catalog weapons (the Training Sword) have neither a weapon-kind tag nor a slot the
+	-- table knows ("Weapon"): find their kind by the tool prefab they hold
+	-- (ItemConfig.WEAPON_DROP_PREFAB_BY_TYPE, e.g. Sword -> TrainingSword).
+	local prefab = template.toolPrefabName or (def and def.ToolPrefabName)
+	if type(prefab) == "string" then
+		for kind, kindPrefab in pairs(ItemConfig.WEAPON_DROP_PREFAB_BY_TYPE) do
+			if kindPrefab == prefab and LootDropVisuals.ByGearTag[kind] then
+				return LootDropVisuals.ByGearTag[kind]
+			end
+		end
+	end
+	return nil
+end
+
+-- Where the CLIENT finds the prefabs: the server mirrors ServerStorage.LootDropVisuals here at
+-- boot (SSS/DungeonClearSequence), since clients cannot read ServerStorage.
+LootDropVisuals.REPLICA_FOLDER = "LootDisplayPrefabs"
+
 return LootDropVisuals

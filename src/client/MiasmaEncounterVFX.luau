@@ -31,6 +31,7 @@ local ShroudFX = require(script.Parent:WaitForChild("MiasmaShroudFX"))
 local AuraFX = require(script.Parent:WaitForChild("MiasmaAuraFX"))
 local ValveArrows = require(script.Parent:WaitForChild("MiasmaValveArrows"))
 local PureWaterCutscene = require(script.Parent:WaitForChild("MiasmaPureWaterCutscene"))
+local EntranceCutscene = require(script.Parent:WaitForChild("MiasmaEntranceCutscene"))
 local SoundEffects = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Sounds"):WaitForChild("SoundEffects"))
 local SfxService = require(ReplicatedStorage:WaitForChild("SfxService"))
 
@@ -77,7 +78,7 @@ local function playCollapseSound(delay)
 	local sound = Instance.new("Sound")
 	sound.Name = "MiasmaCeilingCollapse"
 	sound.SoundId = id
-	sound.SoundGroup = SfxService.GetEffectsGroup() -- Master x Effects sliders
+	sound.SoundGroup = SfxService.GetGroupFor("MiasmaCeilingCollapse") -- Master x Creatures
 	sound.Parent = SoundService
 	collapseSound = sound
 	sound.Ended:Connect(function()
@@ -116,7 +117,7 @@ local AURA_KINDS = { BossLanding = true, BossRoar = true, Staggered = true, Pure
 
 function VFX.Presentation(payload)
 	local kind = payload.kind
-	-- Miasma's aura + base ooze, from its landing on (or from any later presentation that carries
+	-- Miasma's poison (body vapour, drool, trail puddles; MiasmaAuraFX), from its landing on (or from any later presentation that carries
 	-- the boss, so a late joiner still gets it). Start() ignores the same boss twice.
 	if AURA_KINDS[kind] and typeof(payload.boss) == "Instance" then AuraFX.Start(payload.boss, folder) end
 	-- Valve guide arrows: up when valves wake, each down when primed, all down when the cycle ends.
@@ -137,6 +138,20 @@ function VFX.Presentation(payload)
 		return
 	elseif kind == "StunEnded" or kind == "Recorrupt" then
 		AuraFX.Restore()
+	end
+	-- The room's opening (the plate, the tablet, the valve, the gate shutting behind the party).
+	if kind == "EntranceCutscene" then
+		EntranceCutscene.Play(payload, folder)
+		return
+	elseif kind == "SlimeDrop" then
+		EntranceCutscene.DropSlimes(payload, folder)
+		return
+	elseif kind == "EntranceSkipVotes" then
+		EntranceCutscene.SetVotes(payload.votes, payload.needed)
+		return
+	elseif kind == "EntranceCutsceneSkipped" then
+		EntranceCutscene.Skipped()
+		return
 	end
 	-- Phase 1 -> 2 drop: every member's camera runs the cutscene; ends early if the fight does.
 	if kind == "BossDropCutscene" then
@@ -180,6 +195,7 @@ function VFX.Presentation(payload)
 		ShroudFX.Stop()
 		AuraFX.Stop()
 		PureWaterCutscene.Stop()
+		EntranceCutscene.Stop()
 		stopCollapseSound()
 	end
 	-- Enrage: same cutscene machinery on the boss where it stands, rocks + rumble, then the
@@ -208,6 +224,9 @@ function VFX.Presentation(payload)
 		task.delay(math.max(0, spewStart - elapsed), function()
 			local boss = typeof(payload.boss) == "Instance" and payload.boss or nil
 			RoarFX.Play(boss, spewEnd - spewStart, landing, folder, { style = "poison" })
+			if landing then
+				SfxService.PlayEffect("PoisonSpit", { Position = landing, RollOffMinDistance = 60, RollOffMaxDistance = 500, PlaybackSpeed = 0.85 })
+			end
 		end)
 		return
 	end
@@ -225,6 +244,20 @@ function VFX.Presentation(payload)
 			focus = payload.position, fullRadius = SLAM_SHAKE.fullRadius,
 		})
 		CeilingDebris.Burst(payload.position, ROCK_RADIUS, SLAM_ROCKS, folder, SLAM_ROCK_SCALE)
+		return
+	end
+	-- The submerge move's payoff: Miasma burst up under a circle and slammed down there. The
+	-- landing slam's shockwave + a lighter jolt, and the slam sound (boss-sized: full volume
+	-- across the room, fading only far outside it).
+	if kind == "EruptSlam" and typeof(payload.position) == "Vector3" then
+		local boss = typeof(payload.boss) == "Instance" and payload.boss or nil
+		LandingSlamFX.Play(payload.position, payload.radius, boss, folder)
+		ArenaShake.Shake({
+			amplitude = SLAM_SHAKE.amplitude * .6, rotation = SLAM_SHAKE.rotation * .6, duration = SLAM_SHAKE.duration,
+			rampIn = SLAM_SHAKE.rampIn, decay = SLAM_SHAKE.decay, frequency = SLAM_SHAKE.frequency,
+			focus = payload.position, fullRadius = SLAM_SHAKE.fullRadius,
+		})
+		SfxService.PlayEffect("MiasmaSlam", { Position = payload.position, RollOffMinDistance = 80, RollOffMaxDistance = 600 })
 		return
 	end
 	-- Stun visuals on the boss itself. Stagger: the dazed star ring. Pure water: the ring plus
@@ -267,6 +300,7 @@ function VFX.StopAll()
 	AuraFX.Stop()
 	ValveArrows.Clear()
 	PureWaterCutscene.Stop()
+	EntranceCutscene.Stop()
 	LobFX.StopAll()
 	ArenaShake.StopAll()
 	stopCollapseSound()
@@ -281,6 +315,7 @@ function VFX.Destroy()
 	AuraFX.Stop()
 	ValveArrows.Clear()
 	PureWaterCutscene.Stop()
+	EntranceCutscene.Stop()
 	LobFX.StopAll()
 	ArenaShake.StopAll()
 	stopCollapseSound()

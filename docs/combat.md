@@ -17,6 +17,10 @@ aliases: [Damage, Death-drop]
 ## Alignment & PvP
 
 - Neutral/Chaotic alignment = PvP enabled.
+- **PvP hits (2026-10-11):** the target is knocked back like a mob hit at 1.5x (`AlignmentConfig.PVP_KNOCKBACK_MULTIPLIER`, through `SSS/PlayerKnockback`, the same push `MobClass:ApplyPlayerHitstun` uses), and both players (and cleave splash victims) are in combat for 10 s (`PVP_COMBAT_SECONDS`) instead of the PvE 5 s. `CombatStateService.Flag` only ever extends a timer, so a mob hit can't shorten it.
+- **Choosing it (2026-10-11):** the Journal's Alignment page (`client/InventoryHud/Inventory/AlignmentPage.lua`, RF `AlignmentSet` -> `ProfileService.SetAlignment`). Only inside a safe (Lawful) zone and out of combat; no cooldown on a free change. Rules and numbers: `RS/AlignmentConfig`.
+- **Dying Neutral or Chaotic** (`ProfileService.ForceLawfulOnDeath`, from `DeathLootService`'s death hook, every death incl. dungeons) sets you to Lawful and locks you out of non-Lawful for `AlignmentConfig.DEATH_LOCKOUT`: 2 min after a Neutral death, 5 min after a Chaotic one (`profile.alignment.cooldownUntil`; Lawful stays pickable). A centre flash says so. Dev: F8 Profile tab, Alignment death lock (bypass for the session / clear now).
+- The client knows whether it's in a safe zone from the `InSafeZone` player attribute (ZoneService's occupancy tick); the server still checks `ZoneService.IsPlayerInSafeZone` itself.
 - **Death rule (`SSS/DeathProtection`) applies to every OVERWORLD death regardless of alignment today** — no Lawful/Neutral leniency yet. **Dungeon deaths are the exception: they drop nothing** — see [Dungeon deaths](#dungeon-deaths-keep-the-inventory) below.
 - Shard Hop cooldown by alignment: Lawful 10s, Neutral 30s, Chaotic 1m. (See [Mob & NPC System](./mob-and-npc-system.md) for spawner/sharding mechanics generally.)
 
@@ -85,7 +89,7 @@ There are no revives in the boss room. A party member who dies while the instanc
 
 **The client (`SpectatorClient`):**
 - Hides the HUD and follows a living teammate. Right-drag orbits, the wheel zooms, `Keys.SpectatePrev/Next` (arrow keys) switch teammate.
-- A top bar has **Leave Dungeon**, which sends `DungeonLeaveRequest`.
+- **Leave Dungeon** sits beside the run timer in the bottom-left HUD stack for the whole run (`client/DungeonHudClient`): hold Ctrl to free the cursor, click it, click again within 3 s to confirm. It sends `DungeonLeaveRequest` (only you leave; the party carries on).
 
 **How it ends:** leaving, or the realm being torn down (clear or wipe), clears the attribute and respawns the player at their hearthstone (`endSpectating`).
 

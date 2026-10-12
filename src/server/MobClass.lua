@@ -62,9 +62,8 @@ local LEASH_GRACE_PROXIMITY = 12 -- studs; "physically close enough" to ignore t
 -- Never-deaggro re-target radius: covers a whole dungeon realm, but not other realms or
 -- the overworld (realms are parked ~100k studs apart).
 local NEVER_DEAGGRO_REACQUIRE_RANGE = 1500
-local PLAYER_HIT_KNOCKBACK_HORIZONTAL = 4 -- studs/s impulse added to the player on being hit
-local PLAYER_HIT_KNOCKBACK_VERTICAL = 8 -- studs/s upward impulse -- a small hop, just enough to interrupt movement
--- Both are the BASELINE every ordinary mob hit uses. A mob scales its own
+-- The push a player gets when hit lives in SSS/PlayerKnockback (shared with PvP hits):
+-- PlayerKnockback.HORIZONTAL / VERTICAL are the BASELINE every ordinary mob hit uses. A mob scales its own
 -- outgoing knockback with MobData's PlayerKnockbackMultiplier (Kane hits much
 -- harder than a slime), and one authored special can override that again with
 -- its own PlayerKnockbackMultiplier -- see ApplyPlayerHitstun. That multiplier
@@ -108,6 +107,8 @@ local CombatSfxConfig = require(ReplicatedStorage:WaitForChild("CombatSfxConfig"
 local DamageService = require(script.Parent:WaitForChild("DamageService"))
 local MobAnimController = require(script.Parent:WaitForChild("MobAnimController"))
 local MobTelegraph = require(script.Parent:WaitForChild("MobTelegraph"))
+local PlayerKnockback = require(script.Parent:WaitForChild("PlayerKnockback"))
+local MobCombatSfx = require(script.Parent:WaitForChild("MobCombatSfx"))
 local MobHPBarUI = require(script.Parent:WaitForChild("MobHPBarUI"))
 local MobGroundUtils = require(script.Parent:WaitForChild("MobGroundUtils"))
 local MobDeathEffect = require(script.Parent:WaitForChild("MobDeathEffect"))
@@ -1192,6 +1193,23 @@ function MobClass:IsTargetWithinMeleeReach(targetHumanoid, horizontalLeeway)
         and targetMax >= mobMin - MELEE_VERTICAL_REACH
 end
 
+-- Frontal cone (half-angle in degrees) off the mob's root LookVector, flat. A target standing
+-- right on top of the root counts as in front. Used by the ordinary swing's hit-frame check
+-- (MobData `MeleeHalfAngle`, e.g. Miasma's bite) and by MobMovesetBehaviour's specials.
+function MobClass:IsTargetInFrontCone(targetHumanoid, halfAngleDegrees)
+    local root = self.Model and self.Model.PrimaryPart
+    local character = targetHumanoid and targetHumanoid.Parent
+    local targetRoot = character and character:FindFirstChild("HumanoidRootPart")
+    if not root or not targetRoot then return false end
+    local offset = targetRoot.Position - root.Position
+    local horizontal = Vector3.new(offset.X, 0, offset.Z)
+    if horizontal.Magnitude < 0.05 then return true end
+    local look = root.CFrame.LookVector
+    local forward = Vector3.new(look.X, 0, look.Z)
+    if forward.Magnitude < 0.05 then return false end
+    return forward.Unit:Dot(horizontal.Unit) >= math.cos(math.rad(halfAngleDegrees))
+end
+
 -- Walking toward the player. Drops back to Idle (in place -- no "return to
 -- spawn" walk in v1) if the target is lost or dead. Leaving the home zone
 -- (ReturnDistance from spawn) does not instantly deaggro: physical distance
@@ -1351,11 +1369,16 @@ function MobClass:PerformAttack(targetHumanoid)
         -- Recheck at the hit frame: jumping, backing away, teleporting or
         -- respawning during the windup must avoid both damage and hitstun.
         if not self:IsTargetWithinMeleeReach(targetHumanoid) then return end
+        -- Optional frontal cone, judged only HERE at the hit frame (the mob keeps turning to
+        -- face its target through the windup): a bite that misses whoever got behind it.
+        local halfAngle = self.Stats.MeleeHalfAngle
+        if halfAngle and not self:IsTargetInFrontCone(targetHumanoid, halfAngle) then return end
         if targetPlayer and targetPlayer.Character ~= targetCharacter then return end
         local char = targetHumanoid.Parent
         local player = char and Players:GetPlayerFromCharacter(char)
         if player then
-            DamageService.ApplyToPlayer(player, self.Stats.BaseDamage, self)
+            local dealt = DamageService.ApplyToPlayer(player, self.Stats.BaseDamage, self)
+            MobCombatSfx.WeaponHit(self, player, dealt)
             self:ApplyPlayerHitstun(char)
         else
             -- NPC target (no player profile). Fall back to direct.
@@ -1367,12 +1390,21 @@ function MobClass:PerformAttack(targetHumanoid)
     -- two can never drift (retuning AttackSpeed re-times both). Opt-in per mob
     -- via MobData's `Telegraph`, so mobs without it are untouched. Only the
     -- delayed-hit path can telegraph at all -- an instant-hit mob has no windup
-    -- to warn during. No frontal cone here on purpose: IsTargetWithinMeleeReach
-    -- has none for the ordinary swing, so the honest shape is a full ring.
+    -- to warn during. The shape is the real hit area: a full ring, or the
+    -- MeleeHalfAngle sector for a mob whose swing has a frontal cone.
     if self._attackHitDelay and self.Stats and self.Stats.Telegraph then
         MobTelegraph.Begin(self, self.Stats.Telegraph, { self._attackHitDelay },
-            MobTelegraph.ReachFor(self), nil)
+            MobTelegraph.ReachFor(self), self.Stats.MeleeHalfAngle)
         MobTelegraph.ClearAfter(self, self._attackHitDelay + TELEGRAPH_CLEAR_TAIL)
+    end
+
+    -- Swing whoosh for armed mobs (MobData CombatSounds), timed to the same impact moment,
+    -- silent if the swing gets interrupted first.
+    do
+        local attackTrack = self._animTracks and self._animTracks.Attack
+        MobCombatSfx.SwingIn(self, self._attackHitDelay or 0, function()
+            return not attackTrack or attackTrack.IsPlaying
+        end)
     end
 
     -- Mobs with an AttackHitFrame configured (see MobAnimConfig) land their
@@ -1395,55 +1427,19 @@ function MobClass:PerformAttack(targetHumanoid)
     return true
 end
 
--- Small hop + outward push on the player when hit -- just enough to
--- interrupt their movement slightly. A one-time AssemblyLinearVelocity add
--- does NOT work here: confirmed by direct testing that Roblox's player
--- Humanoid controller zeroes it out the very next physics step (the same
--- class of problem as mob locomotion, just on the player's side this time).
--- A BodyVelocity re-asserts the push every step for a short duration, which
--- wins against that correction -- confirmed by testing to produce real,
--- if small, displacement. Self-destructs via Debris so it never lingers.
-local Debris = game:GetService("Debris")
+-- Small hop + outward push on the player when hit (SSS/PlayerKnockback, shared with PvP).
 -- `knockbackMultiplier` is an optional per-hit override (one authored special
 -- hitting harder than the mob's ordinary swing); omitted, the mob's own
 -- MobData PlayerKnockbackMultiplier applies, and failing that the baseline.
 function MobClass:ApplyPlayerHitstun(playerCharacter, knockbackMultiplier)
-    local hrp = playerCharacter:FindFirstChild("HumanoidRootPart")
-    if not hrp or not self.Model then
-        return
-    end
-    local primaryPart = self.Model.PrimaryPart
+    local primaryPart = self.Model and self.Model.PrimaryPart
     if not primaryPart then
         return
     end
-
     local mult = tonumber(knockbackMultiplier)
         or tonumber(self.Stats and self.Stats.PlayerKnockbackMultiplier)
         or 1
-    if mult <= 0 then return end
-
-    local horizontal = Vector3.new(hrp.Position.X - primaryPart.Position.X, 0, hrp.Position.Z - primaryPart.Position.Z)
-    local dir = horizontal.Magnitude > 0.1 and horizontal.Unit or Vector3.new(0, 0, 1)
-
-    -- HORIZONTAL ONLY. The vertical component stays at the baseline hop for
-    -- every mob however hard it hits: scaling it too launched the player high
-    -- enough to read as floaty, and a big pop can also lift them past the
-    -- melee vertical reach so the later impacts of a combo whiff entirely.
-    -- A heavy hit should send you further back, not further up.
-    local bv = Instance.new("BodyVelocity")
-    bv.Velocity = Vector3.new(
-        dir.X * PLAYER_HIT_KNOCKBACK_HORIZONTAL * mult,
-        PLAYER_HIT_KNOCKBACK_VERTICAL,
-        dir.Z * PLAYER_HIT_KNOCKBACK_HORIZONTAL * mult
-    )
-    -- Only the horizontal budget scales with it, for the same reason. (The
-    -- vertical 4000 is mostly spent holding the character's weight against
-    -- gravity anyway, which is why the baseline hop is as small as it is.)
-    local force = 4000 * math.max(1, mult)
-    bv.MaxForce = Vector3.new(force, 4000, force)
-    bv.P = 1250
-    bv.Parent = hrp
-    Debris:AddItem(bv, 0.15)
+    PlayerKnockback.Push(playerCharacter, primaryPart.Position, mult)
 end
 
 function MobClass:SetSpawnIntroState(active)

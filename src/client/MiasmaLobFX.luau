@@ -16,9 +16,12 @@
 ]]
 
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
+
+local SfxService = require(ReplicatedStorage:WaitForChild("SfxService"))
 
 local LobFX = {}
 
@@ -37,6 +40,9 @@ local TEX = {
 }
 
 local casts = {} -- [castId] = { reticle = {...}, ... }
+-- One spit sound per volley: Miasma lobs at every player at once (one LobLaunch each).
+local SPIT_SOUND_GAP = .25
+local lastSpitSound = 0
 local player = Players.LocalPlayer
 
 local function part(name, parent)
@@ -322,6 +328,10 @@ function LobFX.Launch(payload, parent)
 	reticle.zoneStroke.Transparency = 0
 
 	local from = mouthPosition(payload.boss) or (landing + Vector3.new(0, 20, 0))
+	if os.clock() - lastSpitSound >= SPIT_SOUND_GAP then
+		lastSpitSound = os.clock()
+		SfxService.PlayEffect("PoisonSpit", { Position = from, RollOffMinDistance = 60, RollOffMaxDistance = 500 })
+	end
 	local glob = buildGlob(cast.folder)
 	glob.Position = from
 	local startedAt = os.clock()
@@ -350,6 +360,7 @@ function LobFX.Impact(payload, parent)
 	local radius = math.max(1, tonumber(payload.radius) or 6)
 	local cast = castId ~= nil and casts[castId] or nil
 	if typeof(payload.position) ~= "Vector3" then cleanup(castId) return end
+	SfxService.PlayEffect("PoisonSplat", { Position = payload.position, RollOffMinDistance = 30, RollOffMaxDistance = 300 })
 	local folder = Instance.new("Folder")
 	folder.Name = "MiasmaLobSplash"
 	folder.Parent = parent or Workspace

@@ -4,8 +4,9 @@
 	          Lv 12  PARTY        combat level (muted), plus PARTY for your party members
 	          PlayerName          display name, coloured by alignment
 
-	  Alignment colour: Lawful bone white, Neutral gold, Chaotic red (PlayerAlignment attribute,
-	  set by ProfileService on every push). Level: the CombatLevel attribute (same place).
+	  Alignment colour (RS/AlignmentConfig.COLORS): Lawful plain white, Neutral yellow, Chaotic
+	  red (PlayerAlignment attribute, set by ProfileService on every push, so a change or a death
+	  reset recolours it at once). Level: the CombatLevel attribute (same place).
 	  Party: the local-only PartyMemberIds attribute PartyClient keeps current.
 
 	Replaces PartyClient's old separate "[NEUTRAL]/[CHAOTIC]" and "[PARTY] name" tags. Hidden
@@ -25,11 +26,7 @@ local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
 
 local player = Players.LocalPlayer
 
-local ALIGNMENT_COLOR = {
-	Lawful = Color3.fromRGB(238, 232, 220),
-	Neutral = Color3.fromRGB(255, 212, 84),
-	Chaotic = Color3.fromRGB(255, 82, 76),
-}
+local ALIGNMENT_COLOR = require(ReplicatedStorage:WaitForChild("AlignmentConfig")).COLORS
 local LEVEL_COLOR = Color3.fromRGB(190, 180, 166)
 local PARTY_COLOR = Color3.fromRGB(120, 214, 255)
 local MAX_DISTANCE = 90 -- studs

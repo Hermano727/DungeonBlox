@@ -177,17 +177,8 @@ local function weaponSheet(item, attributes)
 	}
 end
 
-local function bestSaddle(profile)
-	local best
-	for _, item in pairs(profile.inventory or {}) do
-		local def = type(item) == "table" and type(item.itemId) == "string" and ItemDefinitions.Get(item.itemId) or nil
-		local speed = def and tonumber(def.MountSpeed)
-		if speed and speed > 0 and (not best or speed > best.speed) then
-			best = { name = def.DisplayName or item.itemId, tier = def.Tier, speed = speed, item = item }
-		end
-	end
-	return best
-end
+-- The fastest saddle owned: the same rule the mount uses (MountConfig.BestSaddle).
+local bestSaddle = require(ReplicatedStorage:WaitForChild("MountConfig")).BestSaddle
 
 function StatsSheet.Compute(snap)
 	local profile = snap and snap.profile

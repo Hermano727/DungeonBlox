@@ -42,6 +42,7 @@ end
 
 ensureRemoteEvent("DungeonProfilePush")
 ensureRemoteEvent("DungeonAlignmentRequest")
+local rfAlignment = ensureRemoteFunction("AlignmentSet")
 ensureRemoteEvent("DungeonPvPHit")
 ensureRemoteEvent("MiningRewardRequest")
 ensureRemoteEvent("MiningDebrisRequest")
@@ -272,6 +273,17 @@ evAlignment.OnServerEvent:Connect(function(player, requested)
 	if type(requested) ~= "string" then return end
 	DungeonProfile.SetAlignment(player, requested)
 end)
+
+--[[
+  RemoteFunction: AlignmentSet (client -> server), the Journal's Alignment page.
+    Args: alignment string. Returns ok, reason ("not_safe_zone" | "in_combat" | "on_cooldown" |
+    "invalid_alignment" | "throttled" | ...). Same rules as the event above (SetAlignment).
+]]
+rfAlignment.OnServerInvoke = function(player, requested)
+	if not throttle(player.UserId) then return false, "throttled" end
+	if type(requested) ~= "string" then return false, "invalid_alignment" end
+	return DungeonProfile.SetAlignment(player, requested)
+end
 
 --[[
   RemoteEvent: DungeonPvPHit (client -> server)
@@ -616,6 +628,8 @@ end
   DevProfileAction (F8 Profile tab): admin-only, same gate as DevGrantItem.
     ("setSkill", { branch = "combat"|"mining"|"fishing", level = n })
     ("refillHp") / ("refillEnergy") / ("refillHunger") / ("refillAll")
+    ("alignmentLockBypass", { on = bool }) / ("alignmentLockClear"): the death lock on
+    non-Lawful alignments (ProfileService.DevSetAlignmentLockBypass)
   Returns ok, err.
 ]]
 local rfDevProfile = ensureRemoteFunction("DevProfileAction")
@@ -693,6 +707,10 @@ rfDevProfile.OnServerInvoke = function(player, action, args)
 		local okF = refillHunger()
 		cleanse()
 		return okH and okE and okF, "partial"
+	elseif action == "alignmentLockBypass" then
+		return DungeonProfile.DevSetAlignmentLockBypass(player, args.on == true)
+	elseif action == "alignmentLockClear" then
+		return DungeonProfile.DevSetAlignmentLockBypass(player, nil, true)
 	elseif action == "tutorialReset" or action == "tutorialSkip" or action == "tutorialStep" then
 		-- The tutorial (SSS/TutorialService): start over / end it / jump to a step.
 		local Tutorial = require(ServerScriptService:WaitForChild("TutorialService"))

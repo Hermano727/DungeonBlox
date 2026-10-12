@@ -2128,10 +2128,12 @@ function ProfileService.SetInRaid(player, inRaid)
 	ProfileService.PushProfile(player)
 end
 
--- Alignment system: server-authoritative selection of Lawful / Neutral / Chaotic.
--- Changing alignment triggers a 5-minute cooldown during which no further change
--- is allowed. Picking the alignment you already have is idempotent (no cooldown burn).
-local ALIGNMENT_COOLDOWN = 300  -- seconds
+-- Alignment system: server-authoritative selection of Lawful / Neutral / Chaotic (rules in
+-- RS/AlignmentConfig). Changing it needs a safe zone and no combat; there is no cooldown on a
+-- free change (2026-10-11: it was a flat 5 minutes on every change). The only lock is the death
+-- one: dying Neutral/Chaotic forces Lawful and profile.alignment.cooldownUntil keeps you from
+-- picking a non-Lawful alignment until it runs out. Picking what you already have is a no-op.
+local AlignmentConfig = require(ReplicatedStorage:WaitForChild("AlignmentConfig"))
 local VALID_ALIGNMENTS = { Lawful = true, Neutral = true, Chaotic = true }
 -- Alignments that may engage in PvP. Lawful players are non-combatants:
 -- they cannot attack other players and cannot be attacked by other players.
@@ -2183,15 +2185,59 @@ function ProfileService.SetAlignment(player, newAlignment)
 		return true, nil
 	end
 
-	if os.time() < (tonumber(profile.alignment.cooldownUntil) or 0) then
+	local cs = getCombatState()
+	if cs and cs.IsInCombat(player) then
+		return false, "in_combat"
+	end
+	local zs = getZoneService()
+	if not zs or not zs.IsPlayerInSafeZone(player) then
+		return false, "not_safe_zone"
+	end
+	-- The death lock only holds you to Lawful: going back to Lawful is always allowed.
+	if newAlignment ~= "Lawful" and os.time() < (tonumber(profile.alignment.cooldownUntil) or 0) then
 		return false, "on_cooldown"
 	end
 
-	profile.alignment.current       = newAlignment
-	profile.alignment.cooldownUntil = os.time() + ALIGNMENT_COOLDOWN
+	profile.alignment.current = newAlignment
 
 	ProfileService.PushProfile(player)
 	return true, nil
+end
+
+-- Called on every player death (DeathLootService). Neutral/Chaotic -> Lawful, locked to Lawful
+-- for AlignmentConfig.DEATH_LOCKOUT[what you died as] seconds (never shortening a longer lock).
+-- Returns the seconds locked, or nil when nothing changed (died Lawful).
+function ProfileService.ForceLawfulOnDeath(player)
+	local profile = ProfileService.Load(player)
+	if type(profile) ~= "table" or type(profile.alignment) ~= "table" then return nil end
+	local died = profile.alignment.current
+	local lockout = AlignmentConfig.DEATH_LOCKOUT[died]
+	if not lockout then return nil end
+	profile.alignment.current = "Lawful"
+	-- F8 bypass (DevSetAlignmentLockBypass): still reset to Lawful, but no lock.
+	if player:GetAttribute("DevAlignmentLockBypass") == true then
+		lockout = 0
+	end
+	profile.alignment.cooldownUntil = math.max(tonumber(profile.alignment.cooldownUntil) or 0, os.time() + lockout)
+	ProfileService.PushProfile(player)
+	return lockout
+end
+
+-- Dev only (F8 Profile tab, admin-gated by its caller): skip the death lock for this session
+-- (a server-set player attribute, gone on rejoin). Turning it on also lifts a lock you already
+-- have; `clear` alone just lifts the current lock.
+function ProfileService.DevSetAlignmentLockBypass(player, on, clear)
+	if on ~= nil then
+		player:SetAttribute("DevAlignmentLockBypass", on == true or nil)
+	end
+	if on == true or clear == true then
+		local profile = ProfileService.Load(player)
+		if type(profile) == "table" and type(profile.alignment) == "table" then
+			profile.alignment.cooldownUntil = 0
+			ProfileService.PushProfile(player)
+		end
+	end
+	return true
 end
 
 -- Returns true, nil, { level, xp, levelsGained } -- the bucket AFTER the gain. The XP events
@@ -2266,8 +2312,36 @@ function ProfileService.DevSetSkillLevel(player, branch, level)
 end
 
 --[[
+  What salvaging one piece of gear is worth: (scrapItemId, qty). Qty = 4 * rarity tier
+  (Common 4 .. Legendary 20), item id = T{gearTier}Scrap. Pure, no profile access: the
+  Merchant's salvage and a dungeon run's auto-scrap (DungeonRunService) both price through
+  this, so the two can never disagree. `item` is an owned item or a grant template.
+]]
+function ProfileService.SalvageYield(item)
+	local catDef = type(item.itemId) == "string" and item.itemId ~= "" and ItemDefinitions.Get(item.itemId) or nil
+
+	local rarity = item.rarity
+	if (type(rarity) ~= "string" or rarity == "") and catDef then
+		rarity = catDef.Rarity
+	end
+	if type(rarity) ~= "string" or rarity == "" then
+		rarity = "Common"
+	end
+
+	local gearTier = 1
+	if catDef and type(catDef.Tier) == "number" then
+		gearTier = catDef.Tier
+	elseif type(item.tier) == "number" then
+		gearTier = item.tier
+	end
+	gearTier = math.clamp(math.floor(gearTier), 1, 5)
+
+	return ItemDefinitions.GetTierScrapItemId(gearTier), 4 * Types.GetRarityTierIndex(rarity)
+end
+
+--[[
   Merchant salvage: destroy one non-equipped armor or weapon in camp inventory and grant tier-matched scrap items.
-  Qty = 4 * rarity tier (Common 4 .. Legendary 20). Item id = T{gearTier}Scrap where gearTier is catalog Tier (1..5).
+  Payout from ProfileService.SalvageYield.
 ]]
 function ProfileService.SalvageGearByUuid(player, itemUuid)
 	local profile = ProfileService.Load(player)
@@ -2305,28 +2379,10 @@ function ProfileService.SalvageGearByUuid(player, itemUuid)
 		end
 	end
 
-	local rarity = item.rarity
-	if (type(rarity) ~= "string" or rarity == "") and catDef then
-		rarity = catDef.Rarity
-	end
-	if type(rarity) ~= "string" or rarity == "" then
-		rarity = "Common"
-	end
-
-	local gearTier = 1
-	if catDef and type(catDef.Tier) == "number" then
-		gearTier = catDef.Tier
-	elseif type(item.tier) == "number" then
-		gearTier = item.tier
-	end
-	gearTier = math.clamp(math.floor(gearTier), 1, 5)
-	local scrapItemId = ItemDefinitions.GetTierScrapItemId(gearTier)
+	local scrapItemId, scrapQty = ProfileService.SalvageYield(item)
 	if not ItemDefinitions.Get(scrapItemId) then
 		return false, "bad_scrap_item"
 	end
-
-	local tierIdx = Types.GetRarityTierIndex(rarity)
-	local scrapQty = 4 * tierIdx
 
 	ensureHotbar(profile)
 	clearUuidFromHotbar(profile, itemUuid)

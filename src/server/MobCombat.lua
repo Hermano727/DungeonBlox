@@ -13,6 +13,8 @@ local EnchantHitFeedback = require(ServerScriptService:WaitForChild("EnchantHitF
 local EnchantStatus = require(ServerScriptService:WaitForChild("CombatEnchantStatus"))
 local EnchantConfig = require(ReplicatedStorage:WaitForChild("CombatEnchantConfig"))
 local DamageNumberStyles = require(ReplicatedStorage:WaitForChild("DamageNumberStyles"))
+local AlignmentConfig = require(ReplicatedStorage:WaitForChild("AlignmentConfig"))
+local PlayerKnockback = require(ServerScriptService:WaitForChild("PlayerKnockback"))
 
 -- Server-side counterpart to CombatClient's rayDistanceIntoModelBounds: is
 -- `position` (the client's claimed hitPosition) actually inside `model`'s
@@ -435,8 +437,8 @@ local function applyDamage(player, mob, baseDamage, weaponId, weapSubs, swingMul
     return true
 end
 
--- damageScale (optional, default 1): multiplies the weapon's rolled base damage. The bow's
--- draw charge uses it (BowConfig.DamageScale); melee never passes it.
+-- damageScale (optional, default 1): multiplies the weapon's rolled base damage. Only ranged
+-- hits pass it (the bow always passes 1: full damage at any draw); melee never does.
 local function scaleBase(base, damageScale)
 	if type(damageScale) ~= "number" or damageScale == 1 then return base end
 	return math.max(1, math.floor(base * math.clamp(damageScale, 0, 1) + 0.5))
@@ -600,6 +602,17 @@ function MobCombat.ApplyPvPDamage(attacker, target, weaponId, hitPosition, damag
 	local beforeHealth = tgtHum.Health
 	local applied, armorHit = DamageService.ApplyToPlayer(target, weaponFinal, attacker, weapSubs)
 	if applied and applied > 0 then
+		-- PvP: both players are in combat for the longer PvP timer (ApplyToPlayer already gave
+		-- the target the PvE one), and the target is knocked back like a mob hit, but harder.
+		local combatState = ServerScriptService:FindFirstChild("CombatStateService")
+		if combatState then
+			local cs = require(combatState)
+			cs.Flag(target, AlignmentConfig.PVP_COMBAT_SECONDS)
+			cs.Flag(attacker, AlignmentConfig.PVP_COMBAT_SECONDS)
+		end
+		if tgtHum.Health > 0 then
+			PlayerKnockback.Push(tgtChar, attRoot.Position, AlignmentConfig.PVP_KNOCKBACK_MULTIPLIER)
+		end
 		weapSubs = weapSubs or {}
 		local extras = {}
 		if tgtHum.Health > 0 then
@@ -650,6 +663,7 @@ function MobCombat.ApplyPvPDamage(attacker, target, weaponId, hitPosition, damag
 				local dealt = DamageService.ApplyToPlayer(other, weaponFinal * EnchantConfig.CleaveDamageFraction, attacker, nil, true)
 				if dealt > 0 then
 					count += 1
+					if combatState then require(combatState).Flag(other, AlignmentConfig.PVP_COMBAT_SECONDS) end
 					if splash then splash.effects = { Cleave = true } end
 					if damageNumberEvent then damageNumberEvent:FireClient(attacker, dealt, char, hum.MaxHealth, false, splash) end
 				end

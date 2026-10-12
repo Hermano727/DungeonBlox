@@ -482,7 +482,7 @@ task.defer(function()
 		-- SFX/VFX sliders looked broken: every other one-shot effect sound
 		-- was correctly grouped, but this one (played on EVERY hit) never
 		-- was, so dragging either slider never seemed to change anything.
-		snd.SoundGroup = SfxService.GetEffectsGroup()
+		snd.SoundGroup = SfxService.GetGroupFor("CriticalHit") -- the Combat slider
 		snd.Parent = SoundService
 		-- MELEE_HIT_GLASS_TRIM_START_SEC is tuned for the default clip's own
 		-- leading silence -- only apply it when that's actually what's

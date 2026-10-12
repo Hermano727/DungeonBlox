@@ -15,8 +15,17 @@ local FootstepsPerSecond = 2.5
 local FOOTSTEP_GAP_SCALE = 1.1
 local MaxDistance = 250 -- if any character is beyond this distance they wont make any sound
 
+-- Riding (2026-10-11): the horse has no hoof sounds of its own yet, so the rider's footsteps ARE
+-- the hoofbeats. At mount speed they came out at 2x volume plus the local bass layer, far too
+-- loud: while the character's player has the Mounted attribute they play quieter, deeper, spaced
+-- out like a stride, with no bass layer, and through the Mount bucket (Settings > Audio > Mount).
+local MOUNT_VOLUME_SCALE = 0.35
+local MOUNT_PITCH_SCALE = 0.78
+local MOUNT_GAP_SCALE = 1.35
+
 local LocalPlayer = Players.LocalPlayer
 
+local AudioCategories = require(ReplicatedStorage:WaitForChild("AudioCategories"))
 local Modules = ReplicatedStorage:WaitForChild("Modules")
 local FootstepModule = require(Modules:WaitForChild("FootstepModule"))
 
@@ -37,7 +46,7 @@ local function GetRandomFromTable(Table:{any})
 	return Table[math.random(#Table)]
 end
 
-local function PlayRandomSound(Directory:Folder,PlayAt:BasePart|Attachment,Speed:number)
+local function PlayRandomSound(Directory:Folder,PlayAt:BasePart|Attachment,Speed:number,Mounted:boolean?)
 	local Sound:Sound = GetRandomFromTable(Directory)
 
 	if Sound.IsLoaded then
@@ -62,6 +71,11 @@ local function PlayRandomSound(Directory:Folder,PlayAt:BasePart|Attachment,Speed
 	Sound.PlaybackSpeed *= Pitch
 	Sound.Volume = Volume
 	Sound.RollOffMinDistance = Rolloff
+	if Mounted then
+		Sound.PlaybackSpeed *= MOUNT_PITCH_SCALE
+		Sound.Volume *= MOUNT_VOLUME_SCALE
+		Sound.SoundGroup = AudioCategories.GetGroup("mount")
+	end
 
 	Sound.Parent = PlayAt or SoundService
 
@@ -80,6 +94,10 @@ local function OnCharacterAdded(Character:Model)
 	end
 
 	local Humanoid:Humanoid = Character:WaitForChild("Humanoid")
+	local Owner = Players:GetPlayerFromCharacter(Character)
+	local function IsMounted()
+		return Owner ~= nil and Owner:GetAttribute("Mounted") == true
+	end
 	local HRP = Character:WaitForChild("HumanoidRootPart") --Humanoid.RootPart
 
 	local Stride = "Left"
@@ -121,7 +139,6 @@ local function OnCharacterAdded(Character:Model)
 	local function GetFloorMaterial()
 		local ray = workspace:Raycast(HRP.Position, -HRP.CFrame.UpVector*GetHipHeightFromHRP(),RayParams)
 		if ray and ray.Instance then
-			print(ray)
 			return ray.Material
 		end
 	end
@@ -171,8 +188,9 @@ local function OnCharacterAdded(Character:Model)
 	local function step(MaterialSounds)
 		local IsRight = Stride == "Right"
 		local Speed = GetFootstepSpeed()
-		PlayRandomSound(MaterialSounds,HRP,Speed*(IsRight and 1.05 or 0.95))
-		if Character == LocalPlayer.Character then
+		local Mounted = IsMounted()
+		PlayRandomSound(MaterialSounds,HRP,Speed*(IsRight and 1.05 or 0.95),Mounted)
+		if Character == LocalPlayer.Character and not Mounted then
 			PlayRandomSound(FootstepsDirectory["Bass"],HRP,Speed)
 		end
 		ElapsedSinceLastFootstep = 0
@@ -192,8 +210,9 @@ local function OnCharacterAdded(Character:Model)
 		local Speed = GetFootstepSpeed()
 		local MaterialSounds = LandingDirectory[FootstepModule.MaterialMap[mat]] or LandingDirectory[FootstepModule.MaterialMap[FloorMaterial]]
 
-		PlayRandomSound(MaterialSounds,HRP,Speed*(IsRight and 1.05 or 0.95))
-		if Character == LocalPlayer.Character then
+		local Mounted = IsMounted()
+		PlayRandomSound(MaterialSounds,HRP,Speed*(IsRight and 1.05 or 0.95),Mounted)
+		if Character == LocalPlayer.Character and not Mounted then
 			PlayRandomSound(LandingDirectory["Bass"],HRP,Speed)
 		end
 	end
@@ -259,7 +278,7 @@ local function OnCharacterAdded(Character:Model)
 			UpdateCommon()
 			if CanFootstep() then
 				UpdateTimestep(dt)
-				if ElapsedSinceLastFootstep >= FootstepTimer then
+				if ElapsedSinceLastFootstep >= FootstepTimer * (IsMounted() and MOUNT_GAP_SCALE or 1) then
 					Footstep()
 				end
 			end

@@ -77,14 +77,6 @@ function Resolver:AltarPosition(index)
 	return self:Position(altar and altar.Anchor or "ANCHOR_CleanseAltar_NW")
 end
 
-function Resolver:SafeAreaPositions()
-	local values = {}
-	for i = 1, #Layout.SafeAreas do
-		table.insert(values, self:Position(("ANCHOR_PurgeSafe_%02d"):format(i)))
-	end
-	return values
-end
-
 function Resolver:SackPositions()
 	local values = {}
 	for i = 1, #Layout.SackAngles do

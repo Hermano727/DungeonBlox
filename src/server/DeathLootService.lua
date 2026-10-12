@@ -164,6 +164,19 @@ local function hookCharacter(player, char)
 		-- to spectating. Both used to run after the loot/cash-out below, so anything failing
 		-- there silently skipped them (poison survived death, no spectator view).
 		DeathLootService.cleanse(player)
+		-- Dying Neutral/Chaotic puts you back to Lawful for a while (RS/AlignmentConfig).
+		local okAlign, lockout = pcall(DungeonProfile.ForceLawfulOnDeath, player)
+		if not okAlign then
+			warn("[DeathLootService] alignment reset failed for " .. player.Name .. ": " .. tostring(lockout))
+		elseif lockout then
+			local ge = ReplicatedStorage:FindFirstChild("GameEvents")
+			local ev = ge and ge:FindFirstChild("CenterFlashNotify")
+			if ev and ev:IsA("RemoteEvent") then
+				local message = lockout > 0 and ("You are Lawful again. Locked for %d minutes."):format(math.ceil(lockout / 60))
+					or "You are Lawful again." -- the F8 lock bypass is on
+				pcall(ev.FireClient, ev, player, message)
+			end
+		end
 		local okInst, instances = pcall(function()
 			return require(ServerScriptService:WaitForChild("DungeonInstanceService", 5))
 		end)

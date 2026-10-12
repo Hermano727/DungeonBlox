@@ -19,6 +19,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local SfxService = require(ReplicatedStorage:WaitForChild("SfxService"))
+local TRACE = game:GetService("RunService"):IsStudio() -- TEMP, see below
 
 local gameEvents = ReplicatedStorage:WaitForChild("GameEvents", 120)
 if not gameEvents then
@@ -32,11 +33,20 @@ if not event or not event:IsA("RemoteEvent") then
 	return
 end
 
-event.OnClientEvent:Connect(function(key)
+-- `position` (optional, DamageService.PlayEffectAt): play it there in the world instead of 2D.
+event.OnClientEvent:Connect(function(key, position)
 	if type(key) ~= "string" or key == "" then
 		return
 	end
-	SfxService.PlayEffect(key)
+	-- TEMP (swing-sound diagnosis, 2026-10-09): remove with MobCombatSfx's trace.
+	if TRACE then
+		print(("[SfxNetClient] got %s at %s"):format(key, tostring(position)))
+	end
+	if typeof(position) == "Vector3" then
+		SfxService.PlayEffect(key, { Position = position, RollOffMinDistance = 10, RollOffMaxDistance = 130 })
+	else
+		SfxService.PlayEffect(key)
+	end
 end)
 
 print("[SfxNetClient] ready")

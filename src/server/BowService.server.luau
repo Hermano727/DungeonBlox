@@ -11,8 +11,9 @@ local PotionAction = require(game:GetService("ReplicatedStorage"):WaitForChild("
 	                                               already drew its copy on release.
 
 	Arrows fly with gravity on one Heartbeat for every arrow in flight, raycasting each step
-	(no parts on the server). A hit goes through MobCombat with the charge's damage multiplier,
-	so armor, crits, enchants, PvP gates and range checks are the same as every other weapon.
+	(no parts on the server; BowConfig.CastArrow, a fatter sphere for creatures). A hit goes
+	through MobCombat at the bow's full roll whatever the draw, so armor, crits, enchants, PvP
+	gates and range checks are the same as every other weapon.
 	A shot costs energy like a swing (EnergyData.trySwing); panting can't draw or shoot.
 
 	The old per-tool BowServer/BowClient scripts were removed from the WoodenBow prefabs
@@ -30,6 +31,7 @@ local BowConfig = require(ReplicatedStorage:WaitForChild("BowConfig"))
 local ConsumableRequestUtil = require(ReplicatedStorage:WaitForChild("ConsumableRequestUtil"))
 local WeaponData = require(ReplicatedStorage:WaitForChild("WeaponData"))
 local MobCombat = require(ServerScriptService:WaitForChild("MobCombat"))
+local MountService = require(ServerScriptService:WaitForChild("MountService"))
 local EnergyData = require(ServerScriptService:WaitForChild("EnergyData"))
 
 local gameEvents = ConsumableRequestUtil.EnsureGameEventsFolder()
@@ -56,7 +58,7 @@ end
 
 -- [player] = { drawStart = clock?, nextDrawAt = clock }
 local states = {}
--- Arrows in flight: { shooter, character, weaponId, scale, position, velocity, traveled, maxDistance, params }
+-- Arrows in flight: { shooter, weaponId, position, velocity, traveled, maxDistance, params }
 local flying = {}
 
 local function stateFor(player)
@@ -111,7 +113,7 @@ BowRelease.OnServerEvent:Connect(function(player, aimPosition)
 	local tool, character = heldBow(player)
 	if not tool then return end
 	local now = os.clock()
-	local charge = math.clamp((now - drawStart) / BowConfig.CHARGE_TIME, 0, 1)
+	local charge = math.clamp((now - drawStart + BowConfig.RELEASE_GRACE) / BowConfig.CHARGE_TIME, 0, 1)
 	if charge < BowConfig.MIN_CHARGE then return end
 	if not EnergyData.trySwing(player) then return end
 	state.nextDrawAt = now + BowConfig.REFIRE_DELAY
@@ -131,7 +133,7 @@ BowRelease.OnServerEvent:Connect(function(player, aimPosition)
 	params.FilterDescendantsInstances = { character }
 	local speed = BowConfig.Speed(charge)
 	table.insert(flying, {
-		shooter = player, weaponId = weaponId, scale = BowConfig.DamageScale(charge),
+		shooter = player, weaponId = weaponId,
 		position = origin, velocity = direction * speed, traveled = 0,
 		maxDistance = WeaponData.GetStats(weaponId).MaxRange or 100, params = params,
 	})
@@ -160,17 +162,23 @@ RunService.Heartbeat:Connect(function(dt)
 			step = step.Unit * remaining
 			done = true
 		end
-		local result = arrow.shooter.Parent and workspace:Raycast(arrow.position, step, arrow.params)
+		local result = arrow.shooter.Parent and BowConfig.CastArrow(arrow.position, step, arrow.params)
 		if result then
+			-- Full damage at any draw. Passing 1 (not nil) marks it a ranged hit, which the
+			-- potion lock doesn't stop (the arrow left the bow before the drink).
 			local mobUID = getMobUID(result.Instance)
 			if mobUID then
-				MobCombat.ApplyWeaponDamage(arrow.shooter, mobUID, arrow.weaponId, result.Position, arrow.scale)
+				MobCombat.ApplyWeaponDamage(arrow.shooter, mobUID, arrow.weaponId, result.Position, 1)
 			else
 				local hitPlayer = getHitPlayer(result.Instance)
 				if hitPlayer and hitPlayer ~= arrow.shooter then
 					-- PvP gates (alignment, zones, range) live in ApplyPvPDamage. A gated hit
 					-- still stops the arrow.
-					MobCombat.ApplyPvPDamage(arrow.shooter, hitPlayer, arrow.weaponId, result.Position, arrow.scale)
+					MobCombat.ApplyPvPDamage(arrow.shooter, hitPlayer, arrow.weaponId, result.Position, 1)
+				else
+					-- A horse: its rider is thrown off when the shooter may attack them.
+					local horse = MountService.HorseOf(result.Instance)
+					if horse then MountService.OnMountShot(arrow.shooter, horse) end
 				end
 			end
 			done = true

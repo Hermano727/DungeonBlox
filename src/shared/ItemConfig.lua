@@ -158,6 +158,12 @@ ItemConfig.ARMOR_EFFECTS = {
 -- `block` IS wired up (2026-09-17): summed across equipped gear, rolled on every
 -- incoming hit in DamageService.ApplyToPlayer, and negates the hit entirely.
 -- Capped at BLOCK_CHANCE_CAP_PCT below. The rest are still inert data.
+--
+-- Reflect / Block / Dodge (armor only) follow the design chart: tier 1-3 roll 3-4%, tier 4 4-5%,
+-- tier 5 4-6%, chart weight 10 each.
+-- TODO(weight): the chart's per-tier weight isn't used yet. `baseWeight` is the only weight and
+-- it's relative within this pool (all 100 here, i.e. the chart's equal 10s); the Alteration Orb
+-- just does a weighted branch over it. Revisit together with the orb's roll logic.
 ItemConfig.ARMOR_BONUS_EFFECTS = {
     { id="block",    label="Block",                baseWeight=100, valueType="pct",
       ranges={ {3,4},{3,4},{3,4},{4,5},{4,6} } },
@@ -260,7 +266,7 @@ ItemConfig.WEAPON_TYPE_WEIGHTS = {
 
 -- Canonical rarity order (Common -> Legendary). Single source of truth for anything that
 -- must iterate rarities in a fixed order -- ItemGenerator.rollRarity's deterministic roll,
--- and DevClient's Item Spawner tab (rarity cycle control).
+-- and the F8 menu's Gear tab (DevMenu/Tabs/Gear, rarity cycle control).
 -- Which weapon types count as melee, for the meleeOnly/rangedOnly flags on
 -- WEAPON_EFFECTS. Single source of truth -- ItemGenerator and the F8 dev tool
 -- both read this instead of keeping their own copies.
@@ -348,6 +354,12 @@ ItemConfig.ELITE_RARITY_TIER_BOOST = 1
 
 ItemConfig.WEAPON_TYPES_BY_TIER = {
     [1] = { "Sword", "Bow" },
+}
+-- How likely each weapon type is when a random weapon drops, relative to the others in its
+-- tier's pool (missing = 1). Bows are a third as likely as any melee weapon (2026-10-11): at T1
+-- that's Sword 75% / Bow 25% of weapon drops. Explicit picks (named-elite gear) ignore it.
+ItemConfig.WEAPON_TYPE_WEIGHTS = {
+    Bow = 1 / 3,
 }
 ItemConfig.ARMOR_SLOTS_BY_TIER = {
     [1] = { "Helm", "Chest", "Legs", "Boots", "Shield" },

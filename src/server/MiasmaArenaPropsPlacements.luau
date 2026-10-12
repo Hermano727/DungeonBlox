@@ -17,8 +17,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Layout = require(ReplicatedStorage:WaitForChild("MiasmaArenaLayout"))
 
 local CEILING_FACE_Y = Layout.CeilingY - Layout.FloorY -- ceiling underside, face-local
-local OUTFALL_X = 55
-local MOUTH = Vector3.new(0, 32.8, 7.8)               -- the pipe mouth, Prop_PipeOutfall-local
+local OUTFALL_X = Layout.Outfall.X
+local MOUTH = Vector3.new(0, Layout.Outfall.MouthY, Layout.Outfall.MouthZ) -- the pipe mouth, Prop_PipeOutfall-local
 local CATWALK_HANG = 7.8                              -- catwalk deck to the ceiling cleats
 local CATWALK_Z = 7
 
@@ -39,7 +39,7 @@ local props, stream = {}, {}
 
 -- Gate 330 has the entrance arch on its +X side (the gate kit gave it no outfall), so its pipe
 -- goes in the mirror bay on -X; that side is clear down to the corner the same way.
-local OUTFALL_SIDE = { [330] = -1 }
+local OUTFALL_SIDE = Layout.Outfall.Side
 
 for _, station in ipairs(Layout.Stations) do
 	local a = station.Angle

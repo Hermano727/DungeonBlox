@@ -8,7 +8,8 @@ local LootPityConfig = {}
 LootPityConfig.BASE_CHANCE = {
     -- TEMP TESTING: T1 Common raised from 1/64 to 1/5 so drops are visible
     -- immediately. Revert to 1/64 before this is anywhere near real balance.
-    [1] = { Common = 1/5,   Uncommon = 1/128, Rare = 1/512,  Epic = 1/1536, Legendary = 1/3072 },
+    -- [1] = { Common = 1/64,   Uncommon = 1/128, Rare = 1/512,  Epic = 1/1536, Legendary = 1/3072 },
+    [1] = { Common = 1/5,   Uncommon = 1/128, Rare = 1/64,  Epic = 1/64, Legendary = 1/64 },
     [2] = { Common = 1/80,  Uncommon = 1/160, Rare = 1/640,  Epic = 1/1920, Legendary = 1/3840 },
     [3] = { Common = 1/96,  Uncommon = 1/192, Rare = 1/768,  Epic = 1/2304, Legendary = 1/4608 },
     [4] = { Common = 1/112, Uncommon = 1/224, Rare = 1/896,  Epic = 1/2688, Legendary = 1/5376 },

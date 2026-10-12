@@ -1,8 +1,9 @@
 --[[
 	SfxService
 	Client-side one-shot effect-sound player. PlayEffect(key) looks key up in
-	the SoundEffects registry, spins up a throwaway Sound routed through
-	SoundService.Main.Effects, and cleans itself up when done.
+	the SoundEffects registry, spins up a throwaway Sound routed through the
+	key's sound bucket (GetGroupFor, RS/AudioCategories: Combat, Creatures,
+	... or Other = SoundService.Main.Effects), and cleans itself up when done.
 
 	Deliberately NOT throttled/deduped per key: picking up several items in
 	quick succession is meant to layer their sounds (see WorldLootService's
@@ -27,6 +28,7 @@ local SoundEffects = require(
 )
 
 local EFFECTS_GROUP_PATH = { "Main", "Effects" } -- SoundService.Main.Effects
+local AudioCategories = require(ReplicatedStorage:WaitForChild("AudioCategories"))
 
 local SfxService = {}
 
@@ -51,6 +53,13 @@ function SfxService.GetEffectsGroup()
 	end
 	cachedEffectsGroup = node
 	return cachedEffectsGroup
+end
+
+-- The SoundGroup a SoundEffects key plays through: its bucket's slider on the Audio page. The
+-- bucket comes from RS/AudioCategories.CategoryOf (KEYS, then name PREFIXES, else Other), so a
+-- new key needs nothing here.
+function SfxService.GetGroupFor(key)
+	return AudioCategories.GetGroup(AudioCategories.CategoryOf(key)) or SfxService.GetEffectsGroup()
 end
 
 -- key is a name from the SoundEffects registry (e.g. "ItemPickup"), not a
@@ -89,7 +98,8 @@ function SfxService.PlayEffect(key, options)
 	local sound = Instance.new("Sound")
 	sound.Name = "Sfx_" .. tostring(key)
 	sound.SoundId = assetId
-	sound.SoundGroup = SfxService.GetEffectsGroup() -- nil is a valid, harmless value here
+	sound:SetAttribute("SoundCategory", AudioCategories.CategoryOf(key))
+	sound.SoundGroup = SfxService.GetGroupFor(key) -- its bucket's slider (nil is harmless)
 	if options then
 		sound.Volume = options.Volume or sound.Volume
 		sound.PlaybackSpeed = options.PlaybackSpeed or sound.PlaybackSpeed

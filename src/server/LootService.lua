@@ -382,8 +382,11 @@ local function tryDropGearByScore(mob, tier, level, killingBlowPlayer, deathPos,
     return scatterIndex
 end
 
--- Boss / named-elite Mythic: FLAT chance, no pity, no score. Only players
--- alive at the moment of death are eligible.
+-- Dungeon-boss Mythic: FLAT chance, no pity, no score. Inside a dungeon only that instance's
+-- living, non-spectating members roll (it used to be every player on the server); the results
+-- go to the clear sequence's Mythic Judgement, which acts them out and announces the wins
+-- server-wide when each one is revealed. A boss killed outside any instance (dev spawns) rolls
+-- for the killer alone and is announced straight away.
 local function tryDropMythic(mob, killingBlowPlayer, deathPos, scatterIndex)
     local mobId = mob.MobID
     if not mobId then return scatterIndex end
@@ -391,10 +394,22 @@ local function tryDropMythic(mob, killingBlowPlayer, deathPos, scatterIndex)
     if not MythicDefs.GetDropSpec(mobId) then return scatterIndex end
 
     local BossLoot = require(ServerScriptService:WaitForChild("DungeonBossLootService"))
-    local results = BossLoot.OnBossKilledForAll(mob, deathPos)
-    if #results > 0 then
+    local Instances = require(ServerScriptService:WaitForChild("DungeonInstanceService"))
+    local instance = Instances.GetInstanceForPlayer(killingBlowPlayer)
+    local candidates = instance and Instances.GetLiveMembers(instance) or { killingBlowPlayer }
+
+    local results = BossLoot.OnBossKilled(mob, candidates)
+    for _, r in ipairs(results) do
+        print(string.format("[LootService] MYTHIC to %s: %s", r.player.Name, tostring(r.item.name)))
+    end
+    if instance then
+        local ClearSequence = require(ServerScriptService:WaitForChild("DungeonClearSequence"))
+        ClearSequence.RecordJudgement(instance, mob, deathPos, candidates, results)
+    else
+        local MythicBroadcast = require(ServerScriptService:WaitForChild("MythicBroadcast"))
+        local bossName = mob.Stats and mob.Stats.Name or mobId
         for _, r in ipairs(results) do
-            print(string.format("[LootService] MYTHIC to %s: %s", r.player.Name, tostring(r.item.name)))
+            MythicBroadcast.Announce(r.player, r.template, bossName)
         end
     end
     return scatterIndex + #results

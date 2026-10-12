@@ -215,8 +215,8 @@ local function tryDash()
 	if humanoid.Health <= 0 then
 		return
 	end
-	if humanoid.SeatPart then
-		return
+	if humanoid.SeatPart or player:GetAttribute("Mounted") then
+		return -- seated, or riding the horse (SSS/MountService)
 	end
 	if root.Anchored then
 		return

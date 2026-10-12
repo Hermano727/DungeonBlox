@@ -1,6 +1,7 @@
 --[[
 	CombatStateService
-	Per-player combat timer (5s, refreshed on each mob hit) + two-state HP regen.
+	Per-player combat timer (5s, refreshed on each mob hit; PvP hits flag both players for
+	AlignmentConfig.PVP_COMBAT_SECONDS) + two-state HP regen.
 	  In combat  : 0.2% of maxHp/s
 	  Out of combat: 0.2% of maxHp/s + shield.hps/s
 ]]
@@ -44,14 +45,20 @@ function CombatStateService.OnHit(fn)
 	return function() hitListeners[fn] = nil end
 end
 
-function CombatStateService.OnPlayerDamaged(player)
+-- Puts `player` in combat for at least `seconds` (default COMBAT_TIMEOUT). Only ever
+-- extends: a mob hit right after a PvP hit can't cut the longer PvP timer short.
+function CombatStateService.Flag(player, seconds)
+	local uid = player.UserId
+	local t = math.max(timers[uid] or 0, tonumber(seconds) or COMBAT_TIMEOUT)
+	timers[uid] = t
+	pcall(getEvent().FireClient, getEvent(), player, "combat", t)
+end
+
+function CombatStateService.OnPlayerDamaged(player, seconds)
 	for fn in pairs(hitListeners) do
 		task.spawn(fn, player)
 	end
-	local uid = player.UserId
-	local wasOut = not (timers[uid] and timers[uid] > 0)
-	timers[uid] = COMBAT_TIMEOUT
-	pcall(getEvent().FireClient, getEvent(), player, "combat", COMBAT_TIMEOUT)
+	CombatStateService.Flag(player, seconds)
 end
 
 local _dp

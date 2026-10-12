@@ -14,6 +14,15 @@ local remote = RS:WaitForChild("GameEvents"):WaitForChild("PotionDrunk")
 local pending = {}
 local owner
 
+-- Tracks the drink takes the arms from: the Action layers (swings, bow draws), Action through Action4.
+-- NOT a numeric ">= Action" test: Enum.AnimationPriority.Core is 1000, so that also caught the walk /
+-- run / idle loops (Animate2 plays them at Core). Stopping those left the legs in the bind pose for the
+-- whole drink: a T-pose that slid along without stepping, and the player could not "walk" while drinking.
+local function isActionLayer(track)
+	local value = track.Priority.Value
+	return value >= Enum.AnimationPriority.Action.Value and value <= Enum.AnimationPriority.Action4.Value
+end
+
 local function clearOwner()
 	if not owner then return end
 	local state = owner
@@ -55,7 +64,7 @@ local function tryLoad(state)
 		character:SetAttribute("PotionAnimationStatus", "Loading")
 		table.insert(state.connections, humanoid.Died:Connect(clearOwner))
 		table.insert(state.connections, animator.AnimationPlayed:Connect(function(other)
-			if other ~= track and PotionAction.IsLocked(character) and other.Priority.Value >= Enum.AnimationPriority.Action.Value then other:Stop(0) end
+			if other ~= track and PotionAction.IsLocked(character) and isActionLayer(other) then other:Stop(0) end
 		end))
 		local function refreshReady()
 			if owner == state then
@@ -116,9 +125,9 @@ local function onDrink(payload)
 	local track = state and state.track
 	local ready = track and track.Length > 0 -- re-evaluate every drink, even after a slow load
 	if ready and age < Config.ANIMATION_DURATION then -- Drinking owns the arms until its deadline. End an in-progress attack,
-		-- but preserve Core/Idle/Movement locomotion tracks.
+		-- but keep every Core/Idle/Movement locomotion track playing: the clip is upper body only, so the legs keep walking.
 		for _, other in ipairs(state.animator:GetPlayingAnimationTracks()) do
-			if other ~= track and other.Priority.Value >= Enum.AnimationPriority.Action.Value then other:Stop(Config.ANIMATION_FADE_IN) end
+			if other ~= track and isActionLayer(other) then other:Stop(Config.ANIMATION_FADE_IN) end
 		end
 		state.serial += 1
 		record.owner, record.serial = state, state.serial

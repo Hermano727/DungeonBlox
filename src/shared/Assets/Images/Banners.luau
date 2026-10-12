@@ -4,6 +4,8 @@
 	Full-screen end-of-run banners (DungeonCompleteBanner, client), keyed by name. The server
 	picks the key (DungeonRunService.EndRunFor: "DungeonComplete" on a clear, "DungeonFailed" on
 	a death or wipe), so a dungeon that wants its own art just registers another key here.
+	A Miasma clear no longer uses "DungeonComplete": it plays the in-world clear sequence instead
+	(docs/dungeon-clear-sequence.md); the PNG remains for clears outside that path (dev F7).
 
 		Image      the banner art: a transparent PNG
 		Glow       optional soft white halo in the art's silhouette, drawn BEHIND it and tinted

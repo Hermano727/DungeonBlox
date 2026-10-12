@@ -3,6 +3,8 @@
 .env
 .agents
 .claude
+AGENTS.md
+CLAUDE.md
 
 # Roblox Studio lock files
 /*.rbxlx.lock

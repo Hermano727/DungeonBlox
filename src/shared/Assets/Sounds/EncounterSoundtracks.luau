@@ -16,4 +16,8 @@ return {
 	-- Miasma: from phase 2 (the slam and roar have finished, the gate cycle begins) until the
 	-- fight ends. See MiasmaEncounterController:_setPhaseMusic.
 	MiasmaPhase2 = "rbxassetid://100533680829762",
+	-- The dungeon clear sequence (SSS/DungeonClearSequence): from the Benediction's light until
+	-- the party leaves. Empty = no victory layer (the zone track plays). Asset request: see
+	-- docs/dungeon-clear-asset-requests.md.
+	DungeonClear = "",
 }

@@ -1,7 +1,7 @@
 --[[
 	BowConfig
-	The bow, Minecraft style: hold to draw, release to shoot. A fuller draw shoots faster,
-	flatter and harder. Gameplay numbers are read by the server (SSS/BowService), the feel
+	The bow, Minecraft style: hold to draw, release to shoot. A fuller draw shoots faster and
+	flatter; damage is the same at any draw. Gameplay numbers are read by the server (SSS/BowService), the feel
 	numbers by the shooter's client (BowController), the geometry by every client
 	(WeaponAttachClient draws the bow in the left hand, its string and the nocked arrow).
 
@@ -27,18 +27,41 @@ BowConfig.REFIRE_DELAY = 0.2         -- after a shot, before the next draw may s
 BowConfig.SPEED_MIN = 55             -- studs/s at MIN_CHARGE
 BowConfig.SPEED_MAX = 190            -- studs/s at full draw
 BowConfig.GRAVITY = 30               -- studs/s^2 of arrow drop
-BowConfig.DAMAGE_SCALE_MIN = 0.15    -- damage multiplier at MIN_CHARGE, rising to 1 at full draw
+-- The server times the draw between two packet arrivals, so network jitter can shave a
+-- little off a draw the shooter held to full. This much extra hold time is credited.
+BowConfig.RELEASE_GRACE = 0.08
 BowConfig.AUDIENCE_RADIUS = 300      -- clients this close to the shooter draw the arrow's flight
+-- Arrows hit a mob or player this close to their line (studs). Walls and ground still use
+-- the thin line, so arrows don't snag on corners.
+BowConfig.HIT_RADIUS = 0.7
 
--- Charge (0..1) -> launch speed and damage multiplier. One curve for both sides.
+-- Charge (0..1) -> launch speed. Damage is the bow's full roll at any draw.
 function BowConfig.Speed(charge)
 	local u = math.clamp((charge - BowConfig.MIN_CHARGE) / (1 - BowConfig.MIN_CHARGE), 0, 1)
 	return BowConfig.SPEED_MIN + (BowConfig.SPEED_MAX - BowConfig.SPEED_MIN) * u
 end
 
-function BowConfig.DamageScale(charge)
-	local u = math.clamp((charge - BowConfig.MIN_CHARGE) / (1 - BowConfig.MIN_CHARGE), 0, 1)
-	return BowConfig.DAMAGE_SCALE_MIN + (1 - BowConfig.DAMAGE_SCALE_MIN) * u * u
+---------------------------------------------------------------------------
+-- Arrow hits (server and every client fly the same arrow)
+---------------------------------------------------------------------------
+local function isCreature(part)
+	local model = part:FindFirstAncestorOfClass("Model")
+	while model do
+		if model:FindFirstChildOfClass("Humanoid") or model:GetAttribute("MobUID") then return true end
+		model = model.Parent and model.Parent:FindFirstAncestorOfClass("Model")
+	end
+	return false
+end
+
+-- One flight step: a thin ray for the world, a HIT_RADIUS sphere for creatures, nearest wins.
+function BowConfig.CastArrow(origin, step, params)
+	local ray = workspace:Raycast(origin, step, params)
+	if step.Magnitude <= 0 then return ray end
+	local sphere = workspace:Spherecast(origin, BowConfig.HIT_RADIUS, step, params)
+	if sphere and isCreature(sphere.Instance) and (not ray or sphere.Distance < ray.Distance) then
+		return sphere
+	end
+	return ray
 end
 
 ---------------------------------------------------------------------------
@@ -73,5 +96,14 @@ BowConfig.STRING_WIDTH = 0.025
 -- Shared folder the server fills with the arrow template (ServerStorage.WeaponModels.Bow.T1_Arrow).
 BowConfig.VISUALS_FOLDER = "BowVisuals"
 BowConfig.ARROW_TEMPLATE = "T1_Arrow"
+
+-- Arrows in flight (BowController): drawn this much bigger than the nocked one, with a
+-- pale gold glow and streak (Minecraft's spectral arrow) so everyone sees where they go.
+BowConfig.FLIGHT_ARROW_SCALE = 2
+BowConfig.ARROW_GLOW_COLOR = Color3.fromRGB(255, 240, 190)
+BowConfig.ARROW_GLOW_OUTLINE = Color3.fromRGB(255, 252, 235)
+BowConfig.ARROW_GLOW_FILL_TRANSPARENCY = 0.45
+BowConfig.ARROW_TRAIL_LIFETIME = 0.18
+BowConfig.ARROW_TRAIL_WIDTH = 0.18
 
 return BowConfig

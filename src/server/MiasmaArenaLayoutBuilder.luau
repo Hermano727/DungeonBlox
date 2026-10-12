@@ -26,7 +26,7 @@
 		- keeps the Baseplate untouched (it defines the arena origin)
 		- builds MiasmaArenaLayout: Floor, Walls, Recesses (altars), Altars, Gates (flood-gate
 		  collision: piers, aprons, funnels, open channels, bridges, grates, valve platforms,
-		  poison pits, gate blockers), SafeAreas, Channels (gameplay liquid + flood effects),
+		  poison pits, gate blockers), Channels (gameplay liquid + flood effects),
 		  Ceiling, Entrance, Anchors (ANCHOR_ValveStation_01..04)
 		The primitives are the arena's COLLISION and graybox; the Blender art (arena_v02, placed by
 		MiasmaArenaArtAssembler) is visual only and hides them.
@@ -446,21 +446,6 @@ return function(Layout, options)
 		light(water, C.Cleanse, 16, 1.1)
 		disc(group, "RuneRing", 11, FY + .05, .06, Enum.Material.Neon, C.Cleanse, { collide = false, shadow = false, transparency = .45 }, centre)
 		disc(group, "RuneRingInner", 10, FY + .07, .06, Enum.Material.Slate, C.Recess, DECOR, centre)
-	end
-
-	-- Purge safe pads -------------------------------------------------------------------------
-	local safe = folder("SafeAreas")
-	for index, angle in ipairs(Layout.SafeAreas) do
-		local centre = Layout.Polar(angle, Layout.SafeAreaDistance, FY)
-		local group = folder(("PurgeSafe_%02d"):format(index), safe)
-		disc(group, "Ring", Layout.SafeAreaRadius * 2, FY + .05, .06, Enum.Material.Neon, C.Safe, { collide = false, shadow = false, transparency = .3 }, centre)
-		disc(group, "Pad", Layout.SafeAreaRadius * 2 - 1.6, FY + .07, .06, Enum.Material.Slate, C.Stone, DECOR, centre)
-		for spoke = 0, 5 do
-			local a = spoke * 60 + 30
-			strip(group, "Rune", centre + Layout.Outward(a) * 2.5, centre + Layout.Outward(a) * 8, .5, FY + .09, .04, Enum.Material.Neon, C.Safe, { collide = false, shadow = false, transparency = .35 })
-		end
-		local lamp = disc(group, "Lamp", 2, FY + .1, .06, Enum.Material.Neon, C.Safe, DECOR, centre)
-		light(lamp, C.Safe, 18, .6)
 	end
 
 	-- Flood gates: collision for everything around each gate --------------------------------------

@@ -2,14 +2,23 @@
     DungeonBossLootService  -- ServerScriptService
     Boss loot: flat chance per eligible player, independent of score/pity.
     Only players ALIVE when the boss dies are eligible.
+
+    Who is a candidate is the CALLER's call (LootService.tryDropMythic): a dungeon boss rolls
+    for its own instance's living, non-spectating members only. This used to roll for every
+    player on the server (`Players:GetPlayers()`), so someone in town could receive a Miasma
+    Mythic for a fight they were never in.
+
+    Granting is immediate (a disconnect mid-show loses nothing); the clear sequence's Mythic
+    Judgement only acts out the result later, and MythicBroadcast announces it then.
 ]]
-local Players             = game:GetService("Players")
+local ReplicatedStorage   = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local Builder   = require(ServerScriptService:WaitForChild("MythicItemBuilder"))
-local ItemIdentity = require(game:GetService("ReplicatedStorage"):WaitForChild("ItemIdentity"))
+local ItemIdentity = require(ReplicatedStorage:WaitForChild("ItemIdentity"))
+local DevRoster = require(ReplicatedStorage:WaitForChild("DevRoster"))
+local ClearConfig = require(ReplicatedStorage:WaitForChild("DungeonClearConfig"))
 local DungeonProfile = require(ServerScriptService:WaitForChild("ProfileService"))
-local WorldLoot = require(ServerScriptService:WaitForChild("WorldLootService"))
 
 local DungeonBossLootService = {}
 
@@ -20,21 +29,31 @@ local function isAlive(player)
     return hum ~= nil and hum.Health > 0
 end
 
-function DungeonBossLootService.OnBossKilled(bossMob, candidates, dropPosition)
+-- F8 Mythic tab's forced outcome, honoured for devs only (the attribute is server-set by
+-- DevService, but re-checked here so nothing else can ever rig a real player's roll).
+local function forcedOutcome(player)
+    if not DevRoster.IsDev(player) then return nil end
+    local force = player:GetAttribute(ClearConfig.MYTHIC_FORCE_ATTR)
+    if force == "win" or force == "loss" then return force end
+    return nil
+end
+
+-- Rolls the boss's Mythic for each living candidate and grants the wins.
+-- Returns { { player, item, template } } for the winners only.
+function DungeonBossLootService.OnBossKilled(bossMob, candidates)
     if not bossMob then return {} end
     local mobId = bossMob.MobID or "Unknown"
     local results = {}
 
     for _, player in ipairs(candidates or {}) do
         if isAlive(player) then
-            local item = Builder.TryRollForMob(mobId)
+            local item = Builder.TryRollForMob(mobId, forcedOutcome(player))
             if item then
                 -- Grant STRAIGHT to inventory rather than spawning a world orb.
                 -- SpawnMobDrop requires a dropSpec table whose `kind` is one of
                 -- coins/item_template/item_id; passing the raw item object made
                 -- it bail to nil, so the Mythic silently never appeared while
-                -- the caller still logged success. Dungeon rewards shouldn't
-                -- hit the floor anyway -- they surface in the run summary.
+                -- the caller still logged success.
                 local okTpl, template = pcall(function() return item:toGrantTemplate() end)
                 if not okTpl or not template then
                     warn("[DungeonBossLootService] toGrantTemplate failed for " .. tostring(mobId))
@@ -57,10 +76,6 @@ function DungeonBossLootService.OnBossKilled(bossMob, candidates, dropPosition)
         end
     end
     return results
-end
-
-function DungeonBossLootService.OnBossKilledForAll(bossMob, dropPosition)
-    return DungeonBossLootService.OnBossKilled(bossMob, Players:GetPlayers(), dropPosition)
 end
 
 return DungeonBossLootService

@@ -84,6 +84,16 @@ local function trackNamedElite(player, mob)
     end
 end
 
+-- Defined before clearBossBar, which calls it (it was defined further down, so clearBossBar
+-- errored on a nil global every time a dungeon boss bar was cleared; fixed 2026-10-11).
+local function clearPlayerEliteHealthAttributes(player)
+    if not player then return end
+    player:SetAttribute("EliteActive", false)
+    player:SetAttribute("EliteCurrentHealth", 0)
+    player:SetAttribute("EliteMaxHealth", 0)
+    player:SetAttribute("EliteBarMobId", nil)
+end
+
 -- Boss bar for NON-named bosses (dungeon bosses like Miasma): same per-player
 -- binding the named-elite top-middle bar reads (EliteActive / EliteCurrentHealth /
 -- EliteMaxHealth / CurrentEliteMobId, kept fresh by OnHeartbeat), but WITHOUT
@@ -165,13 +175,6 @@ local function setPlayerElitePityAttributes(player, zoneName, killsSinceLastElit
     player:SetAttribute("ElitePityZone", zoneName)
     player:SetAttribute("ElitePityKills", math.min(killsSinceLastElite, NAMED_ELITE_PITY_KILLS))
     player:SetAttribute("ElitePityMax", NAMED_ELITE_PITY_KILLS)
-end
-
-local function clearPlayerEliteHealthAttributes(player)
-    if not player then return end
-    player:SetAttribute("EliteActive", false)
-    player:SetAttribute("EliteCurrentHealth", 0)
-    player:SetAttribute("EliteMaxHealth", 0)
 end
 
 local function getFrontSpawnPosition(player, fallback, distance)
@@ -384,6 +387,11 @@ local function OnHeartbeat(deltaTime)
             -- this attribute via MobData.FindMobById, so it must reflect the
             -- real spawned mob, not just the zone's configured slot.
             player:SetAttribute("CurrentEliteMobId", activeEliteMob.MobID)
+            -- The boss bar reads EliteBarMobId, which ONLY this loop writes. ZoneService also
+            -- rewrites CurrentEliteMobId every occupancy tick (to the zone's own elite, "" in a
+            -- dungeon), so the bar reading that one flickered between "MIASMA THE SCOURGE" and
+            -- the "ELITE" fallback (2026-10-11).
+            player:SetAttribute("EliteBarMobId", activeEliteMob.MobID)
             -- Named-elite soundtrack outranks the zone's while the fight is on -- for its
             -- spawner and anyone near it, not the whole server (the bar alone is global).
             -- Cheap to re-assert every tick: SetMusicOverride no-ops unless the

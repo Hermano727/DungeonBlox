@@ -7,6 +7,7 @@
 		Slot(name, order) -> Frame     lower order = further left
 			ORDER.Settings = 10        (the settings gear, SettingsClient)
 			ORDER.Crosshair = 20       (crosshair on/off, client/Crosshair)
+			ORDER.CursorLock = 25      (re-lock a stuck cursor, client/CursorLockButton)
 			ORDER.Inventory / Journal / Hearthstone = 30 / 40 / 50 (client/MenuShortcuts)
 		FollowBelow(frame)             hang the row under `frame` (the minimap does this);
 		                               while that frame is hidden (dungeons), the row moves up
@@ -14,9 +15,6 @@
 		BUTTON_SIZE                    the square size every button here uses (before SCALE)
 		SCALE                          the whole row is drawn this much bigger (a UIScale), so
 		                               buttons keep authoring in BUTTON_SIZE units
-		OnBottomChanged(fn)            fn(y): the screen y just under the row (key labels
-		                               included), now and whenever it moves; HUD stacked under
-		                               the minimap + row hangs off it (the party panel)
 		Tooltip(button, text)          a small label under the button while hovered
 		                               ("Settings", "Toggle Crosshair")
 
@@ -33,6 +31,7 @@ local QuickNav = {}
 QuickNav.ORDER = {
 	Settings = 10,
 	Crosshair = 20,
+	CursorLock = 25,  -- re-lock a stuck cursor (client/CursorLockButton)
 	-- The Tab menu's destinations, one tap each (MenuShortcuts; mostly for touch players).
 	Inventory = 30,
 	Journal = 40,
@@ -44,7 +43,6 @@ QuickNav.GAP = 8          -- under the followed frame (clears its 2px border str
 QuickNav.PADDING = 6      -- between buttons
 QuickNav.BUTTON_SIZE = 30
 QuickNav.SCALE = 1.3      -- 2026-10-06: the row grew 30% with the minimap
-local KEY_LABEL_ROOM = 16 -- the key letters hanging under some buttons (outside their slot)
 
 local gui, container, followConns
 
@@ -178,16 +176,6 @@ function QuickNav.Tooltip(button, text)
 			tip.Visible = false
 		end
 	end)
-end
-
-function QuickNav.OnBottomChanged(fn)
-	local row = ensure()
-	local function fire()
-		fn(row.AbsolutePosition.Y + row.AbsoluteSize.Y + KEY_LABEL_ROOM * QuickNav.SCALE)
-	end
-	row:GetPropertyChangedSignal("AbsolutePosition"):Connect(fire)
-	row:GetPropertyChangedSignal("AbsoluteSize"):Connect(fire)
-	fire()
 end
 
 return QuickNav

@@ -380,4 +380,21 @@ function LandingSlamFX.Play(groundPosition, visualRadius, ignore, parent)
 	return container
 end
 
+-- Just the ground breaking: the rim slabs and flung rocks, matched to the floor, none of Miasma's
+-- (purple) particles, so other slams can reuse it with their own (Kane's Groundbreaker Slam,
+-- FireTornadoVFX). `radius` places the slab rings (studs); `scale` sizes slabs and rocks and their
+-- throw speed, independently of the radius, so a small impact can still break big chunks.
+function LandingSlamFX.Crumble(groundPosition, radius, scale, ignore, parent)
+	local ground = sampleGround(groundPosition, ignore)
+	if not ground then return nil end
+
+	local container = Instance.new("Folder")
+	container.Name = "GroundCrumble"
+	container.Parent = parent or Workspace
+	spawnRim(ground, radius, scale, container)
+	spawnFlung(ground, radius, scale, container)
+	task.delay(Config.Lifetime, function() container:Destroy() end)
+	return container
+end
+
 return LandingSlamFX

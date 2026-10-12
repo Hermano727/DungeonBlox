@@ -31,6 +31,7 @@ GrantItem template: `{name, type, rarity, tier, enchantLevel, subStats={}, equip
 - **Loot:** private, visual "flying keys" mob→world chests (Food/Green, Normal/White, Elite/Purple).
 - **Score:** 1 Score = 1 Loot Roll. Damage-weighted kill credit; base score 1 (world) / 4 (dungeon) to all party.
 - **Dungeons:** instanced 8-player, tier keys + difficulty mods. Auto-Scrap low-tier loot.
+- **Weapon type of a random drop:** half of random gear drops are weapons; the type is picked from the tier's pool (`ItemConfig.WEAPON_TYPES_BY_TIER`) weighted by `ItemConfig.WEAPON_TYPE_WEIGHTS` (default 1, Bow 1/3 since 2026-10-11: at T1, Sword 75% / Bow 25%). Named-elite gear names its type explicitly and ignores the weights.
 
 ## Enchanting
 

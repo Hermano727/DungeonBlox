@@ -8,6 +8,9 @@
 		MENUS         120       the Tab menu (ProfileMenusReact)
 		QUICK_NAV     251       the button row under the minimap (HudQuickNav)
 		SETTINGS      250..260  settings screen and its pages
+		WORLD_MAP     300       the expanded (M) map: a blocking overlay, above every HUD row and
+		                        banner so nothing can sit on its controls (it was at 30 once
+		                        and the quest tracker / banners ate its picker's clicks)
 		TIPS          400       hover tooltips (Journal TipLayer)
 		TUTORIAL      500       the tutorial's objective, path pointer, focus and spotlights:
 		                        above every menu and HUD row, so it can point at them
@@ -19,6 +22,7 @@
 return table.freeze({
 	MENUS = 120,
 	QUICK_NAV = 251,
+	WORLD_MAP = 300,
 	TIPS = 400,
 	TUTORIAL = 500,
 	TRAVEL = 9000,

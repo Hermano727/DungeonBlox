@@ -61,14 +61,7 @@ local function fireServer(name, ...)
     end
 end
 
-local RARITY_COLORS = {
-    Common    = Color3.fromRGB(205, 210, 220),
-    Uncommon  = Color3.fromRGB(70, 205, 105),
-    Rare      = Color3.fromRGB(80, 170, 255),
-    Epic      = Color3.fromRGB(200, 120, 255),
-    Legendary = Color3.fromRGB(255, 175, 85),
-    Mythic    = Color3.fromRGB(255, 85, 0),
-}
+local Types = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
 
 local gui = Instance.new("ScreenGui")
 gui.Name = "DungeonRunHud"
@@ -303,6 +296,20 @@ local function render(data)
     end
 
     local drops = data.drops or {}
+    -- Low rolls the run auto-scrapped (DungeonClearConfig.AUTO_SCRAP_MAX_RARITY): one line.
+    if type(data.scrap) == "table" and (data.scrap.qty or 0) > 0 then
+        local scrapRow = Instance.new("TextLabel", list)
+        scrapRow.LayoutOrder = 0
+        scrapRow.BackgroundTransparency = 1
+        scrapRow.Size = UDim2.new(1, -10, 0, 22)
+        scrapRow.Font = Enum.Font.GothamMedium
+        scrapRow.TextSize = 12
+        scrapRow.TextXAlignment = Enum.TextXAlignment.Left
+        scrapRow.TextColor3 = Color3.fromRGB(170, 160, 150)
+        scrapRow.Text = string.format("   +%d %s  (%d low rolls scrapped)", data.scrap.qty,
+            tostring(data.scrap.itemId or "Scrap"), data.scrap.fromCount or 0)
+        scrapRow.ZIndex = 12
+    end
     if #drops == 0 then
         local none = Instance.new("TextLabel", list)
         none.BackgroundTransparency = 1
@@ -310,7 +317,8 @@ local function render(data)
         none.Font = Enum.Font.Gotham
         none.TextSize = 13
         none.TextColor3 = Color3.fromRGB(140, 145, 155)
-        none.Text = "No drops acquired."
+        none.LayoutOrder = 1
+        none.Text = (type(data.scrap) == "table" and (data.scrap.qty or 0) > 0) and "No other drops." or "No drops acquired."
         none.ZIndex = 12
     else
         for i, d in ipairs(drops) do
@@ -321,7 +329,7 @@ local function render(data)
             row.Font = Enum.Font.GothamMedium
             row.TextSize = 12
             row.TextXAlignment = Enum.TextXAlignment.Left
-            row.TextColor3 = RARITY_COLORS[d.rarity] or Color3.fromRGB(205, 210, 220)
+            row.TextColor3 = Types.GetRarityColor(d.rarity)
             row.Text = string.format("   %s  (Lv %s)", tostring(d.name), tostring(d.level or "?"))
             row.ZIndex = 12
 
@@ -348,11 +356,16 @@ local function render(data)
     panel.Visible = true
 end
 
--- A cleared run opens with the "Dungeon Complete" banner (all other UI hidden while it
+-- A cleared Miasma run plays the in-world clear sequence first (client/DungeonClearSequence):
+-- its summary carries `showAt` (server clock, the show's end) and the panel waits for it.
+-- Anything else with a Banner opens with the full-screen banner (all other UI hidden while it
 -- plays); the panel appears once it's done.
 bindWhenReady("DungeonRunSummary", function(remote)
     remote.OnClientEvent:Connect(function(data)
-        if type(data) == "table" and type(data.Banner) == "string" then
+        if type(data) ~= "table" then return end
+        if type(data.showAt) == "number" then
+            task.delay(math.max(0, data.showAt - workspace:GetServerTimeNow()), function() render(data) end)
+        elseif type(data.Banner) == "string" then
             CompleteBanner.Play(data.Banner)
             CompleteBanner.OnDone(function() render(data) end)
         else

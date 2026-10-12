@@ -79,7 +79,7 @@
 --    Enter          Print a paste-ready snapshot of the selection to Output
 --    F6 again       Close the overlay (tuning stays live either way)
 --
---  Dev-gated the same way DevClient (F8) is: DevRoster.IsDev(player) is
+--  Dev-gated the same way the F8 DevMenu is: DevRoster.IsDev(player) is
 --  checked once, up front, and the whole script bails before building any
 --  GUI or hooking any input if the local player isn't on the roster (or in
 --  Studio). This is a UX gate, not a security boundary -- see DevRoster's
@@ -102,7 +102,7 @@ local DevRoster    = require(ReplicatedStorage:WaitForChild("DevRoster"))
 
 local player = Players.LocalPlayer
 
--- Same early-return shape as DevClient (F8): build nothing, hook nothing,
+-- Same early-return shape as the F8 DevMenu: build nothing, hook nothing,
 -- for anyone not on the roster. A normal player's client never even
 -- creates the overlay ScreenGui or connects the InputBegan listener.
 if not DevRoster.IsDev(player) then

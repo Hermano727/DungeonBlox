@@ -385,14 +385,14 @@ local function buildOverlay(mobId)
 	return overlay
 end
 
--- A one-shot for the card (its sting, the roar), through the Effects bus so the volume
+-- A one-shot for the card (its sting, the roar), through the Creatures bucket so the volume
 -- sliders apply. Plays to its end, even past the handback.
 local function playCardSound(id)
 	if type(id) ~= "string" or id == "" then return end
 	local sound = Instance.new("Sound")
 	sound.Name = "TitleCardSting"
 	sound.SoundId = id
-	sound.SoundGroup = SfxService.GetEffectsGroup()
+	sound.SoundGroup = SfxService.GetGroupFor("MiasmaRoar") -- the boss's sting: Creatures
 	sound.Parent = SoundService
 	local done = false
 	local function cleanup()

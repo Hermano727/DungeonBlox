@@ -54,6 +54,16 @@ local function applyWalkSpeed(p)
     if h.Health <= 0 then return end
     local base = Config.NORMAL_SPEED
     if PotionAction.IsLocked(p.Character) then EnergyData.setSprintHeld(p, false) end
+    -- On a horse (SSS/MountService): the saddle's speed, nothing else. Sprint is dropped (no drain)
+    -- and crouch/panting/buffs don't apply; an enchant slow still does.
+    local mountSpeed = tonumber(p:GetAttribute("MountSpeed"))
+    if mountSpeed and mountSpeed > 0 then
+        if d.isSprintHeld then EnergyData.setSprintHeld(p, false) end
+        p.Character:SetAttribute("IsSprinting", false)
+        h.WalkSpeed = mountSpeed * CombatEnchantStatus.GetSpeedMultiplier(p.Character)
+        lastSpeedHumanoidByUid[p.UserId] = h
+        return
+    end
     local root=p.Character:FindFirstChild("HumanoidRootPart")
     local crouching=root and root:GetAttribute("IsCrouching") == true
     p.Character:SetAttribute("IsSprinting", d.isSprintHeld == true and not d.isPanting and not crouching)
@@ -130,6 +140,9 @@ local function trackMovementExhaustion(p)
     local pos = root.Position
     local last = lastPositionByUid[p.UserId]
     lastPositionByUid[p.UserId] = pos
+    if p:GetAttribute("Mounted") then
+        return -- the horse does the walking: no hunger for distance ridden
+    end
     if not last then
         return -- first tick after spawn/zone-entry -- no delta to charge yet
     end
@@ -242,6 +255,7 @@ RequestSprint.OnServerEvent:Connect(function(p,isHeld)
     -- Shift always stands up, even when energy/hunger refuses sprint.
     if isHeld then setCrouching(p, false) end
     local accepted=isHeld and not EnergyData.isBlocked(p) and not EnergyData.isPanting(p) and HungerData.canSprint(p)
+        and not p:GetAttribute("Mounted")   -- riding: no sprint, no sprint drain
     EnergyData.setSprintHeld(p, accepted == true)
     applyWalkSpeed(p)
 end)
@@ -250,6 +264,7 @@ RequestCrouch.OnServerEvent:Connect(function(p,wantCrouch)
     if type(wantCrouch) ~= "boolean" then return end
     local h=p.Character and p.Character:FindFirstChildOfClass("Humanoid")
     if not h or h.Health <= 0 then return end
+    if wantCrouch and p:GetAttribute("Mounted") then return end
     if wantCrouch then
         -- Remain safely disabled until the exported clips have published IDs.
         if not Profiles.CrouchReady() or CombatAnimations.CROUCH_SWING_ANIM_ID == "" then return end
@@ -281,6 +296,8 @@ end
 local function initPlayer(p)
     EnergyData.init(p)
     HungerData.init(p)
+    -- Mounting / dismounting (SSS/MountService) swaps the speed rule.
+    p:GetAttributeChangedSignal("MountSpeed"):Connect(function() applyWalkSpeed(p) end)
     p.CharacterAdded:Connect(function(character)
         connectCharacter(p, character)
     end)

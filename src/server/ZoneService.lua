@@ -621,6 +621,13 @@ local function pollPlayer(p)
 	p:SetAttribute("CurrentEliteZone", activeEliteZoneName)
 	p:SetAttribute("CurrentEliteMobId", activeEliteMobId)
 	p:SetAttribute("IsInEliteZone", activeEliteZoneName ~= "")
+	-- Same rule as IsPlayerInSafeZone (any Lawful zone), replicated for UI that needs it (the
+	-- Journal's Alignment page). The server still checks IsPlayerInSafeZone itself.
+	local inSafeZone = false
+	for _, zoneObj in pairs(newInside) do
+		if zoneObj.alignment == "Lawful" then inSafeZone = true break end
+	end
+	p:SetAttribute("InSafeZone", inSafeZone)
 
 	-- Diff: detect new entries (in newInside but not in st.inside).
 	local playerAlignment

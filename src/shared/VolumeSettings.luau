@@ -17,17 +17,16 @@ local SettingsStore = require(script.Parent:WaitForChild("SettingsStore"))
 -- systems in ProfileService.lua/PlayerDataManager.lua, see that file's
 -- header) overrides whichever of these fields the player has actually
 -- changed before, so this table always reflects their last-saved values.
-local defaults = {
-	master = 1.0,     -- SoundService.Main.Volume, and multiplies ZoneMusic directly.
-	music  = ZoneConfig.ZONE_MUSIC_VOLUME,
-	movement = 0.5,   -- footsteps/landing/jumping -- wired to SoundService.Main.Character.Volume.
-	                  -- (was named "sfx")
-	effects  = 1.0,   -- one-shot effect sounds: melee hits, crit hits, item pickups
-	                  -- (see SfxService.PlayEffect) -- wired to SoundService.Main.Effects.Volume.
-	                  -- (was named "vfx" -- there is no real visual-effects/particle
-	                  -- quality setting; src/shared/VFX/ is an unrelated particle-asset
-	                  -- folder, not a settings hook.)
-}
+-- 2026-10-11: one field per sound bucket, defaults from RS/AudioCategories (the registry; see
+-- it for what each bucket holds). Music's default is the zone music level. The ids that predate
+-- the buckets keep their names: movement = player footsteps (Main.Character), effects = "Other"
+-- (Main.Effects, the catch-all).
+local AudioCategories = require(script.Parent:WaitForChild("AudioCategories"))
+local defaults = {}
+for _, category in ipairs(AudioCategories.CATEGORIES) do
+	defaults[category.id] = category.default
+end
+defaults.music = ZoneConfig.ZONE_MUSIC_VOLUME
 
 local saved = SettingsStore.Get().volume
 if type(saved) == "table" then

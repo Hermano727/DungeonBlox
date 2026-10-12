@@ -21,4 +21,11 @@ function CursorManager.setFree(reason, free)
 	UserInputService.MouseIconEnabled = anyFree
 end
 
+-- Clears every reason (CursorUtils.ForceRelock's partner, used by client/CursorLockButton).
+function CursorManager.reset()
+	table.clear(reasons)
+	UserInputService.MouseBehavior    = Enum.MouseBehavior.LockCenter
+	UserInputService.MouseIconEnabled = false
+end
+
 return CursorManager

@@ -245,12 +245,16 @@ RunService:BindToRenderStep("HarukaWeaponAttachment", Enum.RenderPriority.Last.V
 		if state.model then
 			local cf = state.bone.TransformedWorldCFrame * state.offset
 			-- Follow the actual replicated track. A failed load never hides the weapon.
-			local drinking = PotionPresentation.IsDrinking(character)
+			-- Hidden while drinking, and while riding the horse (the Mounted player attribute,
+			-- SSS/MountService): the rider's hands are on the reins.
+			local owner = Players:GetPlayerFromCharacter(character)
+			local hidden = PotionPresentation.IsDrinking(character)
+				or (owner ~= nil and owner:GetAttribute("Mounted") == true)
 			for _, entry in ipairs(state.parts) do
 				entry.part.CFrame = cf * entry.offset
-				entry.part.LocalTransparencyModifier = drinking and 1 or 0
+				entry.part.LocalTransparencyModifier = hidden and 1 or 0
 			end
-			if state.bow then updateBow(state, drinking) end
+			if state.bow then updateBow(state, hidden) end
 		elseif state.tool and not state.warned and os.clock() - state.waitStarted > 5
 			and Profiles.GetAttachForTool(state.tool) ~= nil then
 			state.warned = true

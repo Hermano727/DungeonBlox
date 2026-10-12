@@ -4,13 +4,17 @@
 -- and server validation can never drift apart. Also doubles as the
 -- server-side whitelist of which (category, key) pairs are legal to save --
 -- SettingsDataService rejects anything not listed here.
+local AudioCategories = require(script.Parent:WaitForChild("AudioCategories"))
+
+-- Every sound bucket's slider is a 0..1 volume (2026-10-11: derived, so a new bucket in
+-- AudioCategories.CATEGORIES saves with no edit here).
+local volume = {}
+for _, category in ipairs(AudioCategories.CATEGORIES) do
+	volume[category.id] = { min = 0, max = 1 }
+end
+
 return {
-	volume = {
-		master   = { min = 0, max = 1 },
-		music    = { min = 0, max = 1 },
-		movement = { min = 0, max = 1 },
-		effects  = { min = 0, max = 1 },
-	},
+	volume = volume, -- one key per AudioCategories bucket (built above)
 	video = {
 		fov         = { min = 60, max = 100 },
 		sensitivity = { min = 0.0012, max = 0.006 },

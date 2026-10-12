@@ -94,6 +94,7 @@ RunService.RenderStepped:Connect(function()
 	local show = enabled
 		and UserInputService.MouseBehavior == Enum.MouseBehavior.LockCenter
 		and not CameraOverrideState.IsActive()
+		and not Players.LocalPlayer:GetAttribute("Mounted") -- riding: the orbit camera has no aim
 	if root.Visible ~= show then root.Visible = show end
 end)
 

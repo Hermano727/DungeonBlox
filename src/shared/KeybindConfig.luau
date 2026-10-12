@@ -18,6 +18,7 @@ local K = Enum.KeyCode
 local Keybinds = {
 	-- Movement / camera
 	Dash              = K.Q,
+	Mount             = K.H,      -- calls / sends away your horse (MountClient; needs a saddle, out of combat)
 	TogglePerspective = K.R,      -- cycles first-person <-> over-shoulder
 	FreeLook          = { K.LeftControl, K.RightControl },
 
@@ -34,6 +35,8 @@ local Keybinds = {
 	ToggleMap   = K.M,            -- expands / collapses the world map (Minimap)
 	MapZoomIn   = { K.Equals, K.KeypadPlus },  -- only while the map is expanded
 	MapZoomOut  = { K.Minus, K.KeypadMinus },
+	MapRecentre = K.C,            -- expanded map: back to following you
+	MapDeleteMarker = K.Delete,   -- expanded map: removes the pin under the cursor
 	SpectatePrev = K.Left,        -- while spectating the boss fight: previous / next teammate
 	SpectateNext = K.Right,
 

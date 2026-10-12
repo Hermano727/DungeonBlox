@@ -128,40 +128,62 @@ return {
 		AttackSpeed = 2, -- 42-frame slash plays in ~0.88s instead of ~1.75s
 		Moveset = {
 			AxeCombo3Hit = "rbxassetid://95812769767613",
+			-- The Fire Tornado cast (SSS/FireTornadoCast). A KeyframeSequence exported by
+			-- assets/models/mobs/named elites/kane animation/export_kane_clip.py from
+			-- Kane_Groundbreaker_Slam.blend (2 s, axe impact at frame 30); played at
+			-- FireTornadoConfig.SLAM_SPEED so the impact lands on its WINDUP.
+			GroundbreakerSlam = "rbxassetid://107914870307930",
 		},
 	},
 
-	-- Miasma (T1 dungeon boss). Skinned-mesh model (Miasma_Skin + Bones, driven by an
-	-- AnimationController, NOT the old R15 rig -- the old ids below this rig were authored for
-	-- R15 joints and don't apply). No walk clip: while chasing it plays AggroLoop instead.
-	-- AggroStart plays once on acquiring a target, then AggroLoop holds until the target is lost.
-	-- AggroStart doubles as the ordinary attack clip (no dedicated attack authored).
+	-- Miasma (T1 dungeon boss). Skinned mesh on the v3 JAW rig (2026-10-11, model
+	-- MiasmaBossJawRig: Root > Body > Skirt_F/B/L/R, LowerJaw, Spine1 > Spine2 > Head), every
+	-- body clip authored in Blender by assets/models/mobs/dungeon bosses/miasma/v3/build_clips_v3.py
+	-- (README there). No walk clip: while chasing it plays AggroLoop instead.
+	-- AggroStart plays once on acquiring a target, then AggroLoop holds until the target is lost:
+	-- jaw closed, eyes showing, surging forward to gape at you and snapping half shut.
+	-- The v2 lattice-rig ids are kept in comments (they only drive MiasmaBossEyeRig).
 	MiasmaBoss = {
-		Idle       = "rbxassetid://103328246296289",
-		Attack     = "rbxassetid://126756643218296",  -- AggroStart, reused
-		-- The swing lands after a windup (seconds into Attack) instead of the instant it starts,
-		-- and MobData's Telegraph ring fills over exactly this time. Tune against the clip.
-		AttackHitDelay = 0.55,
-		AggroStart = "rbxassetid://126756643218296",
-		AggroLoop  = "rbxassetid://131702188473926",
+		Idle       = "rbxassetid://100923448881987", -- 2.5 s loop (was 103328246296289)
+		-- The BITE (1.0 s, 2026-10-11 v2): a quick gape (0.13-0.27 s), then it lunges forward and
+		-- down, its head arcing over you, and the jaws clamp at frame 13 = 0.4 s, ~30 studs out
+		-- (its reach, MobData AttackRange). Damage lands at the snap; MobData MeleeHalfAngle makes
+		-- it frontal only. (v1, 1.4 s with the snap at 0.6: 78008389802538.)
+		Attack     = "rbxassetid://71951280069309",
+		AttackHitDelay = 0.4,
+		AggroStart = "rbxassetid://95449104792737",  -- 1.2 s (was 126756643218296)
+		AggroLoop  = "rbxassetid://128672953481049", -- 2.0 s loop (was 131702188473926)
 		-- Plays on the separate ceiling-latch model (MobData CeilingLatchModelName), not on the
 		-- boss mesh -- see DungeonBossMobClass._spawnLatchProxy.
 		CeilingLatch = "rbxassetid://83190161792275",
 		-- Phase 1 -> 2 bridge (0.6s each, played together; see MiasmaEncounterConfig.BossDropSequence).
 		-- LatchDetach plays on the CEILING-LATCH model's Animator, CeilingToBody on the boss's.
 		LatchDetach  = "rbxassetid://74367298964889",
-		CeilingToBody = "rbxassetid://115862676634720",
+		CeilingToBody = "rbxassetid://103523507560130", -- v3 (was 115862676634720)
 		-- Defeat presentation (DungeonBossMobClass:PlayDefeatPresentation): Defeat plays on the
 		-- upright boss; DefeatFlat plays on the flat puddle model (MobData DefeatFlatModelName)
 		-- while the runtime shrinks it. Neither loops.
-		Defeat     = "rbxassetid://131193462993192", -- upright -> flat
+		Defeat     = "rbxassetid://136318150864363", -- upright -> flat, v3 (was 131193462993192)
 		DefeatFlat = "rbxassetid://125610215342818", -- flat -> gone (body pulses; shrink is scripted)
 	},
 	MiasmaSlime = {
 		ScriptedBody = true,
 		AttackHitDelay = 0.25,
 	},
-	MiasmaClog = { ScriptedBody = true },
+	-- Miasma's underling (2026-10-10): KeyframeSequences exported by
+	-- assets/models/mobs/dungeon bosses/miasma/underling/export_underling_clips.py (24 fps, every
+	-- frame). Attack is the THRUST, hit at frame 11 = 10/24 s from the clip start.
+	MiasmaUnderling = {
+		Walk = "rbxassetid://74797150047181",   -- Crawl, 0.67 s loop
+		Idle = "rbxassetid://125547582810550",  -- breathing, 2 s loop
+		Attack = "rbxassetid://98222048415471", -- Thrust, 1 s
+		AttackHitDelay = 10 / 24,
+		Moveset = {
+			Slam = "rbxassetid://85006863859765", -- 1.5 s, impact 15/24 s
+			Spit = "rbxassetid://93127792551463", -- 1.25 s, release 14/24 s
+		},
+	},
+	MiasmaClog = {}, -- the vine has no clips and no squash: it just sits there
 	MiasmaSack = { ScriptedBody = true },
 
 	-- Template for adding future mobs:

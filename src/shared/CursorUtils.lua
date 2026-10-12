@@ -50,4 +50,21 @@ function CursorUtils.release()
     end
 end
 
+-- The escape hatch (client/CursorLockButton): drops EVERY hold and locks the cursor again. For
+-- when some UI acquired without releasing (a leaked hold re-frees the cursor every frame, so the
+-- camera can't turn and even Ctrl's FreeLook can't take it back). Open menus should be closed
+-- first (InteractionLock.CloseMenu) so they release normally; this clears whatever is left.
+function CursorUtils.ForceRelock()
+    refCount = 0
+    pcall(function() RunService:UnbindFromRenderStep(BIND_NAME) end)
+    savedBehavior, savedIconEnabled = Enum.MouseBehavior.LockCenter, false
+    UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+    UserInputService.MouseIconEnabled = false
+end
+
+-- Debug/UI: how many holds are open right now.
+function CursorUtils.Holds()
+    return refCount
+end
+
 return CursorUtils

@@ -34,7 +34,7 @@ local function buildTemplate()
 	s.Name = "SwordSlash"
 	s.SoundId = id
 	s.Volume = CombatSfxConfig.SWORD_SLASH_VOLUME or .5
-	s.SoundGroup = SfxService.GetEffectsGroup()
+	s.SoundGroup = SfxService.GetGroupFor("HeavyWeaponSwing") -- the Combat slider
 	s.Parent = SoundService
 	task.spawn(function() pcall(ContentProvider.PreloadAsync, ContentProvider, { s }) end)
 	return s

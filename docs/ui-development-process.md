@@ -28,6 +28,8 @@ Rebuilt screens that reuse existing art are marked **FIRST PASS** at the top of 
 
 ## Writing image prompts
 
+Start every prompt from the UI preamble (or the icon preamble for icons) in [Art Direction & Image Generation](./art-direction.md), the one style guide for every generated image in the game. The rules below are where those preambles came from.
+
 Every piece prompt follows the same rules (each one learned from a failed image):
 
 - **Attach a style reference** (the approved mockup, or an existing in-game screenshot). Say "match the attached style exactly".

@@ -38,6 +38,7 @@ local BowShot = gameEvents:WaitForChild("BowShot")
 
 local STICK_TIME = 4 -- seconds an arrow stays in the wall it hit
 local FADE_TIME = 0.4
+local FLIGHT_LENGTH = BowConfig.ARROW_LENGTH * BowConfig.FLIGHT_ARROW_SCALE
 
 local arrowFolder = Instance.new("Folder")
 arrowFolder.Name = "BowArrows"
@@ -55,10 +56,50 @@ local function arrowTemplate()
 	return folder and folder:FindFirstChild(BowConfig.ARROW_TEMPLATE)
 end
 
+-- The flying arrow: FLIGHT_ARROW_SCALE times the nocked one, with a pale gold glow
+-- (Highlight) and a short streak (Trail) behind it.
+local function dressArrow(arrow)
+	local scale = BowConfig.FLIGHT_ARROW_SCALE
+	arrow.Size *= scale -- a MeshPart's mesh follows its Size
+	local mesh = arrow:FindFirstChildOfClass("SpecialMesh")
+	if mesh then mesh.Scale *= scale end
+
+	local glow = Instance.new("Highlight")
+	glow.FillColor = BowConfig.ARROW_GLOW_COLOR
+	glow.FillTransparency = BowConfig.ARROW_GLOW_FILL_TRANSPARENCY
+	glow.OutlineColor = BowConfig.ARROW_GLOW_OUTLINE
+	glow.OutlineTransparency = 0
+	glow.DepthMode = Enum.HighlightDepthMode.Occluded
+	glow.Parent = arrow
+
+	-- Both ends at the tail (the arrow flies along -Z), apart across it for the streak's width.
+	local halfWidth = BowConfig.ARROW_TRAIL_WIDTH / 2
+	local top = Instance.new("Attachment")
+	top.Position = Vector3.new(0, halfWidth, FLIGHT_LENGTH / 2)
+	top.Parent = arrow
+	local bottom = Instance.new("Attachment")
+	bottom.Position = Vector3.new(0, -halfWidth, FLIGHT_LENGTH / 2)
+	bottom.Parent = arrow
+	local trail = Instance.new("Trail")
+	trail.Attachment0, trail.Attachment1 = top, bottom
+	trail.FaceCamera = true
+	trail.Lifetime = BowConfig.ARROW_TRAIL_LIFETIME
+	trail.Color = ColorSequence.new(BowConfig.ARROW_GLOW_OUTLINE, BowConfig.ARROW_GLOW_COLOR)
+	trail.Transparency = NumberSequence.new(0.25, 1)
+	trail.WidthScale = NumberSequence.new(1, 0)
+	trail.LightEmission = 1
+	trail.Parent = arrow
+end
+
 local function stickThenFade(arrow)
 	task.delay(STICK_TIME, function()
 		if not arrow.Parent then return end
-		local fade = TweenService:Create(arrow, TweenInfo.new(FADE_TIME), { Transparency = 1 })
+		local info = TweenInfo.new(FADE_TIME)
+		local glow = arrow:FindFirstChildOfClass("Highlight")
+		if glow then
+			TweenService:Create(glow, info, { FillTransparency = 1, OutlineTransparency = 1 }):Play()
+		end
+		local fade = TweenService:Create(arrow, info, { Transparency = 1 })
 		fade.Completed:Connect(function() arrow:Destroy() end)
 		fade:Play()
 	end)
@@ -75,14 +116,14 @@ local function stepFlights(dt)
 			step = step.Unit * remaining
 			done = true
 		end
-		local result = workspace:Raycast(f.position, step, f.params)
+		local result = BowConfig.CastArrow(f.position, step, f.params)
 		if result then
 			f.position = result.Position
 			local model = result.Instance:FindFirstAncestorOfClass("Model")
 			local hitCharacter = model and model:FindFirstChildOfClass("Humanoid")
 			if result.Instance.Anchored and not hitCharacter then
 				-- Sink the head a little into what it hit, then leave it there.
-				f.arrow.CFrame = CFrame.lookAt(f.position - f.velocity.Unit * (BowConfig.ARROW_LENGTH / 2 - 0.25), f.position)
+				f.arrow.CFrame = CFrame.lookAt(f.position - f.velocity.Unit * (FLIGHT_LENGTH / 2 - 0.5), f.position)
 				stickThenFade(f.arrow)
 			else
 				f.arrow:Destroy()
@@ -94,7 +135,7 @@ local function stepFlights(dt)
 		f.velocity += gravity * dt
 		f.traveled += step.Magnitude
 		if f.velocity.Magnitude > 0.1 then
-			f.arrow.CFrame = CFrame.lookAt(f.position - f.velocity.Unit * (BowConfig.ARROW_LENGTH / 2), f.position)
+			f.arrow.CFrame = CFrame.lookAt(f.position - f.velocity.Unit * (FLIGHT_LENGTH / 2), f.position)
 		end
 		if done then
 			f.arrow:Destroy()
@@ -112,7 +153,8 @@ local function launch(origin, velocity, maxDistance, ignore)
 	local template = arrowTemplate()
 	if not template or velocity.Magnitude < 0.1 then return end
 	local arrow = template:Clone()
-	arrow.CFrame = CFrame.lookAt(origin - velocity.Unit * (BowConfig.ARROW_LENGTH / 2), origin)
+	dressArrow(arrow)
+	arrow.CFrame = CFrame.lookAt(origin - velocity.Unit * (FLIGHT_LENGTH / 2), origin)
 	arrow.Parent = arrowFolder
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude

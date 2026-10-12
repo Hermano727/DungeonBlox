@@ -110,9 +110,17 @@ Layout.Altars = table.freeze({
 	table.freeze({ Anchor = "ANCHOR_CleanseAltar_SE", Angle = 90, Inset = 6 }),
 })
 
-Layout.SafeAreas = table.freeze({ 60, 120, 240, 300 })
-Layout.SafeAreaRadius = 12 -- mirror of Config.Arena.SafeAreaRadius
-Layout.SafeAreaDistance = 94
+-- The poison outfall pipes, one over each gate bay (a gate face's +X, or -X for the 330 gate, whose
+-- entrance arch takes the other side): iron pipes high on the wall, a stream of poison falling from
+-- each mouth to a pool at the floor. Gate-face-local. SSS/MiasmaArenaPropsPlacements places the pipe
+-- and the stream from these; phase 1's poisonous slimes drop out of the same mouths.
+Layout.Outfall = table.freeze({
+	X = 55,
+	Side = table.freeze({ [330] = -1 }),
+	MouthY = 32.8,   -- the pipe mouth, above the floor
+	MouthZ = 7.8,    -- out from the wall
+	Drop = 31.9,     -- the stream's fall; the pool sits this far below the mouth (plus .4 for the splash)
+})
 
 Layout.SackAngles = table.freeze({ 22.5, 67.5, 112.5, 157.5, 202.5, 247.5, 292.5, 337.5 })
 Layout.SackDistance = 98
@@ -151,6 +159,13 @@ function Layout.ChannelPath(index)
 	return mouth, split, finish
 end
 
+-- Arena-local position of gate `index`'s outfall pipe mouth.
+function Layout.OutfallMouth(index)
+	local angle = Layout.Stations[index].Angle
+	local o = Layout.Outfall
+	return Layout.FaceFrame(angle):PointToWorldSpace(Vector3.new(o.X * (o.Side[angle] or 1), o.MouthY, o.MouthZ))
+end
+
 function Layout.AltarPosition(index)
 	local altar = Layout.Altars[index]
 	return Layout.Polar(altar.Angle, Layout.Apothem + altar.Inset, Layout.FloorY)
@@ -177,9 +192,6 @@ function Layout.Anchors()
 	}
 	for index, altar in ipairs(Layout.Altars) do
 		anchors[altar.Anchor] = Layout.AltarPosition(index)
-	end
-	for index, angle in ipairs(Layout.SafeAreas) do
-		anchors[("ANCHOR_PurgeSafe_%02d"):format(index)] = Layout.Polar(angle, Layout.SafeAreaDistance, Layout.FloorY + .4)
 	end
 	for index, angle in ipairs(Layout.SackAngles) do
 		anchors[("ANCHOR_PoisonSack_%02d"):format(index)] = Layout.Polar(angle, Layout.SackDistance, Layout.SackHeight)

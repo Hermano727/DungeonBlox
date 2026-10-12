@@ -7,8 +7,10 @@
 	Sits in the bottom-left HUD stack (RS/HudBottomLeftStack, ORDER.Dungeon), directly above
 	the combat timer (which always owns the very bottom).
 
-	Leaving: click the timer and a small "Leave Dungeon" button opens beside it (it closes
-	itself after a few seconds). Leave removes only this player
+	Leaving: a "Leave Dungeon" button sits beside the timer for the whole run (2026-10-11; it
+	used to hide until you clicked the timer). Hold Ctrl (FreeLook) to free the cursor, click it,
+	then click again within CONFIRM_SECONDS to confirm, so a stray click never ends your run.
+	Leave removes only this player
 	(DungeonInstanceService.removePlayerFromInstance), teleporting them to their hearthstone
 	without affecting the rest of the party.
 
@@ -30,7 +32,9 @@ local gameEvents = ReplicatedStorage:WaitForChild("GameEvents")
 local DungeonInstanceStateUpdate = gameEvents:WaitForChild("DungeonInstanceStateUpdate")
 local DungeonLeaveRequest = gameEvents:WaitForChild("DungeonLeaveRequest")
 
-local LEAVE_OPEN_SECONDS = 5
+local CONFIRM_SECONDS = 3
+local LEAVE_COLOR = Color3.fromRGB(120, 42, 42)
+local CONFIRM_COLOR = Color3.fromRGB(190, 52, 44)
 
 ----------------------------------------------------------------------
 -- UI
@@ -57,30 +61,25 @@ local pill = Stack.Pill(slot, {
 pill.frame.LayoutOrder = 1
 pill.label.Text = "0:00"
 
--- The whole pill is the button that opens Leave. Parented to the label (not the pill, whose
--- list layout would slot it in as a third item) and stretched back over the icon and padding.
-local hit = Instance.new("TextButton")
-hit.Name = "Hit"
-hit.BackgroundTransparency = 1
-hit.Text = ""
-hit.Position = UDim2.fromOffset(-38, 0) -- left padding 8 + icon 24 + gap 6
-hit.Size = UDim2.new(1, 50, 1, 0)       -- ...plus right padding 12
-hit.ZIndex = 5
-hit.Parent = pill.label
-
+-- Same height and plate as the timer pill, in a dark red, so the two read as one row.
 local leaveBtn = Instance.new("TextButton")
 leaveBtn.Name = "Leave"
 leaveBtn.LayoutOrder = 2
-leaveBtn.Size = UDim2.fromOffset(120, 28)
-leaveBtn.BackgroundColor3 = Color3.fromRGB(120, 42, 42)
-leaveBtn.BackgroundTransparency = .1
+leaveBtn.Size = UDim2.fromOffset(132, 32)
+leaveBtn.BackgroundColor3 = LEAVE_COLOR
+leaveBtn.BackgroundTransparency = .15
 leaveBtn.BorderSizePixel = 0
-leaveBtn.TextColor3 = Color3.new(1, 1, 1)
-leaveBtn.TextSize = 14
+leaveBtn.AutoButtonColor = true
+leaveBtn.TextColor3 = Color3.fromRGB(245, 230, 220)
+leaveBtn.TextStrokeTransparency = .6
+leaveBtn.TextSize = 15
 leaveBtn.Text = "Leave Dungeon"
-leaveBtn.Visible = false
 pcall(function() leaveBtn.FontFace = UIFonts.HUDLabel end)
 Instance.new("UICorner", leaveBtn).CornerRadius = UDim.new(0, 6)
+local leaveStroke = Instance.new("UIStroke", leaveBtn)
+leaveStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+leaveStroke.Color = Color3.fromRGB(60, 16, 16)
+leaveStroke.Transparency = .3
 leaveBtn.Parent = slot
 
 ----------------------------------------------------------------------
@@ -89,7 +88,15 @@ leaveBtn.Parent = slot
 
 local inDungeon = false
 local startTime = 0
-local leaveSerial = 0
+local armedSerial = 0 -- bumps on every arm/reset, so a stale confirm timeout can't disarm a newer one
+local armed = false
+
+local function disarm()
+	armed = false
+	armedSerial += 1
+	leaveBtn.Text = "Leave Dungeon"
+	leaveBtn.BackgroundColor3 = LEAVE_COLOR
+end
 
 local function formatDuration(secs)
 	secs = math.max(0, math.floor(secs))
@@ -111,22 +118,21 @@ RunService.Heartbeat:Connect(function()
 	end
 end)
 
-hit.Activated:Connect(function()
-	if not inDungeon then return end
-	leaveBtn.Visible = not leaveBtn.Visible
-	leaveSerial += 1
-	local serial = leaveSerial
-	if leaveBtn.Visible then
-		task.delay(LEAVE_OPEN_SECONDS, function()
-			if leaveSerial == serial then leaveBtn.Visible = false end
-		end)
-	end
-end)
-
 leaveBtn.Activated:Connect(function()
 	if not inDungeon or not leaveBtn.Active then return end
+	if not armed then
+		disarm()
+		armed = true
+		leaveBtn.Text = "Click to confirm"
+		leaveBtn.BackgroundColor3 = CONFIRM_COLOR
+		local serial = armedSerial
+		task.delay(CONFIRM_SECONDS, function()
+			if armedSerial == serial and armed then disarm() end
+		end)
+		return
+	end
+	disarm()
 	leaveBtn.Active = false
-	leaveBtn.Visible = false
 	DungeonLeaveRequest:FireServer()
 end)
 
@@ -136,12 +142,12 @@ DungeonInstanceStateUpdate.OnClientEvent:Connect(function(payload)
 	if payload.state == DungeonTypes.State.IN_PROGRESS then
 		inDungeon = true
 		startTime = tonumber(payload.startTime) or os.time()
+		disarm()
 		leaveBtn.Active = true
-		leaveBtn.Visible = false
 		slot.Visible = true
 	elseif payload.state == DungeonTypes.State.ENDED then
 		inDungeon = false
-		leaveBtn.Visible = false
+		disarm()
 		slot.Visible = false
 	end
 end)

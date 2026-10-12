@@ -6,7 +6,45 @@ local ENRAGE_CLIP = { Length = 3.6, SpewStart = 1.9, SpewEnd = 2.95 }
 
 local Config = {
 	MaxPartySize = 8,
-	EntranceGrace = 10,
+	-- The boss room's opening (BeginEntranceCutscene, client/MiasmaEntranceCutscene): it starts once
+	-- the party is INSIDE the gate line (past the seal by InsetStuds), waiting up to GatherWait for
+	-- stragglers after the first member is in. Times are seconds from its start; the gate closes
+	-- behind the party and phase 1 begins at Duration, with no teleport.
+	EntranceCutscene = {
+		InsetStuds = 6,         -- a member counts as inside this far past the gate line
+		GatherWait = 6,         -- after the first member is inside, wait this long for the rest
+		-- 1. a floor drain: slimes clog it, push outward, plop out (more drains spawn them for real at the end)
+		DrainArrive = 1.8,      -- the camera reaches the drain
+		DrainClog = 2.0,        -- slimes swell up into the grate
+		DrainPush = 3.6,        -- they strain outward
+		DrainPlop = 4.8,        -- and plop out
+		DrainLeave = 6.0,
+		-- 2. the pressure plate: a boulder falls on it
+		RockRelease = 6.8,      -- the boulder lets go of the ceiling
+		PlateArrive = 7.4,      -- the camera reaches the plate
+		RockImpact = 8.3,       -- the boulder shatters on it: dust, shake, the plate lights
+		-- 3. the rune tablet
+		TabletStart = 8.6,      -- the camera leaves the plate for the tablet
+		RunesLit = 9.1,         -- its (sample) runes light up
+		TabletArrive = 9.8,
+		TabletLeave = 12.2,     -- the camera swings to the valve
+		-- 4. the valve
+		ValveArrive = 13.4,
+		ValveGlow = 13.7,       -- the valve glows
+		ValveLeave = 15.4,      -- the camera swings to a cleansing altar
+		-- 5. a cleansing altar
+		AltarArrive = 16.6,
+		AltarGlow = 16.9,       -- it lights up: poison is cleansed here
+		AltarLeave = 18.8,
+		-- 6. the gate
+		BackStart = 18.8,       -- the camera swings back to the entrance
+		BackArrive = 19.9,
+		GateStart = 19.7,       -- the gate starts sliding shut behind the party
+		GateSlam = 20.5,        -- ... and slams home: collision on, dust, shake
+		Duration = 21.7,        -- the camera is handed back and Act 1 starts at this instant
+		GateRise = 30,          -- how far above its closed position the gate waits, studs
+		SkipHold = 0.8,         -- seconds a player holds Space before it counts as their vote to skip
+	},
 	Act1Duration = 10, -- TEMP (testing the boss flow): normal value is 60. Revert before shipping.
 	Act1InitialWaveDelay = 12,
 	Act1FinalWaveDelay = 6,
@@ -221,14 +259,17 @@ local Config = {
 	},
 
 	-- Miasma up close (2026-09-28). Its ordinary swing (MobData MiasmaBoss: BaseDamage,
-	-- AttackRange, Telegraph; MobAnimConfig AttackHitDelay) now lands after a telegraphed
-	-- windup, knocks you well back and poisons you. Its reach stays a little SHORT of a
-	-- player's 12-stud melee (AttackRange 6 past the body), so you can fight it at the edge
-	-- of your reach but hugging it is punished.
+	-- AttackRange, MeleeHalfAngle; MobAnimConfig AttackHitDelay) is a frontal BITE: a quick gape,
+	-- then it lunges and clamps 0.4 s in, knocks you well back and poisons you. Its reach is one
+	-- stud SHORT of a player's sword (~28.4 vs ~29.5 studs from its centre), so you can kite it
+	-- at the edge of your reach but anywhere closer in front of it gets bitten.
 	Melee = {
 		PoisonStacks = 1,          -- per landed swing, on top of its damage
-		-- The BODY is solid: an invisible anchored cylinder players physically cannot enter
-		-- (plus a shove for anyone who ends up inside anyway). Its radius follows the ANIMATED
+		-- The BODY is solid: an invisible anchored cylinder players physically cannot enter.
+		-- Touching it does nothing (2026-10-11: walking into it used to throw you back at 42
+		-- studs/s for no damage, which made hugging it free; the bite is the punishment now). Only
+		-- a player who ends up INSIDE it (it moved onto them) is eased back out, flat, at
+		-- InsideEjectSpeed. Its radius follows the ANIMATED
 		-- body: the four edge bones of the skin's base ring (front/back/left/right), times
 		-- BodyEdgeFromBones -- the skin edge at player height sits at 0.93 of those bones'
 		-- distance (measured on the bind pose, 2026-09-29). BodyEdgePadding adds studs on top
@@ -238,9 +279,10 @@ local Config = {
 		BodyEdgeFromBones = 0.93,
 		BodyEdgePadding = 0,
 		BodyRadiusFraction = 0.6,
-		ContactShoveSpeed = 42,    -- studs/s outward, held for ContactShoveSeconds
+		InsideEjectSpeed = 24,     -- studs/s outward, flat, held for ContactShoveSeconds
+		InsideEjectDepth = 0.5,    -- studs past the surface before a player counts as inside
 		ContactShoveSeconds = 0.14,
-		ContactCooldown = 0.25,    -- per player, so shoves don't stack every frame
+		ContactCooldown = 0.25,    -- per player, so ejects don't stack every frame
 		-- Contact itself is damage-free by default (project rule since Kane's "thorns" were
 		-- removed: no per-mob touch damage). Set above 0 to poison anyone who walks into it.
 		ContactPoisonStacks = 0,
@@ -278,7 +320,13 @@ local Config = {
 			-- hidden once the submerge clip finishes sinking it, and the boss is held through
 			-- the whole emerge clip before it can act again.
 			SubmergeClipSeconds = 1.2,
-			EmergeClipSeconds = 1.2,
+			EmergeClipSeconds = 1.2,   -- the plain Emerge clip (now unused by the move: EruptSlam)
+			-- The payoff (2026-10-11): hidden, Miasma moves under its target's circle, BURSTS up out
+			-- of the floor there (Animations.EruptSlam) and slams down. Every circle's damage, the
+			-- slam sound and VFX land at EruptSlamImpact seconds into that clip; the boss is held
+			-- through EruptClipSeconds. The circles' warning runs until the impact.
+			EruptSlamImpact = 16 / 30,
+			EruptClipSeconds = 1.3,
 			EruptionWarning = 1,
 			Radius = 10,
 			RawDamage = 80,
@@ -326,7 +374,6 @@ local Config = {
 		ProtectedRadius = 16,     -- around each station/altar protection centre: controls, plate, approach
 		BossProtectedRadius = 24, -- boss movement goals keep its root this far from those centres
 		                          -- (was 34 at ModelScale 0.67; the body's half-width is ~20 at 0.45)
-		SafeAreaRadius = 12,
 	},
 
 	-- Defeat presentation timeline (real seconds): the upright boss plays Defeat for
@@ -343,14 +390,17 @@ local Config = {
 	Animations = {
 		-- Boss BODY clips (Idle, AggroStart/Loop, CeilingLatch, LatchDetach, CeilingToBody) live in
 		-- MobAnimConfig.MiasmaBoss, which overrides this table; only encounter-specific clips are here.
-		LandingSlam = "rbxassetid://93045226675327", -- fall + squash + roar in one clip (was 103860484509234)
+		-- v3 jaw-rig clips (2026-10-11, assets/models/mobs/dungeon bosses/miasma/v3/encounter_clips_v3.py),
+		-- same lengths and beats as before; the v2 ids are in the trailing comments.
+		LandingSlam = "rbxassetid://129402058609143", -- fall + squash + roar in one clip (v2 93045226675327)
 		GrowthRoar = nil,
-		ProjectileCast = "rbxassetid://133884327006903", -- "poison shot"
-		PoisonScatter = "rbxassetid://73241502086963",
-		Submerge = "rbxassetid://137691191955697",
-		Emerge = "rbxassetid://117168436352107",
-		Stunned = "rbxassetid://80490610288868", -- "dizzy"; played LOOPED for the stun duration
-		Enrage = "rbxassetid://125089795052900", -- 3.6s: rears up 0.4-1.8, jaw thrust / spew 1.9-2.95 (was 114580354255115)
+		ProjectileCast = "rbxassetid://84719104774629", -- "poison shot", spit at 0.75 s (v2 133884327006903)
+		PoisonScatter = "rbxassetid://78309795692229", -- v2 73241502086963
+		Submerge = "rbxassetid://134915219024028", -- 1.2 s (v2 137691191955697)
+		Emerge = "rbxassetid://104466496142193", -- 1.2 s (v2 117168436352107)
+		EruptSlam = "rbxassetid://117041026603898", -- 1.3 s: bursts up, rears, slams at 0.533 s (Submerge's payoff)
+		Stunned = "rbxassetid://83027414695940", -- "dizzy"; played LOOPED for the stun duration (v2 80490610288868)
+		Enrage = "rbxassetid://76359725944537", -- 3.6s: rears up 0.4-1.8, jaw thrust / spew 1.9-2.95 (v2 125089795052900)
 		-- Player clip for the cleanse channel (hands lowered into the basin). Played on the
 		-- local character by MiasmaCleanseUI when set; nil = camera presentation only.
 		CleanseHands = nil,

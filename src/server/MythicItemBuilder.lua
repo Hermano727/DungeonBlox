@@ -71,10 +71,13 @@ function MythicItemBuilder.Build(itemKey)
     return item
 end
 
-function MythicItemBuilder.TryRollForMob(mobId)
+-- `force` (dev only, already checked by the caller): "win" skips the chance roll, "loss"
+-- always misses. nil = the real roll.
+function MythicItemBuilder.TryRollForMob(mobId, force)
     local spec = MythicDefs.GetDropSpec(mobId)
     if not spec then return nil end
-    if math.random() >= (spec.Chance or 0) then return nil end
+    if force == "loss" then return nil end
+    if force ~= "win" and math.random() >= (spec.Chance or 0) then return nil end
     local key = MythicDefs.PickFromPool(mobId)
     if not key then return nil end
     return MythicItemBuilder.Build(key)

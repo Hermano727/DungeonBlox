@@ -81,6 +81,21 @@ local THIRD_DISTANCE     = 11.05      -- studs behind the head
 local THIRD_HEIGHT       = 1.5     -- studs above the head
 local CAMERA_COLLIDE_PAD = 1.0     -- keep this far off geometry when pulled in
 local perspective = PERSPECTIVE_FIRST
+
+-- MOUNTED (2026-10-11): while riding the horse (player attribute Mounted, SSS/MountService) the
+-- camera is a free orbit like Zelda: Breath of the Wild's: the mouse swings it round you and the
+-- horse (cursor still locked), the scroll wheel zooms, and it never comes closer than
+-- MOUNT_MIN_DISTANCE so the whole horse and rider stay in view. The horse turns toward where you
+-- steer (Humanoid.AutoRotate), not toward the camera. R does nothing while mounted; getting off
+-- puts back the view you had.
+local MOUNT_MIN_DISTANCE = 14
+local MOUNT_MAX_DISTANCE = 32
+local MOUNT_DEFAULT_DISTANCE = 18
+local MOUNT_ZOOM_STEP = 2
+local MOUNT_FOCUS_UP = 0.6          -- studs above the rider's root: the camera looks at their waist
+local MOUNT_PITCH_MIN, MOUNT_PITCH_MAX = math.rad(-70), math.rad(30)
+local MOUNT_START_PITCH = math.rad(-14)
+local mountDistance = MOUNT_DEFAULT_DISTANCE
 -- Published so other client systems (CombatClient's first-person swing pick)
 -- don't need their own copy of the perspective state.
 player:SetAttribute("FirstPersonView", perspective == PERSPECTIVE_FIRST)
@@ -196,8 +211,53 @@ local function setupFirstPersonCamera(character)
 				math.clamp(cameraRotation.X - delta.Y * sensitivity, -math.pi/2 + 0.1, math.pi/2 - 0.1), -- Pitch (up/down) with limits
 				cameraRotation.Y - delta.X * sensitivity  -- Yaw (left/right)
 			)
+		elseif input.UserInputType == Enum.UserInputType.MouseWheel and player:GetAttribute("Mounted") == true then
+			mountDistance = math.clamp(mountDistance - input.Position.Z * MOUNT_ZOOM_STEP, MOUNT_MIN_DISTANCE, MOUNT_MAX_DISTANCE)
 		end
 	end)
+
+	-- Riding: the head decals show (we're behind the rider), the character turns with the
+	-- steering, and the camera starts behind the horse looking slightly down.
+	local function setHeadDecals(visible)
+		for _, d in ipairs(head:GetDescendants()) do
+			if d:IsA("Decal") then d.LocalTransparencyModifier = visible and 0 or 1 end
+		end
+	end
+	local wasMounted = false
+	local function onMountedChanged(mounted)
+		wasMounted = mounted
+		humanoid.AutoRotate = mounted
+		if mounted then
+			mountDistance = MOUNT_DEFAULT_DISTANCE
+			cameraRotation = Vector2.new(MOUNT_START_PITCH, cameraRotation.Y)
+			setHeadDecals(true)
+			player:SetAttribute("FirstPersonView", false)
+			player:SetAttribute("PerspectiveMode", "Mount")
+		else
+			-- Back to the view you had, facing where the camera looks.
+			cameraRotation = Vector2.new(math.clamp(cameraRotation.X, -math.pi/2 + 0.1, math.pi/2 - 0.1), cameraRotation.Y)
+			setHeadDecals(perspective ~= PERSPECTIVE_FIRST)
+			player:SetAttribute("FirstPersonView", perspective == PERSPECTIVE_FIRST)
+			player:SetAttribute("PerspectiveMode", PERSPECTIVE_NAMES[perspective])
+		end
+	end
+	local mountRayParams = RaycastParams.new()
+	mountRayParams.FilterType = Enum.RaycastFilterType.Exclude
+	mountRayParams.RespectCanCollide = true
+
+	local function updateMountedCamera()
+		local pitch = math.clamp(cameraRotation.X, MOUNT_PITCH_MIN, MOUNT_PITCH_MAX)
+		cameraRotation = Vector2.new(pitch, cameraRotation.Y)
+		local focus = humanoidRootPart.Position + Vector3.new(0, MOUNT_FOCUS_UP, 0)
+		local orbit = CFrame.new(focus) * CFrame.Angles(0, cameraRotation.Y, 0) * CFrame.Angles(pitch, 0, 0)
+		local back = orbit.LookVector * -1
+		-- Pull in before walls, but never against the horse or the rider.
+		local horses = workspace:FindFirstChild("DungeonHorseMounts")
+		mountRayParams.FilterDescendantsInstances = horses and { character, horses } or { character }
+		local hit = workspace:Raycast(focus, back * mountDistance, mountRayParams)
+		local distance = hit and math.max((hit.Position - focus).Magnitude - CAMERA_COLLIDE_PAD, 2) or mountDistance
+		camera.CFrame = CFrame.lookAt(focus + back * distance, focus)
+	end
 
 	-- Camera update function
 	local function updateCamera(deltaTime)
@@ -217,6 +277,12 @@ local function setupFirstPersonCamera(character)
 			)
 		end
 		camera.CameraType = Enum.CameraType.Scriptable
+		local mounted = player:GetAttribute("Mounted") == true
+		if mounted ~= wasMounted then onMountedChanged(mounted) end
+		if mounted and humanoidRootPart.Parent then
+			updateMountedCamera()
+			return
+		end
 		if head and head.Parent and humanoidRootPart and humanoidRootPart.Parent then
 			local yaw = CFrame.Angles(0, cameraRotation.Y, 0)
 			humanoidRootPart.CFrame = CFrame.new(humanoidRootPart.Position) * yaw
@@ -345,6 +411,7 @@ print("[FirstPersonViewModel] Script loaded")
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if gameProcessed then return end
 	if input.KeyCode ~= Keys.TogglePerspective then return end
+	if player:GetAttribute("Mounted") == true then return end -- riding has its own camera
 
 	perspective = perspective % #PERSPECTIVE_NAMES + 1
 	player:SetAttribute("FirstPersonView", perspective == PERSPECTIVE_FIRST)

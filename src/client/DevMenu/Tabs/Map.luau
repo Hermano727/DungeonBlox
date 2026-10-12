@@ -1,5 +1,5 @@
 --[[
-	DevMapTab -- the F8 dev panel's MAP tab (DevClient mode "Map").
+	Map (was DevMapTab) -- the F8 dev menu's MAP tab (DevMenu, group Player).
 
 	Resets YOUR world map: forgets every discovered region and every explored cell (Oakhaven
 	comes back as the default), through the dev-gated MinimapDevAction remote
@@ -13,7 +13,7 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local DevMapTab = {}
+local DevMapTab = { key = "Map", label = "Map", group = "Player" }
 
 local CONFIRM_SECONDS = 4
 

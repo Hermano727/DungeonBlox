@@ -30,6 +30,27 @@ The top-down map of the overworld: a corner minimap, an expanded map on **M**, f
     - The rays shoot up to about 140 studs in 0.6 s, hold for 1.3 s, then lift off and fade over 1.8 s.
     - A bright neon band on the ground traces the outline too. It shares one `Highlight` (AlwaysOnTop), so it shows through terrain and walls.
 
+## Player markers (2026-10-10)
+
+Your own pins: **General**, **Mining**, **Fishing**, **Combat** (`MinimapConfig.PlayerMarkerTypes`). Client: `client/Minimap/PlayerMarkers`; server: `MinimapMarkerAction` in `SSS/MinimapService`.
+
+| On the M map | Does |
+|---|---|
+| Right click empty ground | The picker (four types, "Place marker 12 / 40") at the cursor |
+| Click or right click a pin | Its card: distance, Track / Stop tracking, Change type, Remove |
+| Hover a pin | It grows; a tooltip names it with its distance |
+| `Keys.MapDeleteMarker` (Delete) over a pin | Removes it at once |
+| Legend (top left) | Count per type; click a row to hide / show that type (NPCs too); Centre on me; Clear all (click twice within 3 s) |
+| Scroll | Zooms toward the cursor (the ground under it stays put) |
+| `Keys.MapRecentre` (C) | Back to following you |
+| Esc | Closes the picker / card first, then the map |
+
+- **Tracking** (one pin at a time, saved as `profile.map.tracked`): the pin wears a breathing ring on both maps; when it's out of view it sits on the view's edge with a pointer toward it (corner map and M map); in the world a beacon (its badge + distance, always on top) stands over it, hidden within 10 studs. Distances read in studs as "m".
+- **Saving:** `profile.map.markers` as `{ id, type, x, z }` in map cells, ids from `markerSeq`. The server validates every action (known type, in-map position, cap `PlayerMarkerMax` = 40, a 0.15 s rate limit). The client updates at once and rolls back if the server refuses. The F8 map reset keeps pins; a profile wipe clears them. Legend filters are per session.
+- **Input is hit-tested** from `UserInputService` (rows, pins, panels), not GuiButton events, and the M map is its own ScreenGui at `UILayers.WORLD_MAP` (300). It used to share the minimap's layer (30), under most of the HUD, and the quest tracker / banners swallowed the picker's clicks: only the first row worked.
+- **Look:** a dark round plate, a ring in the type's colour, the icon. Reused art for now (`MapView.PLAYER_MARKER_ICONS`): Combat = `HudIcons.COMBAT` (sword and shield), Fishing = `ConsumableIcons.FISH`, Mining = `ItemConfig.TOOL_ICONS.Pickaxe`, General = a drawn bronze diamond. Dedicated pin art replaces them with one registry entry each.
+- **Not yet:** touch (no right click; a long press is the natural gesture), names / notes on pins, sharing pins with the party, saving the legend filters.
+
 ## Files
 
 | File | Role |
@@ -41,7 +62,7 @@ The top-down map of the overworld: a corner minimap, an expanded map on **M**, f
 | `SSS/NpcLocations` | Publishes every registered NPC (one Folder per NpcId with `NpcType` / `Position` attributes) under `RS.NpcLocations.Markers`, tutorial copies left out; the client never needs the model streamed in |
 | `RS/NpcMapMarkers` | The middle man: maps those folders onto map markers from `NPCRegistry` (name, `Nametag`) and `NpcNametagArt` (icon); `List()` + `Changed` |
 | `client/Minimap/DiscoveryPeek` | The in-world see-through outline that rises and fades on a first discovery |
-| `client/DevMapTab` | F8 dev panel MAP tab: reset your own map |
+| `client/DevMenu/Tabs/Map` | F8 dev menu MAP tab: reset your own map |
 | `SSS/ZoneService` | `SetDiscoveryHandler` hook; puts `discovered = true` on `ZoneEntryNotify` |
 | `client/ZoneClient` | Entry banner, including the REGION DISCOVERED variant |
 | `RS/KeybindConfig` | `ToggleMap` (M), `MapZoomIn` (`=`, keypad `+`), `MapZoomOut` (`-`, keypad `-`) |
@@ -95,10 +116,11 @@ The top-down map of the overworld: a corner minimap, an expanded map on **M**, f
 
 | Name | Type | Direction | Payload |
 |---|---|---|---|
-| `MinimapStateRequest` | RF | C -> S | returns `{ discovered = { [zoneId] = true }, revealed = { [key] = buffer } }`; waits up to 20 s for the profile |
+| `MinimapStateRequest` | RF | C -> S | returns `{ discovered = { [zoneId] = true }, revealed = { [key] = buffer }, markers = { { id, type, x, z } }, tracked = id }`; waits up to 20 s for the profile |
+| `MinimapMarkerAction` | RF | C -> S | `("add", type, x, z)` returns `true, marker` or `false, err` (`bad_type`, `bad_position`, `full`, `too_fast`); `("remove", id)`, `("retype", id, type)`, `("track", id or nil)`, `("clear")` return `true` or `false, err` |
 | `MinimapChunkRequest` | RF | C -> S | `(keys)` returns `{ [key] = buffer }` of 64*64*3 RGB bytes; at most 16 keys per call, in-bounds chunks only |
 | `ZoneEntryNotify` | RE | S -> C | existing zone-entry event, now with `discovered` |
-| `MinimapDevAction` | RF | C -> S | `("reset")` returns `ok, err`; dev-only (`DevRoster`), wipes the caller's own `profile.map` |
+| `MinimapDevAction` | RF | C -> S | `("reset")` returns `ok, err`; dev-only (`DevRoster`), wipes the caller's own discoveries and explored cells (markers kept) |
 | `MinimapReset` | RE | S -> C | the map was reset; the client forgets everything and reloads from the server |
 
 `profile.map` is **stripped from the profile push** (`BuildSnapshotPayload`). The client gets it through `MinimapStateRequest` only.
@@ -116,9 +138,11 @@ The top-down map of the overworld: a corner minimap, an expanded map on **M**, f
 | `BigMinScale` / `BigMaxScale` / `ZoomStep` | 0.5 / 8 / 1.25 | Expanded-map zoom |
 | `NpcMarkerMiniPx` | 21 | NPC crest size on the corner map |
 | `NpcMarkerPerCell` / `NpcMarkerBigMin` / `NpcMarkerBigMax` | 8 / 18 / 32 | NPC crest size on the expanded map: px per cell, clamped |
+| `PlayerMarkerMax` | 40 | Your own pins, per player |
+| `PlayerMarkerMiniPx` / `PlayerMarkerPerCell` / `PlayerMarkerBigMin` / `PlayerMarkerBigMax` | 18 / 7 / 18 / 30 | Pin size: corner map fixed; expanded map px per cell, clamped |
 | `NpcNameScale` | 5 | Expanded-map zoom (px per cell) from which NPC names show; with `ZoomStep` 1.25 from the default 2 that's the fifth notch (6.1). Lower it and close NPCs' names (the Merchant and Auctioneer) start to touch |
 
-The corner minimap's screen position is `mini.Position` in `client/Minimap/init.client`, top right just below the top bar. The quick-nav buttons under it are drawn 1.3x (`HudQuickNav.SCALE`), and the party panel hangs under that row through `HudQuickNav.OnBottomChanged`, so resizing the map moves both.
+The corner minimap's screen position is `mini.Position` in `client/Minimap/init.client`, top right just below the top bar. The quick-nav buttons under it are drawn 1.3x (`HudQuickNav.SCALE`). The party panel lives top left, under Roblox's own buttons (`PartyClient`), so the right side is the map's alone.
 
 ## Testing: F8 MAP tab
 
@@ -130,4 +154,4 @@ The corner minimap's screen position is `mini.Position` in `client/Minimap/init.
 - **Colours are cached per server:** a building moved in a live server shows its old colour until the server restarts.
 - **Textured buildings:** these come out as their Material colour or grey-brown. Tag them with `MapColor` where it matters.
 - **Map orientation:** always north up. There's no rotating minimap mode.
-- **Missing features:** no markers yet (NPCs, dungeons, party members), and no touch pinch-zoom.
+- **Missing features:** no dungeon or party-member markers, no touch pinch-zoom, and player markers can't be placed on touch yet.

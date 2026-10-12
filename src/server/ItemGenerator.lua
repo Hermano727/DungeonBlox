@@ -278,7 +278,15 @@ function ItemGenerator.generate(options)
     if not weaponType and not armorSlot then
         if math.random() < 0.5 then
             local pool = Config.WEAPON_TYPES_BY_TIER[tier] or Config.WEAPON_TYPES
-            weaponType = pool[math.random(1, #pool)]
+            -- Weighted (Config.WEAPON_TYPE_WEIGHTS, default 1): bows are rarer than melee.
+            local total = 0
+            for _, kind in ipairs(pool) do total += Config.WEAPON_TYPE_WEIGHTS[kind] or 1 end
+            local pick = math.random() * total
+            for _, kind in ipairs(pool) do
+                pick -= Config.WEAPON_TYPE_WEIGHTS[kind] or 1
+                if pick <= 0 then weaponType = kind break end
+            end
+            weaponType = weaponType or pool[#pool]
         else
             local pool = Config.ARMOR_SLOTS_BY_TIER[tier] or Config.ARMOR_SLOTS
             armorSlot  = pool[math.random(1, #pool)]
