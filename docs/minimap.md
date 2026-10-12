@@ -7,7 +7,7 @@ The top-down map of the overworld: a corner minimap, an expanded map on **M**, f
 - **Corner minimap:** top right, always on in the overworld, hidden inside dungeons.
   - Centred on the player, north up.
   - A white arrow turns with the way the character faces.
-  - An `[M] Map` hint sits under it.
+  - An ornate bronze ring with gold corner studs and an "N" notch frames it, and a small "M" keycap sits on its bottom-right corner (the key comes from `KeybindConfig.ToggleMap`).
 - **Expanded map (M):** opens centred on the player.
   - Zoom with the scroll wheel or `+` / `-`; the controls are listed in the bottom-right corner.
   - Drag to look around. M or Esc closes it, and reopening re-centres on the player.
@@ -58,6 +58,7 @@ Your own pins: **General**, **Mining**, **Fishing**, **Combat** (`MinimapConfig.
 | `RS/MinimapConfig` | Grid, tuning, default zones, and the maths both sides share (cells, chunks, bitsets, point-in-polygon, base64) |
 | `SSS/MinimapService` (Script) | Saves exploration and discovery, and raycasts chunk colours |
 | `client/Minimap/init.client` | Controller: UI frames, input, local reveal, chunk images, remotes |
+| `client/Minimap/MapStyle` | Turns the raw cell colours into the stylized look (blur, colour bands, parchment grade, ink shores and cliffs, soft fog edge). Pure client-side post-processing |
 | `client/Minimap/MapView` | One rendering of the map in a frame; the corner and expanded maps are two MapViews over the same chunk images |
 | `SSS/NpcLocations` | Publishes every registered NPC (one Folder per NpcId with `NpcType` / `Position` attributes) under `RS.NpcLocations.Markers`, tutorial copies left out; the client never needs the model streamed in |
 | `RS/NpcMapMarkers` | The middle man: maps those folders onto map markers from `NPCRegistry` (name, `Nametag`) and `NpcNametagArt` (icon); `List()` + `Changed` |
@@ -90,6 +91,14 @@ Your own pins: **General**, **Mining**, **Fishing**, **Combat** (`MinimapConfig.
 - `ZoneService` calls the handler registered by `MinimapService` on every zone entry. The first entry returns true, and the entry notification carries `discovered = true`.
 - **Fallback:** if the profile wasn't loaded yet at the moment of entry, `MinimapService` notices the player standing in an undiscovered zone on its next tick. It fires the same `ZoneEntryNotify` itself with `discovered = true`.
 - Default zones (`DefaultDiscovered`, matched by zone **name**) are marked silently and never show the banner.
+
+### Stylized look
+
+- The server still sends raw per-cell colours. `MapStyle.Stylize` runs once per chunk when they arrive (about 5 ms) and caches the result on the chunk entry; `MapStyle.Compose` runs on every re-render (about 1.5 ms) and applies the reveal mask.
+- Stylize blurs 3x3 without mixing water and land, flattens brightness into `BANDS` levels, desaturates and warms it, then inks land next to water and the brink of steep drops.
+- Compose fades explored cells that touch fog into the fog, so the edge of what you have seen is a soft cloud. Unexplored ground is the dark parchment `MapStyle.FOG`, not black.
+- Tiles use bilinear sampling (`ResamplerMode.Default`). Setting them back to `Pixelated` brings the hard pixel look back.
+- Tuning is the constants at the top of `MapStyle.luau`.
 
 ### Colours
 

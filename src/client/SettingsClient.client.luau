@@ -13,7 +13,8 @@
 	up here, saves and applies with no edit in this file. Each slider is the
 	bucket's SoundGroup volume (Master = SoundService.Main, Music = ZoneMusic).
 
-	Video -- FOV, Sensitivity, Brightness. Backed by VideoSettings.luau.
+	Video -- FOV, Sensitivity, Brightness, Crosshair on/off. Backed by VideoSettings.luau
+	(the crosshair toggle is stored under hud.crosshair, see SettingsRanges).
 	FOV/Sensitivity feed FirstPersonViewModel + the Crouching/Animate2/
 	DialogModule scripts that also touch Camera.FieldOfView (see VideoSettings
 	header comment). Brightness is a client-local ColorCorrectionEffect, not
@@ -51,6 +52,7 @@ local CursorManager  = require(ReplicatedStorage:WaitForChild("CursorManager"))
 local Keys           = require(ReplicatedStorage:WaitForChild("KeybindConfig"))
 local SettingsRanges = require(ReplicatedStorage:WaitForChild("SettingsRanges"))
 local AudioCategories = require(ReplicatedStorage:WaitForChild("AudioCategories"))
+local SettingsStore  = require(ReplicatedStorage:WaitForChild("SettingsStore"))
 local QuickNav       = require(ReplicatedStorage:WaitForChild("HudQuickNav"))
 local InteractionLock = require(ReplicatedStorage:WaitForChild("InteractionLock"))
 
@@ -127,48 +129,17 @@ local function drawGearIcon()
 	return Content.fromObject(img)
 end
 
-local gearBtn = Instance.new("TextButton")
-gearBtn.Name                 = "GearButton"
-gearBtn.Size                 = UDim2.fromOffset(QuickNav.BUTTON_SIZE, QuickNav.BUTTON_SIZE)
-gearBtn.BackgroundColor3     = Color3.fromRGB(14, 13, 16)
-gearBtn.BackgroundTransparency = 0.25
-gearBtn.AutoButtonColor      = false
-gearBtn.Text                 = ""
-gearBtn.ZIndex               = 10
--- Lives in the quick-nav row (its own ScreenGui, drawn above this one's click-away backdrop).
-gearBtn.Parent               = QuickNav.Slot("Settings", QuickNav.ORDER.Settings)
-Instance.new("UICorner", gearBtn).CornerRadius = UDim.new(0, 5)
-QuickNav.Tooltip(gearBtn, "Settings")
-
-local GEAR_SIZE, GEAR_HOVER_SIZE = 22, 27
-local gearIcon = Instance.new("ImageLabel")
-gearIcon.Name                   = "Icon"
-gearIcon.AnchorPoint            = Vector2.new(0.5, 0.5)
-gearIcon.Position               = UDim2.fromScale(0.5, 0.5)
-gearIcon.Size                   = UDim2.fromOffset(GEAR_SIZE, GEAR_SIZE)
-gearIcon.BackgroundTransparency = 1
-gearIcon.ZIndex                 = 11
-gearIcon.Parent                 = gearBtn
+-- Built by the shared quick-nav button factory (RS/HudQuickNav), so it matches the rest of the
+-- row: plate, bronze edge, hover pop, tooltip. No EditableImage budget means no drawn gear, so
+-- it falls back to a short text label and still reads.
 local gearContent = drawGearIcon()
-if gearContent then
-	gearIcon.ImageContent = gearContent
-else
-	-- No EditableImage (budget exhausted): fall back to a plain label so the button still reads.
-	gearBtn.Text, gearBtn.TextColor3, gearBtn.TextSize, gearBtn.Font = "SET", Color3.new(1, 1, 1), 11, Enum.Font.GothamBold
-end
-
--- Hover: the icon grows, the backing darkens. Only the icon grows, not the button, so the
--- quick-nav row never reflows under the cursor.
-local hoverTI = TweenInfo.new(0.14, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-local unhoverTI = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-gearBtn.MouseEnter:Connect(function()
-	TweenService:Create(gearIcon, hoverTI, { Size = UDim2.fromOffset(GEAR_HOVER_SIZE, GEAR_HOVER_SIZE) }):Play()
-	TweenService:Create(gearBtn, hoverTI, { BackgroundTransparency = 0.05 }):Play()
-end)
-gearBtn.MouseLeave:Connect(function()
-	TweenService:Create(gearIcon, unhoverTI, { Size = UDim2.fromOffset(GEAR_SIZE, GEAR_SIZE) }):Play()
-	TweenService:Create(gearBtn, unhoverTI, { BackgroundTransparency = 0.25 }):Play()
-end)
+local gearBtn = QuickNav.Button({
+	name    = "GearButton",
+	order   = QuickNav.ORDER.Settings,
+	tooltip = "Settings",
+	content = gearContent,
+	text    = (not gearContent) and "SET" or nil,
+})
 
 ----------------------------------------------------------------------
 -- Settings screen (2026-09-30): a centred page stack, Minecraft-style.
@@ -687,6 +658,29 @@ makeSlider(videoTab, "Brightness", VideoSettings.brightness, {
 	end,
 	onCommit = persist("video", "brightness"),
 })
+
+-- Crosshair on/off. It used to be a button in the HUD corner row; it lives here now. The
+-- Crosshair script owns drawing it and listens to the "CrosshairEnabled" player attribute, so
+-- this bar only has to flip the attribute and persist the value (missing = on).
+local savedHud = SettingsStore.Get().hud
+local crosshairOn = true
+if type(savedHud) == "table" and tonumber(savedHud.crosshair) ~= nil then
+	crosshairOn = tonumber(savedHud.crosshair) >= 0.5
+end
+player:SetAttribute("CrosshairEnabled", crosshairOn)
+
+local crosshairBar, crosshairLabel = makeBar(videoTab.grid, "", true)
+addToPage(videoTab, crosshairBar)
+local function paintCrosshairBar()
+	crosshairLabel.Text = "Crosshair: " .. (crosshairOn and "On" or "Off")
+end
+paintCrosshairBar()
+crosshairBar.Activated:Connect(function()
+	crosshairOn = not crosshairOn
+	paintCrosshairBar()
+	player:SetAttribute("CrosshairEnabled", crosshairOn)
+	persist("hud", "crosshair")(crosshairOn and 1 or 0)
+end)
 
 ----------------------------------------------------------------------
 -- Controls page: read-only reference generated from KeybindConfig

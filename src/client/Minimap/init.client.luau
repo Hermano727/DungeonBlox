@@ -43,6 +43,8 @@ local NpcMapMarkers = require(ReplicatedStorage:WaitForChild("NpcMapMarkers"))
 local LOCK_OWNER = "WorldMap"
 local MapView = require(script:WaitForChild("MapView"))
 local DiscoveryPeek = require(script:WaitForChild("DiscoveryPeek"))
+local MapStyle = require(script:WaitForChild("MapStyle"))
+local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
 
 local GameEvents = ReplicatedStorage:WaitForChild("GameEvents")
 local ZoneStateRequest = GameEvents:WaitForChild("ZoneStateRequest")
@@ -58,10 +60,13 @@ local PlayerMarkers = require(script:WaitForChild("PlayerMarkers"))
 local player = Players.LocalPlayer
 local CHUNK, CELL = Config.CHUNK, Config.CELL
 local BYTES = Config.BYTES_PER_CHUNK
-local RENDERS_PER_FRAME = 3
+local RENDERS_PER_FRAME = 2 -- stylizing a chunk costs more than the old raw copy
 
-local PANEL = Color3.fromRGB(14, 13, 16)
-local EDGE = Color3.fromRGB(70, 66, 60)
+local PANEL = MapStyle.FOG
+local EDGE = Color3.fromRGB(8, 6, 6)       -- the dark line right at the map edge
+local BRONZE = QuickNav.STYLE.Edge         -- the ornate ring around it
+local GOLD = QuickNav.STYLE.EdgeHover
+local RING_DARK = Color3.fromRGB(30, 25, 19)
 local TEXT = Color3.fromRGB(226, 220, 204)
 local MUTED = Color3.fromRGB(150, 144, 132)
 
@@ -202,47 +207,117 @@ local function stroke(parent, colour, thickness)
 	return s
 end
 
+-- Ornate frame: a bronze ring around the map with gold corner studs, an "N" notch at the top,
+-- and an optional key badge. The ring sits OUTSIDE the map's own bounds (negative offsets), so the
+-- layout code that hangs things under the map keeps using the map rectangle.
+local function frameMap(target, ring, opts)
+	local plate = Instance.new("Frame")
+	plate.Name = "Ring"
+	plate.Position = UDim2.fromOffset(-ring, -ring)
+	plate.Size = UDim2.new(1, ring * 2, 1, ring * 2)
+	plate.BackgroundColor3 = RING_DARK
+	plate.BorderSizePixel = 0
+	plate.ZIndex = 0
+	plate.Parent = target
+	local plateCorner = Instance.new("UICorner")
+	plateCorner.CornerRadius = UDim.new(0, ring + 4)
+	plateCorner.Parent = plate
+	local gradient = Instance.new("UIGradient")
+	gradient.Rotation = 90
+	gradient.Color = ColorSequence.new(Color3.fromRGB(46, 38, 29), Color3.fromRGB(20, 17, 13))
+	gradient.Parent = plate
+	stroke(plate, BRONZE, 2)
+
+	local function stud(x, y)
+		local s = Instance.new("Frame")
+		s.Name = "Stud"
+		s.AnchorPoint = Vector2.new(.5, .5)
+		-- Centred on the ring band: half a ring outside the map edge on that side.
+		s.Position = UDim2.new(x, x == 0 and -ring / 2 or ring / 2, y, y == 0 and -ring / 2 or ring / 2)
+		s.Size = UDim2.fromOffset(9, 9)
+		s.Rotation = 45
+		s.BackgroundColor3 = GOLD
+		s.BorderSizePixel = 0
+		s.ZIndex = 12
+		s.Parent = target
+		local sc = Instance.new("UICorner")
+		sc.CornerRadius = UDim.new(0, 2)
+		sc.Parent = s
+		stroke(s, EDGE, 1)
+	end
+	-- Corner studs (the bottom-right corner is left for the key badge).
+	stud(0, 0)
+	stud(1, 0)
+	stud(0, 1)
+	if not opts.badge then stud(1, 1) end
+
+	if opts.north then
+		local n = Instance.new("TextLabel")
+		n.Name = "North"
+		n.AnchorPoint = Vector2.new(.5, .5)
+		n.Position = UDim2.new(.5, 0, 0, -ring / 2)
+		n.Size = UDim2.fromOffset(18, 14)
+		n.BackgroundColor3 = RING_DARK
+		n.BorderSizePixel = 0
+		n.FontFace = UIFonts.DisplayBold
+		n.Text = "N"
+		n.TextSize = 11
+		n.TextColor3 = GOLD
+		n.ZIndex = 12
+		n.Parent = target
+		local nc = Instance.new("UICorner")
+		nc.CornerRadius = UDim.new(0, 4)
+		nc.Parent = n
+	end
+	return plate
+end
+
+-- A small keycap sitting on the frame's bottom-right corner ("M"), instead of a typed-out hint.
+local function keycap(target, text)
+	local cap = Instance.new("TextLabel")
+	cap.Name = "KeyBadge"
+	cap.AnchorPoint = Vector2.new(1, 1)
+	cap.Position = UDim2.new(1, 7, 1, 7)
+	cap.Size = UDim2.fromOffset(26, 26)
+	cap.BackgroundColor3 = Color3.fromRGB(14, 12, 10)
+	cap.BorderSizePixel = 0
+	cap.FontFace = UIFonts.DisplayBold
+	cap.Text = string.upper(text)
+	cap.TextSize = 15
+	cap.TextColor3 = QuickNav.STYLE.Text
+	cap.ZIndex = 13 -- over the NPC markers (5..8) and arrows (9, 10)
+	cap.Parent = target
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = cap
+	stroke(cap, GOLD, 1.5)
+	return cap
+end
+
 -- Corner minimap
+local MINI_RING = 6
 local mini = Instance.new("Frame")
 mini.Name = "Minimap"
 mini.AnchorPoint = Vector2.new(1, 0)
-mini.Position = UDim2.new(1, -QuickNav.MARGIN, 0, QuickNav.MARGIN) -- the very top-right corner
+-- Inset by the ring so the ornate frame, not the map, touches the top-right margin.
+mini.Position = UDim2.new(1, -QuickNav.MARGIN - MINI_RING, 0, QuickNav.MARGIN + MINI_RING)
 mini.Size = UDim2.fromOffset(Config.MiniSize, Config.MiniSize)
 mini.BackgroundColor3 = PANEL
 mini.BorderSizePixel = 0
 mini.Visible = false
 mini.Parent = gui
-stroke(mini, EDGE, 2)
+local miniCorner = Instance.new("UICorner")
+miniCorner.CornerRadius = UDim.new(0, 6)
+miniCorner.Parent = mini
 local miniView = MapView.new(mini, {
 	scale = Config.MiniScale, labelScale = 5, labelMin = 13, labelMax = 18,
 	npcMarkerPx = Config.NpcMarkerMiniPx, -- no npcNameScale: never named on the corner map
 	playerMarkerPx = Config.PlayerMarkerMiniPx,
+	cornerRadius = 6,
 })
-
--- "[M] Map", inside the map's bottom-right corner on a soft dark pill so it reads over any
--- ground colour.
-local miniHint = Instance.new("TextLabel")
-miniHint.Name = "Hint"
-miniHint.AnchorPoint = Vector2.new(1, 1)
-miniHint.Position = UDim2.new(1, -6, 1, -6)
-miniHint.Size = UDim2.fromOffset(0, 23)
-miniHint.AutomaticSize = Enum.AutomaticSize.X
-miniHint.BackgroundColor3 = Color3.new(0, 0, 0)
-miniHint.BackgroundTransparency = .45
-miniHint.BorderSizePixel = 0
-miniHint.Font = Enum.Font.GothamBold
-miniHint.TextSize = 16
-miniHint.TextColor3 = Color3.fromRGB(245, 243, 238)
-miniHint.TextStrokeTransparency = .55
-miniHint.Text = "[" .. Keys.ToggleMap.Name .. "] Map"
-miniHint.ZIndex = 12 -- over the NPC markers (5..8) and arrows (9, 10) in either ZIndex mode
-miniHint.Parent = mini
-local hintCorner = Instance.new("UICorner")
-hintCorner.CornerRadius = UDim.new(0, 5)
-hintCorner.Parent = miniHint
-local hintPadding = Instance.new("UIPadding")
-hintPadding.PaddingLeft, hintPadding.PaddingRight = UDim.new(0, 8), UDim.new(0, 8)
-hintPadding.Parent = miniHint
+stroke(miniView.clip, EDGE, 2) -- on the clip, not `mini`: the ring is drawn over mini's own stroke
+frameMap(mini, MINI_RING, { north = true, badge = true })
+keycap(mini, Keys.ToggleMap.Name)
 
 -- The quick-nav buttons (settings, ...) hang under the minimap's bottom-left corner.
 QuickNav.FollowBelow(mini)
@@ -266,14 +341,19 @@ bigGui.IgnoreGuiInset = true
 bigGui.DisplayOrder = UILayers.WORLD_MAP
 bigGui.Parent = player:WaitForChild("PlayerGui")
 big.Parent = bigGui
-stroke(big, EDGE, 3)
+local bigCorner = Instance.new("UICorner")
+bigCorner.CornerRadius = UDim.new(0, 8)
+bigCorner.Parent = big
 local bigView = MapView.new(big, {
 	scale = 2, labelScale = 7, labelMin = 12, labelMax = 40,
 	npcMarkerPerCell = Config.NpcMarkerPerCell, npcMarkerMin = Config.NpcMarkerBigMin,
 	npcMarkerMax = Config.NpcMarkerBigMax, npcNameScale = Config.NpcNameScale,
 	playerMarkerPerCell = Config.PlayerMarkerPerCell, playerMarkerMin = Config.PlayerMarkerBigMin,
 	playerMarkerMax = Config.PlayerMarkerBigMax,
+	cornerRadius = 8,
 })
+stroke(bigView.clip, EDGE, 3)
+frameMap(big, 10, { north = true })
 bigView.clip.Active = true
 
 local hints = Instance.new("Frame")
@@ -286,7 +366,7 @@ hints.BackgroundTransparency = .15
 hints.BorderSizePixel = 0
 hints.ZIndex = 20
 hints.Parent = big
-stroke(hints, EDGE, 1)
+stroke(hints, BRONZE, 1)
 local hintLayout = Instance.new("UIListLayout")
 hintLayout.Padding = UDim.new(0, 4)
 hintLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
@@ -369,22 +449,21 @@ local function renderChunk(key)
 		miniView:SetChunkImage(key, content)
 		bigView:SetChunkImage(key, content)
 	end
-	local pixels = buffer.create(CHUNK * CHUNK * 4)
+	-- Stylize once per chunk (blur, colour bands, ink lines), then only re-apply the reveal mask
+	-- and soft fog edge on each re-render, which is the cheap part.
+	if not c.styled then c.styled = MapStyle.Stylize(c.colours, CHUNK) end
+	local shown = buffer.create(CHUNK * CHUNK)
 	local kx, kz = Config.ParseKey(key)
 	for row = 0, CHUNK - 1 do
 		for col = 0, CHUNK - 1 do
 			local index = Config.BitIndex(kx * CHUNK + col, kz * CHUNK + row)
-			local shown = Config.GetBit(c.bits, index) or (c.defaultMask ~= nil and Config.GetBit(c.defaultMask, index))
-			if shown then
-				local src = (row * CHUNK + col) * 3
-				local dst = (row * CHUNK + col) * 4
-				buffer.writeu8(pixels, dst, buffer.readu8(c.colours, src))
-				buffer.writeu8(pixels, dst + 1, buffer.readu8(c.colours, src + 1))
-				buffer.writeu8(pixels, dst + 2, buffer.readu8(c.colours, src + 2))
-				buffer.writeu8(pixels, dst + 3, 255)
+			if Config.GetBit(c.bits, index) or (c.defaultMask ~= nil and Config.GetBit(c.defaultMask, index)) then
+				buffer.writeu8(shown, row * CHUNK + col, 1)
 			end
 		end
 	end
+	local pixels = buffer.create(CHUNK * CHUNK * 4)
+	MapStyle.Compose(c.styled, shown, pixels, CHUNK)
 	c.image:WritePixelsBuffer(Vector2.zero, Vector2.new(CHUNK, CHUNK), pixels)
 end
 
@@ -410,6 +489,7 @@ local function fetchColours()
 			local buf = ok and type(result) == "table" and result[key]
 			if c and typeof(buf) == "buffer" then
 				c.colours = buf
+				c.styled = nil
 				c.wantsColours = false
 				markDirty(key)
 			elseif c then

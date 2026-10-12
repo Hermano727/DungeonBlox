@@ -21,6 +21,6 @@ return {
 		brightness  = { min = -0.15, max = 0.15 },
 	},
 	hud = {
-		crosshair = { min = 0, max = 1 }, -- 1 shown (default), 0 hidden; the quick-nav toggle (client/Crosshair)
+		crosshair = { min = 0, max = 1 }, -- 1 shown (default), 0 hidden; the Video page toggle (SettingsClient, followed by client/Crosshair)
 	},
 }

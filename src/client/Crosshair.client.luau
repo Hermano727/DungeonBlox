@@ -11,9 +11,10 @@
 	(cutscenes, spectating, the enchant pan). Full-screen moments hide it with the rest of the
 	HUD through HudHider, since it is an ordinary ScreenGui.
 
-	On/off: the crosshair button in the quick-nav row under the minimap (RS/HudQuickNav, right
-	of the settings gear). Saved like the Settings sliders: UpdatePlayerSettings("hud",
-	"crosshair", 1|0), range in RS/SettingsRanges, read back through RS/SettingsStore.
+	On/off: the Crosshair bar on the Settings Video page (SettingsClient), which sets the
+	"CrosshairEnabled" player attribute this script follows. Saved like the Settings sliders:
+	UpdatePlayerSettings("hud", "crosshair", 1|0), range in RS/SettingsRanges, read back through
+	RS/SettingsStore.
 
 	The Roblox arrow is a separate thing, handled by CursorIcon.client (hidden whenever the
 	mouse is locked).
@@ -26,10 +27,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
-local TweenService = game:GetService("TweenService")
-
 local CameraOverrideState = require(ReplicatedStorage:WaitForChild("CameraOverrideState"))
-local QuickNav = require(ReplicatedStorage:WaitForChild("HudQuickNav"))
 local SettingsStore = require(ReplicatedStorage:WaitForChild("SettingsStore"))
 
 local player = Players.LocalPlayer
@@ -56,8 +54,7 @@ root.Size = UDim2.fromOffset(0, 0)
 root.BackgroundTransparency = 1
 root.Parent = gui
 
--- Draws the plus (four ticks around a gap) into `parent`, centred on it. Used twice: the real
--- crosshair and, smaller, the quick-nav button's icon.
+-- Draws the plus (four ticks around a gap) into `parent`, centred on it.
 local function drawPlus(parent, length, width, gap)
 	local ticks = {}
 	local reach = gap + length / 2
@@ -87,7 +84,7 @@ end
 
 drawPlus(root, TICK_LENGTH, TICK_WIDTH, GAP)
 
--- On/off, saved per player. Missing (never changed) = on. Loaded below, after the button exists.
+-- On/off, saved per player. Missing (never changed) = on. Loaded below.
 local enabled = true
 
 RunService.RenderStepped:Connect(function()
@@ -99,61 +96,22 @@ RunService.RenderStepped:Connect(function()
 end)
 
 ---------------------------------------------------------------------------------------------
--- Quick-nav toggle (right of the settings gear; same plate and hover as the gear)
+-- On/off lives in the Settings screen (Video page). SettingsClient flips the "CrosshairEnabled"
+-- player attribute (and saves it); this just follows it.
 
-local OFF_TRANSPARENCY = .7 -- the button's plus when the crosshair is off
+player:GetAttributeChangedSignal("CrosshairEnabled"):Connect(function()
+	local value = player:GetAttribute("CrosshairEnabled")
+	if type(value) == "boolean" then enabled = value end
+end)
 
-local button = Instance.new("TextButton")
-button.Name = "CrosshairToggle"
-button.Size = UDim2.fromOffset(QuickNav.BUTTON_SIZE, QuickNav.BUTTON_SIZE)
-button.BackgroundColor3 = Color3.fromRGB(14, 13, 16)
-button.BackgroundTransparency = .25
-button.AutoButtonColor = false
-button.Text = ""
-button.ZIndex = 10
-button.Parent = QuickNav.Slot("Crosshair", QuickNav.ORDER.Crosshair)
-Instance.new("UICorner", button).CornerRadius = UDim.new(0, 5)
-QuickNav.Tooltip(button, "Toggle Crosshair")
-
-local iconScale = Instance.new("UIScale")
-local icon = Instance.new("Frame")
-icon.Name = "Icon"
-icon.AnchorPoint = Vector2.new(.5, .5)
-icon.Position = UDim2.fromScale(.5, .5)
-icon.Size = UDim2.fromOffset(20, 20)
-icon.BackgroundTransparency = 1
-icon.ZIndex = 11
-icon.Parent = button
-iconScale.Parent = icon
-local iconTicks = drawPlus(icon, 6, 2, 2)
-
-local function paintButton()
-	for _, t in ipairs(iconTicks) do
-		t.BackgroundTransparency = enabled and TRANSPARENCY or OFF_TRANSPARENCY
-		t.UIStroke.Transparency = enabled and .55 or .85
-	end
-end
-paintButton()
 task.spawn(function()
-	local saved = SettingsStore.Get() -- one server round trip per session, shared (cached)
+	-- Saved value, in case the attribute has not been set yet (one cached round trip per session).
+	local saved = SettingsStore.Get()
 	local value = type(saved.hud) == "table" and tonumber(saved.hud.crosshair)
-	if value ~= nil then enabled = value >= .5 end
-	paintButton()
-end)
-
-local hoverIn = TweenInfo.new(.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-button.MouseEnter:Connect(function()
-	TweenService:Create(iconScale, hoverIn, { Scale = 1.2 }):Play()
-	TweenService:Create(button, hoverIn, { BackgroundTransparency = .05 }):Play()
-end)
-button.MouseLeave:Connect(function()
-	TweenService:Create(iconScale, hoverIn, { Scale = 1 }):Play()
-	TweenService:Create(button, hoverIn, { BackgroundTransparency = .25 }):Play()
-end)
-
-local updateSettings = ReplicatedStorage:WaitForChild("UpdatePlayerSettings")
-button.Activated:Connect(function()
-	enabled = not enabled
-	paintButton()
-	updateSettings:FireServer("hud", "crosshair", enabled and 1 or 0)
+	local attr = player:GetAttribute("CrosshairEnabled")
+	if type(attr) == "boolean" then
+		enabled = attr
+	elseif value ~= nil then
+		enabled = value >= .5
+	end
 end)

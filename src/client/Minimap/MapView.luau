@@ -2,7 +2,7 @@
 	MapView -- one rendering of the world map inside a frame (the corner minimap and the expanded
 	map are two MapViews over the same chunk images; see Minimap/init.client).
 
-		local view = MapView.new(parentFrame, { labelScale = 5, labelMin = 10, labelMax = 16 })
+		local view = MapView.new(parentFrame, { labelScale = 5, labelMin = 10, labelMax = 16, cornerRadius = 6 })
 		view:SetBounds(bounds)                    -- MinimapConfig.CellBounds
 		view:SetChunkImage(key, content)          -- Content.fromObject(EditableImage)
 		view:SetZones(zones, discovered, labelAt) -- discovered outlines + names
@@ -30,6 +30,7 @@ local HudArt = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Im
 local HudIcons = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Icons"):WaitForChild("Hud"):WaitForChild("HudIcons"))
 local ConsumableIcons = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Icons"):WaitForChild("Consumables"):WaitForChild("ConsumableIcons"))
 local ItemConfig = require(ReplicatedStorage:WaitForChild("ItemConfig"))
+local MapStyle = require(script.Parent:WaitForChild("MapStyle"))
 
 local MapView = {}
 MapView.__index = MapView
@@ -59,6 +60,7 @@ local PLAYER_MARKER_ICONS = {
 MapView.PLAYER_MARKER_ICONS = PLAYER_MARKER_ICONS
 local MARKER_PLATE = Color3.fromHex("17120E")
 local MARKER_RING_PX = 2
+local LABEL_GOLD = Color3.fromRGB(240, 222, 178)
 
 -------------------------------------------------------------------------------------------------
 -- The player arrow, drawn once into a small EditableImage (no uploaded asset needed).
@@ -118,10 +120,15 @@ function MapView.new(parent, options)
 	local clip = Instance.new("Frame")
 	clip.Name = "MapClip"
 	clip.Size = UDim2.fromScale(1, 1)
-	clip.BackgroundColor3 = BLACK
+	clip.BackgroundColor3 = MapStyle.FOG -- unexplored ground reads as dark parchment, not a black hole
 	clip.BorderSizePixel = 0
 	clip.ClipsDescendants = true
 	clip.Parent = parent
+	if options.cornerRadius then
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, options.cornerRadius)
+		corner.Parent = clip
+	end
 	self.clip = clip
 
 	local canvas = Instance.new("Frame")
@@ -623,7 +630,9 @@ function MapView:SetChunkImage(key, content)
 		tile.Name = key
 		tile.BackgroundTransparency = 1
 		tile.BorderSizePixel = 0
-		tile.ResampleMode = Enum.ResamplerMode.Pixelated
+		-- Bilinear on purpose: with MapStyle's banded colours this turns the cell grid into soft
+		-- painted shapes (Pixelated gave the hard blocky look).
+		tile.ResampleMode = Enum.ResamplerMode.Default
 		tile.Parent = self.tileLayer
 		self.tiles[key] = tile
 		self:_layoutTile(key, tile)
@@ -653,10 +662,10 @@ function MapView:SetZones(zones, discovered, labelAt)
 			label.AnchorPoint = Vector2.new(.5, .5)
 			label.BackgroundTransparency = 1
 			label.Size = UDim2.fromOffset(400, 40)
-			label.Font = Enum.Font.GothamBold
+			label.FontFace = UIFonts.DisplayBold
 			label.Text = string.upper(zone.name)
-			label.TextColor3 = Color3.fromRGB(236, 230, 214)
-			label.TextStrokeTransparency = .2
+			label.TextColor3 = LABEL_GOLD
+			label.TextStrokeTransparency = .15
 			label.TextStrokeColor3 = BLACK
 			label.Parent = self.labelLayer
 			table.insert(self.labels, { label = label, x = x / Config.CELL, z = z / Config.CELL })
