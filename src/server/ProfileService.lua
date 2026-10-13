@@ -382,6 +382,65 @@ local function hasFreeBagSlot(profile)
 	return false
 end
 
+--[[
+	Coin sacks. A sack is a non-stackable bag item (ItemDefinitions CoinCapacity) whose balance
+	lives on the owned record as `coins`. Picked-up coins go to the FIRST sack with room, scanning
+	bag slots 1 -> 30 in order, before they become ordinary Coins stacks (100 per slot). Only sacks
+	in the bag count: not the bank chest, hotbar or equip boxes. The Bank empties sacks into the
+	wallet (BankService.DepositAll) the same way it clears Coins stacks.
+]]
+local function eachCoinSack(profile, fn)
+	if type(profile) ~= "table" or type(profile.inventory) ~= "table" then return end
+	ensureBagSlots(profile)
+	for i = 1, Types.BAG_SLOT_COUNT do
+		local uuid = bagSlotUuid(profile.bagSlots, i)
+		local item = uuid and profile.inventory[uuid]
+		local capacity = type(item) == "table" and ItemDefinitions.GetCoinCapacity(item.itemId) or nil
+		if capacity then fn(item, capacity) end
+	end
+end
+
+-- Puts up to `amount` coins into sacks (bag order). Returns how many did NOT fit.
+local function fillCoinSacks(profile, amount)
+	local remaining = math.max(0, math.floor(tonumber(amount) or 0))
+	eachCoinSack(profile, function(item, capacity)
+		if remaining <= 0 then return end
+		local held = math.clamp(math.floor(tonumber(item.coins) or 0), 0, capacity)
+		local add = math.min(capacity - held, remaining)
+		item.coins = held + add
+		remaining -= add
+	end)
+	return remaining
+end
+
+-- Coins the bag's sacks could still take.
+local function coinSackRoom(profile)
+	local room = 0
+	eachCoinSack(profile, function(item, capacity)
+		room += capacity - math.clamp(math.floor(tonumber(item.coins) or 0), 0, capacity)
+	end)
+	return room
+end
+
+-- Total coins currently held in sacks (BankService.GetBalances).
+function ProfileService.CoinsInSacks(profile)
+	local total = 0
+	eachCoinSack(profile, function(item, capacity)
+		total += math.clamp(math.floor(tonumber(item.coins) or 0), 0, capacity)
+	end)
+	return total
+end
+
+-- Empties every bag sack and returns the total taken (BankService.DepositAll adds it to the wallet).
+function ProfileService.TakeCoinsFromSacks(profile)
+	local total = 0
+	eachCoinSack(profile, function(item, capacity)
+		total += math.clamp(math.floor(tonumber(item.coins) or 0), 0, capacity)
+		item.coins = 0
+	end)
+	return total
+end
+
 -- Equip-box slots that double as extra storage when they're empty (Minecraft-style: an
 -- unused gear slot isn't wasted capacity, and "inventory full" should account for it).
 -- Kept in sync with PlayerPreview.lua's SLOTS list -- the only equip slots with a real
@@ -427,6 +486,9 @@ function ProfileService.HasRoomForStackable(profile, itemId, count)
 	if count <= 0 then
 		return true
 	end
+	if itemId == "Coins" and coinSackRoom(profile) > 0 then
+		return true
+	end
 	local maxStack = ItemDefinitions.GetMaxStack(itemId)
 	for _, it in pairs(profile.inventory) do
 		if type(it) == "table" and it.itemId == itemId and type(it.count) == "number" and it.count < maxStack then
@@ -442,7 +504,7 @@ end
 -- makes it say "yes" to 5000 coins that are mostly going to land nowhere.
 function ProfileService.StackableCapacity(profile, itemId)
 	local maxStack = ItemDefinitions.GetMaxStack(itemId)
-	local room = 0
+	local room = itemId == "Coins" and coinSackRoom(profile) or 0
 	for _, it in pairs(profile.inventory or {}) do
 		if type(it) == "table" and it.itemId == itemId and type(it.count) == "number" and it.count < maxStack then
 			room += maxStack - it.count
@@ -891,6 +953,15 @@ local function buildOwnedItemFromTemplate(template, mayCarryIdentity, originCtx)
 	if type(item.count) ~= "number" or item.count < 1 or item.count ~= math.floor(item.count) then
 		item.count = 1
 	end
+	-- A coin sack keeps its coins when it moves (dropped, picked back up, returned from auction).
+	local sackCapacity = ItemDefinitions.GetCoinCapacity(item.itemId)
+	if sackCapacity then
+		item.coins = math.clamp(math.floor(tonumber(template.coins) or 0), 0, sackCapacity)
+	end
+	-- A coin note keeps its face value when it moves (dropped, picked back up, traded).
+	if ItemDefinitions.IsCoinNote(item.itemId) then
+		item.coins = math.max(0, math.floor(tonumber(template.coins) or 0))
+	end
 	-- Identity. The field list above is a fixed literal, so serial/origin do NOT
 	-- come across from the template on their own -- do not "fix" that by adding
 	-- two more lines to the literal, the next field would drift the same way.
@@ -1090,6 +1161,16 @@ function ProfileService.GrantItemId(player, itemId, count, originCtx)
 		n = clampCount(count)
 	end
 
+	-- Coins fill the bag's coin sacks first (first sack with room, bag order); only the
+	-- overflow becomes ordinary Coins stacks below.
+	if itemId == "Coins" then
+		n = fillCoinSacks(profile, n)
+		if n <= 0 then
+			ProfileService.PushProfile(player)
+			return true, nil
+		end
+	end
+
 	local function raidSalvageRarity(r)
 		return r == "Common" or r == "Uncommon"
 	end
@@ -1131,6 +1212,58 @@ function ProfileService.GrantItemId(player, itemId, count, originCtx)
 	return true, nil
 end
 
+
+--[[
+	Coin notes (the Bank's withdrawal). GrantCoinNote mints ONE note worth `amount` coins into the
+	first empty bag slot; it never touches the wallet (the caller already took the coins out, and
+	puts them back if this fails). Returns ok, err ("bad_amount" | "no_room"), uuid.
+	RedeemCoinNote is the other half: consumes a note from the bag and adds its face value to the
+	wallet. The note is removed BEFORE the wallet is credited, so a failure can never double-pay.
+]]
+function ProfileService.GrantCoinNote(player, amount, originCtx)
+	amount = math.floor(tonumber(amount) or 0)
+	if amount < 1 then
+		return false, "bad_amount"
+	end
+	local profile = ProfileService.Load(player)
+	if not hasFreeBagSlot(profile) then
+		return false, "no_room"
+	end
+	local item = ItemFactory.CreateOwnedItem("CoinNote", {
+		coins = amount,
+		origin = originCtx or { by = player, kind = ItemIdentity.SOURCE.BANK, src = "CoinNote" },
+	})
+	if not item then
+		return false, "unknown_item"
+	end
+	profile.inventory[item.uuid] = item
+	placeItemInFirstEmptyBagSlot(profile, item.uuid)
+	ProfileService.PushProfile(player)
+	return true, nil, item.uuid
+end
+
+function ProfileService.RedeemCoinNote(player, uuid)
+	if type(uuid) ~= "string" or uuid == "" then
+		return false, "bad_uuid"
+	end
+	local profile = ProfileService.Load(player)
+	local item = profile.inventory[uuid]
+	if type(item) ~= "table" or not ItemDefinitions.IsCoinNote(item.itemId) then
+		return false, "not_a_note"
+	end
+	local amount = math.max(0, math.floor(tonumber(item.coins) or 0))
+	-- Consume first (every slot that points at it), then pay.
+	profile.inventory[uuid] = nil
+	clearUuidFromBagSlots(profile, uuid)
+	clearItemUuidFromAllHotbar(profile, uuid)
+	clearItemUuidFromAllEquipped(profile, uuid)
+	if type(profile.currencies) ~= "table" then
+		profile.currencies = { Coins = 0 }
+	end
+	profile.currencies.Coins = math.floor(tonumber(profile.currencies.Coins) or 0) + amount
+	ProfileService.PushProfile(player)
+	return true, nil, amount
+end
 
 function ProfileService.ClearHotbarSlot(player, slotIndex)
 	local profile = ProfileService.Load(player)

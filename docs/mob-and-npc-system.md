@@ -193,3 +193,18 @@ Every mob (`SSS/MobClass`) keeps a threat score per player, and its target is th
 - **Priority:** `IsPriorityMob` (bosses, named elites, `IsElite`) gives the faster fade and lower switch margin, so elites and bosses react to whoever is hurting them. The same flag gives them right of way in crowding (`CROWD_PRIORITY_MASS`).
 
 Bosses use the same list for their encounter moves: Miasma's `_pickTarget` asks `boss:TopThreat(allowed)`.
+
+## Merchant prices (2026-10-13)
+
+All prices live in `RS/ShopCatalogConfig` (`Merchant`). The shop UI is `client/NpcShop/MerchantBook`.
+
+| Tab | What | Price |
+|---|---|---|
+| Ores | T1..T5 Scrap | **2 ore : 1 scrap** (Coal / Emerald / Iron Ore / Diamond / Gold) |
+| Ores (below the scrap) | T1..T5 Coin Sack | coins, **placeholder prices** (100 / 150 / 250 / 400 / 600), see `docs/inventory-and-equipment.md` |
+| Scrap | T1..T5 Weapon and Armor Scroll | **30 scrap of the scroll's own tier** each |
+| Salvage | break unequipped gear into scrap | unchanged |
+| Potions | **swaps only**: 3 Minor for 1 Medium, 1 Medium for 3 Minor | nothing is sold |
+
+- Orbs (Wisdom, Chaos, Nullification, Alteration, Transmutation, Reforging, Divinity) are no longer sold; the item definitions stay (the Dropper and tutorial still grant them).
+- Swaps are `TradeRates` rows with `ShopTab = "Potions"`, applied by `NPCService` `TradeOre` using the row's index. Append new rows at the end.

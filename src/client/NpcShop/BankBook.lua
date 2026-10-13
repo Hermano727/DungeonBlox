@@ -47,6 +47,8 @@ local ERRORS = {
 	insufficient_wallet = "Not that many coins in your wallet.",
 	insufficient_funds = "Not enough coins.",
 	invalid_amount = "Enter a whole number.",
+	no_room = "Your bags are full. A coin note needs one free slot.",
+	bad_amount = "Enter a whole number.",
 }
 local function errorText(code: any): string
 	return (type(code) == "string" and ERRORS[code]) or "That didn't work."
@@ -63,6 +65,14 @@ local function bagCoins(profile: any): number
 	for _, item in pairs(profile and profile.inventory or {}) do
 		if type(item) == "table" and item.itemId == COIN_ITEM then
 			total += math.max(0, math.floor(tonumber(item.count) or 1))
+		end
+	end
+	-- Coins inside the coin sacks in your bag slots (the Bank empties those too).
+	for i = 1, 30 do
+		local uuid = slotUuid(profile and profile.bagSlots, i)
+		local item = uuid and profile.inventory and profile.inventory[uuid]
+		if type(item) == "table" and ItemDefinitions.GetCoinCapacity(item.itemId) then
+			total += math.max(0, math.floor(tonumber(item.coins) or 0))
 		end
 	end
 	return total
@@ -281,7 +291,7 @@ local function BankBook(_props: { npcId: string })
 				onSubmit = function()
 					if withdrawAmount > 0 then
 						coinCall({ action = "Withdraw", amount = withdrawAmount }, function(res)
-							return ("Withdrew %s."):format(ShopParts.priceText(res.amount or withdrawAmount, "Coins"))
+							return ("Wrote a coin note for %s. Right-click it in your bags to redeem."):format(ShopParts.priceText(res.amount or withdrawAmount, "Coins"))
 						end)
 					end
 				end,
@@ -293,7 +303,7 @@ local function BankBook(_props: { npcId: string })
 				Position = UDim2.fromOffset(230, 312), Size = UDim2.fromOffset(110, 34), textSize = 15,
 				onClick = function()
 					coinCall({ action = "Withdraw", amount = withdrawAmount }, function(res)
-						return ("Withdrew %s."):format(ShopParts.priceText(res.amount or withdrawAmount, "Coins"))
+						return ("Wrote a coin note for %s. Right-click it in your bags to redeem."):format(ShopParts.priceText(res.amount or withdrawAmount, "Coins"))
 					end)
 				end,
 			}),
@@ -303,7 +313,7 @@ local function BankBook(_props: { npcId: string })
 				Position = UDim2.fromOffset(350, 312), Size = UDim2.fromOffset(90, 34), textSize = 15,
 				onClick = function()
 					coinCall({ action = "Withdraw", amount = wallet }, function(res)
-						return ("Withdrew %s."):format(ShopParts.priceText(res.amount or wallet, "Coins"))
+						return ("Wrote a coin note for %s. Right-click it in your bags to redeem."):format(ShopParts.priceText(res.amount or wallet, "Coins"))
 					end)
 				end,
 			}),

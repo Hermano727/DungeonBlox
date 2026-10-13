@@ -62,7 +62,7 @@ local function baseStatLines(subStats): { string }
 end
 
 -- Wear and protection, shown under the rarity: "Durability 1320 / 1500" (or BROKEN), and
--- "Protected" while a protection scroll is on it.
+-- "Protected" while a protection scroll is on it, "Coins 87 / 150" on a coin sack, and "Worth 500 coins" on a coin note.
 local function wearLines(item): { string }
 	local out = {}
 	local maxDur = tonumber(item.maxDurability)
@@ -73,6 +73,13 @@ local function wearLines(item): { string }
 	end
 	if item.scrollProtected == true then
 		table.insert(out, "Protected from breaking")
+	end
+	if ItemDefinitions.IsCoinNote(item.itemId) then
+		table.insert(out, string.format("Worth %d coins", math.floor(tonumber(item.coins) or 0)))
+	end
+	local sackCapacity = ItemDefinitions.GetCoinCapacity(item.itemId)
+	if sackCapacity then
+		table.insert(out, string.format("Coins %d / %d", math.floor(tonumber(item.coins) or 0), sackCapacity))
 	end
 	return out
 end

@@ -122,6 +122,12 @@ function Item:CreateOwnedRecord(opts: { [string]: any }?)
 		toolPrefabName = self.toolPrefabName,
 	}
 
+	-- Coin sacks (balance, 0 until coins are picked up) and coin notes (face value) carry
+	-- their coins on the record.
+	if self.def.CoinCapacity or self.def.CoinNote then
+		record.coins = math.max(0, math.floor(tonumber(opts.coins) or 0))
+	end
+
 	local slot = self:GetEquipSlot()
 	if slot then
 		record.equipSlot = slot

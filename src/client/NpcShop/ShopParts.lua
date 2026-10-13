@@ -36,6 +36,9 @@ local HEAD_H = 74 -- heading + sub line + divider, above a page's body
 
 local ERRORS = {
 	insufficient_funds = "Not enough coins or materials.",
+	insufficient_items = "You don't have enough to swap.",
+	receive_failed     = "Your bags are full.",
+	bad_trade_index    = "That swap isn't offered.",
 	not_in_catalog     = "That isn't sold here.",
 	no_profile         = "Still loading. Try again.",
 	throttled          = "Too fast. Wait a moment.",

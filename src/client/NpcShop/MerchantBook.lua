@@ -1,11 +1,11 @@
 --!strict
 --  NpcShop/MerchantBook -- the Merchant (rebuilt 2026-10-01 from the old dark-wood window).
 --  Sections in the Journal sidebar, each one a spread of the book:
---    Ores      barter ore for tier scrap                      (Catalog)
---    Scrap     orbs and enchant scrolls, with T1..T5 bookmark tabs on the book's top edge
---              filtering by tier                              (Catalog)
+--    Ores      barter ore for tier scrap (2 ore : 1 scrap), then coin sacks   (Catalog)
+--    Scrap     enchant scrolls, 30 scrap each, with T1..T5 bookmark tabs on the book's top
+--              edge filtering by tier                         (Catalog)
 --    Salvage   break down unequipped weapons and armor into scrap (this file)
---    Potions                                                  (Catalog)
+--    Potions   swap 3 Minor for 1 Medium, or 1 Medium for 3 Minor; nothing is sold (this file)
 --  Goods come from NPCRegistry.Get("Merchant").ShopCatalog (RS/ShopCatalogConfig), by ShopTab.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -31,10 +31,10 @@ local function iconOf(itemId: string): string?
 end
 
 local SECTIONS = {
-	{ id = "Ores",    label = "Ores",    item = "Coal",          heading = "Ore Trade", sub = "Trade your ore for scrap." },
-	{ id = "Scrap",   label = "Scrap",   item = "T1Scrap",       heading = "Scrap Goods", sub = "Orbs and enchant scrolls." },
+	{ id = "Ores",    label = "Ores",    item = "Coal",          heading = "Ore Trade", sub = "Two ore for one scrap. Coin sacks below." },
+	{ id = "Scrap",   label = "Scrap",   item = "T1Scrap",       heading = "Scrap Goods", sub = "Enchant scrolls, 30 scrap each." },
 	{ id = "Salvage", label = "Salvage", item = "TrainingSword", heading = "Salvage", sub = "Break down gear you aren't wearing." },
-	{ id = "Potions", label = "Potions", item = "MinorPotion",   heading = "Potions", sub = "Brews for the road." },
+	{ id = "Potions", label = "Potions", item = "MinorPotion",   heading = "Potion Swap", sub = "Trade potions up or down a size." },
 }
 local PAGES = {}
 for _, section in ipairs(SECTIONS) do
@@ -152,6 +152,85 @@ local function Salvage(props: { npcId: string, snapshot: any, side: any })
 	return e(Book, { side = props.side, left = left, right = e(ShopParts.Detail, detail) })
 end
 
+-- Potions: swaps only (3 Minor for 1 Medium, 1 Medium for 3 Minor). The Merchant sells no
+-- potions. The list comes from the Merchant's TradeRates rows tagged ShopTab = "Potions";
+-- the server (NPCService TradeOre) checks and applies them by that row's index.
+local function PotionSwaps(props: { npcId: string, snapshot: any, side: any })
+	local profile = props.snapshot and props.snapshot.profile
+	local selected, setSelected = React.useState(1)
+	local busy, setBusy = React.useState(false)
+	local status, statusGood, setStatus = ShopParts.useStatus()
+
+	local swaps = {}
+	local reg = NPCRegistry.Get("Merchant")
+	for index, trade in ipairs(reg and reg.TradeRates or {}) do
+		if trade.ShopTab == "Potions" then
+			table.insert(swaps, { index = index, give = trade.Give, receive = trade.Receive })
+		end
+	end
+
+	local rows: { [string]: any } = {}
+	for i, swap in ipairs(swaps) do
+		local item = { itemId = swap.receive.ItemId, count = swap.receive.Qty }
+		local have = ShopParts.countOf(profile, swap.give.ItemId)
+		rows["S" .. i] = e(ShopParts.ItemRow, {
+			item = item,
+			name = ShopParts.displayName(swap.receive.ItemId),
+			nameColor = ShopParts.rarityColor(item),
+			sub = ("Swap %d %s"):format(swap.give.Qty, ShopParts.displayName(swap.give.ItemId)
+				.. (swap.give.Qty > 1 and "s" or "")),
+			subColor = have < swap.give.Qty and Style.Text.Bad or nil,
+			selected = i == selected,
+			order = i,
+			onSelect = function() setSelected(i) end,
+		})
+	end
+	local left = e(ShopParts.Page, {
+		heading = "Potion Swap", sub = "Trade potions up or down a size.",
+		body = ShopParts.List(rows, "No swaps offered right now."),
+	})
+
+	local swap = swaps[selected]
+	local detail
+	if swap then
+		local item = { itemId = swap.receive.ItemId, count = swap.receive.Qty }
+		local name = ShopParts.displayName(swap.receive.ItemId)
+		local giveName = ShopParts.displayName(swap.give.ItemId)
+		local have = ShopParts.countOf(profile, swap.give.ItemId)
+		local function doSwap()
+			if busy then return end
+			setBusy(true)
+			local ok, res = ShopParts.request(props.npcId, { action = "TradeOre", tradeIndex = swap.index, qty = 1 })
+			setBusy(false)
+			if ok then
+				setStatus(("Swapped for %d %s."):format(swap.receive.Qty, name), true)
+				DungeonMenuNet.requestSync()
+			else
+				setStatus(ShopParts.errorText(res and res.err), false)
+			end
+		end
+		detail = {
+			item = item,
+			name = name,
+			nameColor = ShopParts.rarityColor(item),
+			kind = ItemDefinitions.GetRarityForItem(item) or "",
+			body = ItemDefinitions.GetDescription(swap.receive.ItemId),
+			lines = {
+				{ "You give", ("%d %s"):format(swap.give.Qty, giveName) },
+				{ "You get", ("%d %s"):format(swap.receive.Qty, name) },
+				{ "You have", ("%d %s"):format(have, giveName), have >= swap.give.Qty },
+			},
+			action = { text = busy and "Swapping..." or "Swap", disabled = busy or have < swap.give.Qty, onClick = doSwap },
+		}
+	else
+		detail = { emptyText = "No swaps offered right now." }
+	end
+	detail.status, detail.statusGood = status, statusGood
+	detail.coins = ShopParts.coins(profile)
+
+	return e(Book, { side = props.side, left = left, right = e(ShopParts.Detail, detail) })
+end
+
 local function MerchantBook(props: { npcId: string })
 	local snapshot = InventoryData.useSnapshot()
 	local sectionId, setSection = React.useState("Ores")
@@ -165,6 +244,8 @@ local function MerchantBook(props: { npcId: string })
 
 	if sectionId == "Salvage" then
 		return e(Salvage, { key = "Salvage", npcId = props.npcId, snapshot = snapshot, side = side })
+	end	if sectionId == "Potions" then
+		return e(PotionSwaps, { key = "Potions", npcId = props.npcId, snapshot = snapshot, side = side })
 	end
 
 	local entries = {}

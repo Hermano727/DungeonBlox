@@ -111,7 +111,13 @@ local function ItemSlot(props: ItemSlotProps)
 		children.Durability = DurabilityBar.ForItem(item)
 
 		local count = math.floor(tonumber(item.count) or 1)
-		if count > 1 then
+		-- A coin sack (or coin note) shows its coins where a stack shows its count.
+		local showCount = count > 1
+		if ItemDefinitions.GetCoinCapacity(item.itemId) or ItemDefinitions.IsCoinNote(item.itemId) then
+			count = math.max(0, math.floor(tonumber(item.coins) or 0))
+			showCount = count > 0
+		end
+		if showCount then
 			children.CountLabel = e("TextLabel", {
 				AnchorPoint = Vector2.new(1, 1),
 				Position = UDim2.fromScale(1, 1),

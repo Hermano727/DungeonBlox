@@ -63,6 +63,18 @@ local Items = {
 	T3Scrap     = { Stackable = true,  MaxStack = 100, Kind = "Material",   Tier = 3, Rarity = "Rare", DisplayName = "T3 Scrap", HotbarEquippable = false, ProtectedOnDeath = false, Icon = MaterialIcons.T3_SCRAP },
 	T4Scrap     = { Stackable = true,  MaxStack = 100, Kind = "Material",   Tier = 4, Rarity = "Epic", DisplayName = "T4 Scrap", HotbarEquippable = false, ProtectedOnDeath = false, Icon = MaterialIcons.T4_SCRAP },
 	T5Scrap     = { Stackable = true,  MaxStack = 100, Kind = "Material",   Tier = 5, Rarity = "Legendary", DisplayName = "T5 Scrap", HotbarEquippable = false, ProtectedOnDeath = false, Icon = MaterialIcons.T5_SCRAP },
+	-- Coin sacks: non-stackable bag items that hold picked-up coins (balance in the owned record's
+	-- `coins`, 0..CoinCapacity). Picked-up coins fill sacks first, in bag order, then spill into
+	-- ordinary Coins stacks; the Bank empties them into the wallet. See ProfileService.GrantItemId (the "Coins" branch).
+	T1CoinSack = { Stackable = false, MaxStack = 1, Kind = "Material", Tier = 1, Rarity = "Common", DisplayName = "T1 Coin Sack", HotbarEquippable = false, ProtectedOnDeath = false, CoinCapacity = 150, Icon = MaterialIcons.COIN_SACK, Description = "Holds up to 150 coins. Coins you pick up fill your sacks first, then spill into ordinary coin stacks. Empty it into your wallet at the Bank." },
+	T2CoinSack = { Stackable = false, MaxStack = 1, Kind = "Material", Tier = 2, Rarity = "Uncommon", DisplayName = "T2 Coin Sack", HotbarEquippable = false, ProtectedOnDeath = false, CoinCapacity = 200, Icon = MaterialIcons.COIN_SACK, Description = "Holds up to 200 coins. Coins you pick up fill your sacks first, then spill into ordinary coin stacks. Empty it into your wallet at the Bank." },
+	T3CoinSack = { Stackable = false, MaxStack = 1, Kind = "Material", Tier = 3, Rarity = "Rare", DisplayName = "T3 Coin Sack", HotbarEquippable = false, ProtectedOnDeath = false, CoinCapacity = 250, Icon = MaterialIcons.COIN_SACK, Description = "Holds up to 250 coins. Coins you pick up fill your sacks first, then spill into ordinary coin stacks. Empty it into your wallet at the Bank." },
+	T4CoinSack = { Stackable = false, MaxStack = 1, Kind = "Material", Tier = 4, Rarity = "Epic", DisplayName = "T4 Coin Sack", HotbarEquippable = false, ProtectedOnDeath = false, CoinCapacity = 300, Icon = MaterialIcons.COIN_SACK, Description = "Holds up to 300 coins. Coins you pick up fill your sacks first, then spill into ordinary coin stacks. Empty it into your wallet at the Bank." },
+	T5CoinSack = { Stackable = false, MaxStack = 1, Kind = "Material", Tier = 5, Rarity = "Legendary", DisplayName = "T5 Coin Sack", HotbarEquippable = false, ProtectedOnDeath = false, CoinCapacity = 400, Icon = MaterialIcons.COIN_SACK, Description = "Holds up to 400 coins. Coins you pick up fill your sacks first, then spill into ordinary coin stacks. Empty it into your wallet at the Bank." },
+	-- Coin note: what a Bank withdrawal pays out instead of Coins stacks. One non-stackable bag item
+	-- whose worth is the owned record's `coins` (any amount >= 1). Redeeming it (right-click, from
+	-- anywhere) adds that to the wallet and consumes the note. Built to be traded once trading exists.
+	CoinNote = { Stackable = false, MaxStack = 1, Kind = "Material", Tier = 1, Rarity = "Uncommon", DisplayName = "Coin Note", HotbarEquippable = false, ProtectedOnDeath = false, CoinNote = true, Icon = MaterialIcons.COIN_NOTE, Description = "A note for coins, written by the Bank. Right-click it to redeem the coins into your wallet, anywhere. It can be handed to another player." },
 	T1WeaponProtectionScroll = { Stackable = true, MaxStack = 100, Kind = "Material", Tier = 1, Rarity = "Uncommon", DisplayName = "T1 Weapon Protection Scroll", HotbarEquippable = false, ProtectedOnDeath = false, ProtectionScroll = true, ScrollTarget = "Weapon", Icon = "rbxassetid://77558639338433", Description = "Apply only to a T1 weapon to mark it Protected (tooltip). While Protected, a failed T1 enchant roll will not reset your enchant (protection is consumed). A successful T1 enchant also removes Protected. Cannot apply if already Protected." },
 	T1ArmorProtectionScroll = { Stackable = true, MaxStack = 100, Kind = "Material", Tier = 1, Rarity = "Uncommon", DisplayName = "T1 Armor Protection Scroll", HotbarEquippable = false, ProtectedOnDeath = false, ProtectionScroll = true, ScrollTarget = "Armor", Icon = "rbxassetid://137035522570475", Description = "Apply only to a T1 armor piece to mark it Protected (tooltip). While Protected, a failed T1 enchant roll will not reset your enchant (protection is consumed). A successful T1 enchant also removes Protected. Cannot apply if already Protected." },
 	T2WeaponProtectionScroll = { Stackable = true, MaxStack = 100, Kind = "Material", Tier = 2, Rarity = "Uncommon", DisplayName = "T2 Weapon Protection Scroll", HotbarEquippable = false, ProtectedOnDeath = false, ProtectionScroll = true, ScrollTarget = "Weapon", Icon = "rbxassetid://77558639338433", Description = "Apply only to a T2 weapon to mark it Protected (tooltip). While Protected, a failed T2 enchant roll will not reset your enchant (protection is consumed). A successful T2 enchant also removes Protected. Cannot apply if already Protected." },
@@ -211,6 +223,18 @@ ItemDefinitions.Items = Items
 
 function ItemDefinitions.Get(itemId)
 	return Items[itemId]
+end
+
+-- Coins a coin sack of this itemId holds (nil for every other item).
+function ItemDefinitions.GetCoinCapacity(itemId)
+	local def = Items[itemId]
+	return def and def.CoinCapacity or nil
+end
+
+-- True for the Bank's coin note (worth = the owned record's `coins`).
+function ItemDefinitions.IsCoinNote(itemId)
+	local def = Items[itemId]
+	return def ~= nil and def.CoinNote == true
 end
 
 function ItemDefinitions.GetMaxStack(itemId)

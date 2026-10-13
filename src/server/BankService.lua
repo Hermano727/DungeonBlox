@@ -1,8 +1,11 @@
 --[[
   BankService (Server)
   Coin bank: inventory coin items <-> wallet (currencies.Coins).
-  DepositAll moves every Coins stack from bags into the spendable wallet.
-  WithdrawAll moves the full wallet back into inventory as Coins items (max stack 100).
+  DepositAll moves every Coins stack AND the contents of every coin sack in the bags into the
+  spendable wallet (sacks stay in the bag, emptied).
+  Withdraw / WithdrawAll take coins out of the wallet and hand them over as ONE coin note
+  (ProfileService.GrantCoinNote): a single bag item worth that many coins, redeemable anywhere
+  and tradeable. They need one free bag slot and refuse ("no_room") before touching the wallet.
 ]]
 
 local ServerScriptService = game:GetService("ServerScriptService")
@@ -40,7 +43,7 @@ local function countCoinsInInventory(profile)
 			total = total + math.max(0, math.floor(tonumber(it.count) or 1))
 		end
 	end
-	return total
+	return total + DungeonProfile.CoinsInSacks(profile)
 end
 
 local function removeAllCoinsFromInventory(profile)
@@ -74,13 +77,26 @@ function BankService.DepositAll(player)
 		return false, "no_profile", 0
 	end
 
-	local amount = removeAllCoinsFromInventory(profile)
+	local amount = removeAllCoinsFromInventory(profile) + DungeonProfile.TakeCoinsFromSacks(profile)
 	if amount <= 0 then
 		return false, "no_coins_in_bags", 0
 	end
 
 	profile.currencies.Coins = math.floor((profile.currencies.Coins or 0) + amount)
 	DungeonProfile.PushProfile(player)
+	return true, nil, amount
+end
+
+-- Takes `amount` out of the wallet and mints a coin note for it. Returns ok, err, amount.
+local function writeNote(player, profile, amount)
+	local wallet = math.floor(profile.currencies.Coins or 0)
+	profile.currencies.Coins = wallet - amount
+	local ok, err = DungeonProfile.GrantCoinNote(player, amount)
+	if not ok then
+		profile.currencies.Coins = wallet -- nothing was written; the wallet is whole again
+		DungeonProfile.PushProfile(player)
+		return false, err == "no_room" and "no_room" or (err or "grant_failed"), 0
+	end
 	return true, nil, amount
 end
 
@@ -99,15 +115,7 @@ function BankService.Withdraw(player, amount)
 		return false, "insufficient_wallet", 0
 	end
 
-	profile.currencies.Coins = wallet - amount
-	local ok, err = DungeonProfile.GrantItemId(player, COIN_ITEM_ID, amount)
-	if not ok then
-		profile.currencies.Coins = wallet
-		DungeonProfile.PushProfile(player)
-		return false, err or "grant_failed", 0
-	end
-
-	return true, nil, amount
+	return writeNote(player, profile, amount)
 end
 
 function BankService.WithdrawAll(player)
@@ -121,15 +129,7 @@ function BankService.WithdrawAll(player)
 		return false, "empty_wallet", 0
 	end
 
-	profile.currencies.Coins = 0
-	local ok, err = DungeonProfile.GrantItemId(player, COIN_ITEM_ID, amount)
-	if not ok then
-		profile.currencies.Coins = amount
-		DungeonProfile.PushProfile(player)
-		return false, err or "grant_failed", 0
-	end
-
-	return true, nil, amount
+	return writeNote(player, profile, amount)
 end
 
 function BankService.GetBalances(player)

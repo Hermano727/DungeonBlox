@@ -10,37 +10,38 @@ return {
 
 	Merchant = {
 		ShopCatalog = {
-			-- Ores tab: barter ore for tier scrap
-			{ ItemId = "T1Scrap", Label = "T1 Scrap", Price = 1, Currency = "Coal", Qty = 1, ShopTab = "Ores" },
-			{ ItemId = "T2Scrap", Label = "T2 Scrap", Price = 1, Currency = "Emerald", Qty = 1, ShopTab = "Ores" },
-			{ ItemId = "T3Scrap", Label = "T3 Scrap", Price = 1, Currency = "IronOre", Qty = 1, ShopTab = "Ores" },
-			{ ItemId = "T4Scrap", Label = "T4 Scrap", Price = 1, Currency = "Diamond", Qty = 1, ShopTab = "Ores" },
-			{ ItemId = "T5Scrap", Label = "T5 Scrap", Price = 1, Currency = "Gold", Qty = 1, ShopTab = "Ores" },
-			-- Scrap tab: coins and scrap-for-scroll
-			{ ItemId = "T1OrbOfWisdom", Label = "T1 Orb of Wisdom", Price = 1, Currency = "Coins", Qty = 30, ShopTab = "Scrap" },
-			{ ItemId = "T1OrbOfChaos", Label = "T1 Orb of Chaos", Price = 1, Currency = "Coins", Qty = 30, ShopTab = "Scrap" },
-			{ ItemId = "T1OrbOfNullification", Label = "T1 Orb of Nullification", Price = 1, Currency = "Coins", Qty = 30, ShopTab = "Scrap" },
-			{ ItemId = "T1OrbOfAlteration", Label = "T1 Orb of Alteration", Price = 1, Currency = "Coins", Qty = 30, ShopTab = "Scrap" },
-			{ ItemId = "T1OrbOfTransmutation", Label = "T1 Orb of Transmutation", Price = 1, Currency = "Coins", Qty = 30, ShopTab = "Scrap" },
-			{ ItemId = "T1OrbOfReforging", Label = "T1 Orb of Reforging", Price = 1, Currency = "Coins", Qty = 30, ShopTab = "Scrap" },
-			{ ItemId = "T1OrbOfDivinity", Label = "T1 Orb of Divinity", Price = 1, Currency = "Coins", Qty = 30, ShopTab = "Scrap" },
-			{ ItemId = "T1WeaponScroll", Label = "T1 Weapon Scroll", Price = 0, Currency = "T1Scrap", Qty = 30, ShopTab = "Scrap", Tier = 1 },
-			{ ItemId = "T1ArmorScroll",  Label = "T1 Armor Scroll",  Price = 0, Currency = "T1Scrap", Qty = 30, ShopTab = "Scrap", Tier = 1 },
-			{ ItemId = "T2WeaponScroll", Label = "T2 Weapon Scroll", Price = 0, Currency = "T2Scrap", Qty = 30, ShopTab = "Scrap", Tier = 2 },
-			{ ItemId = "T2ArmorScroll",  Label = "T2 Armor Scroll",  Price = 0, Currency = "T2Scrap", Qty = 30, ShopTab = "Scrap", Tier = 2 },
-			{ ItemId = "T3WeaponScroll", Label = "T3 Weapon Scroll", Price = 0, Currency = "T3Scrap", Qty = 30, ShopTab = "Scrap", Tier = 3 },
-			{ ItemId = "T3ArmorScroll",  Label = "T3 Armor Scroll",  Price = 0, Currency = "T3Scrap", Qty = 30, ShopTab = "Scrap", Tier = 3 },
-			{ ItemId = "T4WeaponScroll", Label = "T4 Weapon Scroll", Price = 0, Currency = "T4Scrap", Qty = 30, ShopTab = "Scrap", Tier = 4 },
-			{ ItemId = "T4ArmorScroll",  Label = "T4 Armor Scroll",  Price = 0, Currency = "T4Scrap", Qty = 30, ShopTab = "Scrap", Tier = 4 },
-			{ ItemId = "T5WeaponScroll", Label = "T5 Weapon Scroll", Price = 0, Currency = "T5Scrap", Qty = 30, ShopTab = "Scrap", Tier = 5 },
-			{ ItemId = "T5ArmorScroll",  Label = "T5 Armor Scroll",  Price = 0, Currency = "T5Scrap", Qty = 30, ShopTab = "Scrap", Tier = 5 },
-			-- Potions tab
-			{ ItemId = "MinorPotion",  Label = "Minor Potion",  Price = 0, Currency = "Coins", Qty = 1, ShopTab = "Potions", Tier = 1 },
-			{ ItemId = "MediumPotion", Label = "Medium Potion", Price = 0, Currency = "Coins", Qty = 1, ShopTab = "Potions", Tier = 3 },
+			-- Ores tab: barter ore for tier scrap (2 ore : 1 scrap), then coin sacks below.
+			{ ItemId = "T1Scrap", Label = "T1 Scrap", Price = 2, Currency = "Coal", Qty = 1, ShopTab = "Ores" },
+			{ ItemId = "T2Scrap", Label = "T2 Scrap", Price = 2, Currency = "Emerald", Qty = 1, ShopTab = "Ores" },
+			{ ItemId = "T3Scrap", Label = "T3 Scrap", Price = 2, Currency = "IronOre", Qty = 1, ShopTab = "Ores" },
+			{ ItemId = "T4Scrap", Label = "T4 Scrap", Price = 2, Currency = "Diamond", Qty = 1, ShopTab = "Ores" },
+			{ ItemId = "T5Scrap", Label = "T5 Scrap", Price = 2, Currency = "Gold", Qty = 1, ShopTab = "Ores" },
+			-- Coin sacks (hold 150 / 200 / 250 / 300 / 400 coins, see ItemDefinitions CoinCapacity).
+			-- PLACEHOLDER PRICES in coins: the sack prices were never specified. Tune here.
+			{ ItemId = "T1CoinSack", Label = "T1 Coin Sack", Price = 100, Currency = "Coins", Qty = 1, ShopTab = "Ores" },
+			{ ItemId = "T2CoinSack", Label = "T2 Coin Sack", Price = 150, Currency = "Coins", Qty = 1, ShopTab = "Ores" },
+			{ ItemId = "T3CoinSack", Label = "T3 Coin Sack", Price = 250, Currency = "Coins", Qty = 1, ShopTab = "Ores" },
+			{ ItemId = "T4CoinSack", Label = "T4 Coin Sack", Price = 400, Currency = "Coins", Qty = 1, ShopTab = "Ores" },
+			{ ItemId = "T5CoinSack", Label = "T5 Coin Sack", Price = 600, Currency = "Coins", Qty = 1, ShopTab = "Ores" },
+			-- Scrap tab: one enchant scroll costs 30 scrap of its own tier.
+			{ ItemId = "T1WeaponScroll", Label = "T1 Weapon Scroll", Price = 30, Currency = "T1Scrap", Qty = 1, ShopTab = "Scrap", Tier = 1 },
+			{ ItemId = "T1ArmorScroll",  Label = "T1 Armor Scroll",  Price = 30, Currency = "T1Scrap", Qty = 1, ShopTab = "Scrap", Tier = 1 },
+			{ ItemId = "T2WeaponScroll", Label = "T2 Weapon Scroll", Price = 30, Currency = "T2Scrap", Qty = 1, ShopTab = "Scrap", Tier = 2 },
+			{ ItemId = "T2ArmorScroll",  Label = "T2 Armor Scroll",  Price = 30, Currency = "T2Scrap", Qty = 1, ShopTab = "Scrap", Tier = 2 },
+			{ ItemId = "T3WeaponScroll", Label = "T3 Weapon Scroll", Price = 30, Currency = "T3Scrap", Qty = 1, ShopTab = "Scrap", Tier = 3 },
+			{ ItemId = "T3ArmorScroll",  Label = "T3 Armor Scroll",  Price = 30, Currency = "T3Scrap", Qty = 1, ShopTab = "Scrap", Tier = 3 },
+			{ ItemId = "T4WeaponScroll", Label = "T4 Weapon Scroll", Price = 30, Currency = "T4Scrap", Qty = 1, ShopTab = "Scrap", Tier = 4 },
+			{ ItemId = "T4ArmorScroll",  Label = "T4 Armor Scroll",  Price = 30, Currency = "T4Scrap", Qty = 1, ShopTab = "Scrap", Tier = 4 },
+			{ ItemId = "T5WeaponScroll", Label = "T5 Weapon Scroll", Price = 30, Currency = "T5Scrap", Qty = 1, ShopTab = "Scrap", Tier = 5 },
+			{ ItemId = "T5ArmorScroll",  Label = "T5 Armor Scroll",  Price = 30, Currency = "T5Scrap", Qty = 1, ShopTab = "Scrap", Tier = 5 },
+			-- No Potions entries on purpose: potions are not sold, only swapped (TradeRates below).
 		},
+		-- Barter swaps, indexed by position (NPCService TradeOre, params.tradeIndex). The Potions
+		-- tab lists the ones with ShopTab = "Potions". Append new swaps at the END so saved
+		-- indexes stay valid.
 		TradeRates = {
-			{ Give = { ItemId = "IronOre", Qty = 5  }, Receive = { ItemId = "T1Scrap", Qty = 10 } },
-			{ Give = { ItemId = "Fish",    Qty = 10 }, Receive = { Currency = "Coins", Qty = 25 } },
+			{ ShopTab = "Potions", Give = { ItemId = "MinorPotion",  Qty = 3 }, Receive = { ItemId = "MediumPotion", Qty = 1 } },
+			{ ShopTab = "Potions", Give = { ItemId = "MediumPotion", Qty = 1 }, Receive = { ItemId = "MinorPotion",  Qty = 3 } },
 		},
 	},
 

@@ -299,6 +299,14 @@ function DungeonMenuNet.requestTrashItem(itemUuid)
 	return DungeonMenuNet.requestInventoryAct({ kind = "TrashItem", uuid = itemUuid })
 end
 
+-- Redeem a Bank coin note into the wallet (the note is consumed). Same one dispatch path.
+function DungeonMenuNet.requestRedeemCoinNote(itemUuid)
+	if type(itemUuid) ~= "string" or itemUuid == "" then
+		return false, "bad_uuid"
+	end
+	return DungeonMenuNet.requestInventoryAct({ kind = "RedeemCoinNote", uuid = itemUuid })
+end
+
 -- Eat one of a carried food stack straight from the bag (FoodService's EatFromBag). Returns
 -- ok, reason; syncs the snapshot after a bite.
 function DungeonMenuNet.requestEatFromBag(itemUuid)

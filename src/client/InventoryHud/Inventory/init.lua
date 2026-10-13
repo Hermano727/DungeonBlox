@@ -323,6 +323,21 @@ local function InventoryMain()
 				end,
 			})
 		end
+		-- A Bank coin note is redeemed into the wallet from anywhere (the note is consumed).
+		if ItemDefinitions.IsCoinNote(item.itemId) then
+			local worth = math.max(0, math.floor(tonumber(item.coins) or 0))
+			table.insert(options, {
+				text = string.format("Redeem %d coins", worth),
+				onClick = function()
+					task.spawn(function()
+						local ok = DungeonMenuNet.requestRedeemCoinNote(item.uuid)
+						if not ok then
+							CenterFlashUI.Show("That note can't be redeemed")
+						end
+					end)
+				end,
+			})
+		end
 		-- Drop/Trash are offered for every item; the server is the one that actually
 		-- enforces "not in combat" (both) and "in a safe zone" (trash) -- see
 		-- ProfileService.DropItem/TrashItem. A denial just surfaces via the center

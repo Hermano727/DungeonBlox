@@ -60,3 +60,30 @@ Both gestures end at the same `performDrop`/`performHotbarToHotbarSwap`/`perform
 The pocket also leans 20% toward the item's rarity colour (`RARITY_WASH`), so rarity reads at a glance. Other callers keep the defaults (8 / 0.92 / square).
 
 `PlayerPreview`'s equip sockets draw their own round rarity rings, so there's no square-box copy of these numbers to keep in step any more (that drift used to bite twice).
+
+## Coins, coin sacks and coin notes (2026-10-13)
+
+Coins exist in three shapes. Only the wallet is spendable at shops.
+
+| Shape | What it is | Where it lives |
+|---|---|---|
+| **Coins stack** | Picked-up coins, `itemId = "Coins"`, 100 per bag slot | bag |
+| **Coin sack** | `T1..T5CoinSack`, holds 150 / 200 / 250 / 300 / 400 coins | bag slot, balance in the record's `coins` |
+| **Coin note** | `CoinNote`, any amount, one bag slot | bag, face value in the record's `coins` |
+| **Wallet** | `profile.currencies.Coins`, what merchants charge against | profile |
+
+**Pickup.** Every coin grant goes through `ProfileService.GrantItemId(player, "Coins", n)` (mob drops, quest rewards, dungeon payout). That call fills **coin sacks first**, scanning bag slots 1 to 30 in order and topping up the first sack with room. Only the overflow becomes ordinary Coins stacks. `StackableCapacity` and `HasRoomForStackable` count sack room, so the dungeon payout and pickup checks agree.
+
+**Only sacks in the bag slots count.** Not the bank chest, hotbar or equip boxes. Sacks are non-stackable items, so they take bag slots and drop on death like any other bag item, coins and all (`coins` rides along through `buildOwnedItemFromTemplate`, which is also how dropped/returned/traded sacks and notes keep their value).
+
+**Bank.**
+- `DepositAll` empties Coins stacks **and** sack contents into the wallet. Sacks stay in the bag, emptied.
+- `Withdraw` / `WithdrawAll` take coins out of the wallet and mint **one coin note** (`ProfileService.GrantCoinNote`). They need one free bag slot and refuse with `no_room` before touching the wallet.
+- A note is redeemed with right-click, **Redeem N coins**, from anywhere (`DungeonInventoryAct` kind `RedeemCoinNote` to `ProfileService.RedeemCoinNote`). The note is removed before the wallet is credited.
+- Notes carry a serial like any non-stackable item, which is what makes them safe to trade once trading exists.
+
+**Why a `coins` field and not `count`:** `ValidateOwnedItem` requires `count == 1` for non-stackables, and the slot's count badge is for stacks.
+
+**Display.** `ItemSlot` shows a sack's or note's coins where a stack shows its count; the tooltip adds "Coins 87 / 150" or "Worth 500 coins".
+
+**Temporary art.** Sacks and notes use the coin art from the merchant wallet (`MaterialIcons.COIN_SACK` / `COIN_NOTE`). Swap those two ids when dedicated art exists.

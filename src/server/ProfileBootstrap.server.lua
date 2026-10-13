@@ -179,6 +179,7 @@ end
         | { kind = "ApplyCraftingOrb", scrollUuid = string, targetUuid = string }
         | { kind = "DropItem", uuid = string }
         | { kind = "TrashItem", uuid = string }
+        | { kind = "RedeemCoinNote", uuid = string }   -- consume a Bank coin note into the wallet
 ]]
 rfInventoryAct.OnServerInvoke = function(player, act)
 	if PotionAction.IsLocked(player.Character) then return false, "drinking" end
@@ -237,6 +238,12 @@ rfInventoryAct.OnServerInvoke = function(player, act)
 		local ok, err, removedItem = DungeonProfile.DropItem(player, act.uuid)
 		if ok then
 			WorldLootService.SpawnPlayerDrop(player, removedItem)
+			return true, DungeonProfile.BuildSnapshotPayload(player)
+		end
+		return false, err
+	elseif act.kind == "RedeemCoinNote" then
+		local ok, err = DungeonProfile.RedeemCoinNote(player, act.uuid)
+		if ok then
 			return true, DungeonProfile.BuildSnapshotPayload(player)
 		end
 		return false, err

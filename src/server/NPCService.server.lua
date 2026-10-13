@@ -274,6 +274,8 @@ local function handleTradeOre(player, _npcId, npcType, params)
     elseif receive.ItemId then
         local okRecv, errRecv = DungeonProfile.GrantItemId(player, receive.ItemId, receive.Qty * qty)
         if not okRecv then
+            -- Give the payment back: a failed swap must not eat what was handed over.
+            DungeonProfile.GrantItemId(player, giveItemId, giveQty)
             return { ok = false, err = errRecv or "receive_failed" }
         end
     end
