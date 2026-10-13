@@ -689,7 +689,8 @@ end
 local mobLootSeq = 0
 
 -- Cap concurrent mob-drop orbs, evicting the single oldest survivor whenever
--- the count is over budget. Looping (not a one-shot if) means a burst that
+-- the count is over budget. Protected drops (a named elite's Mythic) count toward
+-- the cap but are never the one evicted: they last their full lifetime. Looping (not a one-shot if) means a burst that
 -- pushes the count several past the cap in one go (e.g. a multi-drop kill)
 -- still converges back to the cap within this one call.
 local function enforceMobLootCap()
@@ -698,7 +699,7 @@ local function enforceMobLootCap()
 		for id, entry in pairs(activeLoot) do
 			if entry.folderName == MOB_LOOT_FOLDER then
 				count = count + 1
-				if not oldestSeq or (entry.spawnSeq and entry.spawnSeq < oldestSeq) then
+				if not entry.protected and (not oldestSeq or (entry.spawnSeq and entry.spawnSeq < oldestSeq)) then
 					oldestSeq = entry.spawnSeq
 					oldestId = id
 				end
@@ -780,6 +781,7 @@ function WorldLootService.SpawnMobDrop(originPosition, ownerUserId, dropSpec, sc
 		count = dropSpec.count,
 		notifyPayload = dropSpec.notifyPayload,
 		spawnSeq = mobLootSeq,
+		protected = dropSpec.protected == true, -- never evicted by enforceMobLootCap
 	}
 	if type(dropSpec.pickupDelay) == "number" and dropSpec.pickupDelay > 0 then
 		-- Player-thrown drops (see SpawnPlayerDrop) land at the thrower's own feet --

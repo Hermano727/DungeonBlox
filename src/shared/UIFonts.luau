@@ -70,6 +70,22 @@ local Families = {
 	Serif = "rbxasset://fonts/families/Merriweather.json",
 }
 
+-- Fantasy faces (2026-10-12, first used by the item tooltip): Grenze for item names (a sharp,
+-- slightly gothic serif that stays readable small) and Fondamento for a calligraphic flavour
+-- line. Both are meant to be Roblox-bundled families (Enum.Font), but this registry's history
+-- (Cinzel, Quicksand) says never to trust a guessed family: each is resolved through
+-- Font.fromEnum inside a pcall, and a missing one falls back to the Journal serif instead of
+-- silently rendering Roblox's default font.
+local function enumFont(name: string, weight: Enum.FontWeight, style: Enum.FontStyle?, fallback: Font): Font
+	local ok, font = pcall(function()
+		local base = Font.fromEnum((Enum.Font :: any)[name])
+		return Font.new(base.Family, weight, style or Enum.FontStyle.Normal)
+	end)
+	return ok and font or fallback
+end
+local SerifBoldFallback = Font.new(Families.Serif, Enum.FontWeight.Bold)
+local SerifItalicFallback = Font.new(Families.Serif, Enum.FontWeight.Regular, Enum.FontStyle.Italic)
+
 local NPCDefault = {
 	Name = Font.new(Families.Body, Enum.FontWeight.Bold),
 	Dialog = Font.new(Families.Body, Enum.FontWeight.Medium),
@@ -108,6 +124,11 @@ return {
 	SerifBold = Font.new(Families.Serif, Enum.FontWeight.Bold),
 
 	Damage = Font.new(Families.Damage, Enum.FontWeight.Bold),
+
+	-- Item names (tooltip), and the calligraphic flavour line: see enumFont above.
+	Fantasy = enumFont("Grenze", Enum.FontWeight.Bold, nil, SerifBoldFallback),
+	FantasySemibold = enumFont("Grenze", Enum.FontWeight.SemiBold, nil, SerifBoldFallback),
+	Calligraphy = enumFont("Fondamento", Enum.FontWeight.Regular, nil, SerifItalicFallback),
 
 	NPCDefault = NPCDefault,
 	NPCOverrides = NPCOverrides,

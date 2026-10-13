@@ -285,11 +285,12 @@ end
 -- Drop/Trash both go through requestInventoryAct (DropItem/TrashItem kinds) rather than
 -- their own RemoteFunctions -- same reasoning as requestEquip/requestUnequip already
 -- being thin wrappers around it: one dispatch path, all validation server-side.
-function DungeonMenuNet.requestDropItem(itemUuid)
+-- `count` (optional): drop only that many off a stack; nil drops the whole item.
+function DungeonMenuNet.requestDropItem(itemUuid, count)
 	if type(itemUuid) ~= "string" or itemUuid == "" then
 		return false, "bad_uuid"
 	end
-	return DungeonMenuNet.requestInventoryAct({ kind = "DropItem", uuid = itemUuid })
+	return DungeonMenuNet.requestInventoryAct({ kind = "DropItem", uuid = itemUuid, count = count })
 end
 
 function DungeonMenuNet.requestTrashItem(itemUuid)

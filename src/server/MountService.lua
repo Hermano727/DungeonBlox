@@ -6,6 +6,9 @@
 	toggles the same way. Rules and numbers: RS/MountConfig.
 	  - Allowed when alive, out of combat, not in a dungeon, past the summon cooldown, and the
 	    player owns a saddle (the fastest one owned sets the speed).
+	  - Calling it takes a 3 s channel (MountConfig.SUMMON_CHANNEL_SECONDS; MountChannelEnd /
+	    MountChannelLength attributes, the same cast bar as the hearthstone), instant inside a
+	    safe (Lawful) zone. Combat, moving, death or H again cancels it. Sending it away is instant.
 	  - Combat of any kind throws the rider off and the horse bolts (checked every tick), and so
 	    does an arrow from someone allowed to attack the rider (OnMountShot, from BowService).
 	  - Death, respawn, leaving, entering a dungeon: the horse goes.
@@ -256,6 +259,77 @@ local function mount(player)
 	return true
 end
 
+----------------------------------------------------------------------------------------------
+-- Calling the horse (2026-10-12): a channel of MountConfig.SUMMON_CHANNEL_SECONDS out of combat,
+-- instant in a safe (Lawful) zone. Published like the hearthstone's: MountChannelEnd (server
+-- clock) + MountChannelLength player attributes, drawn by client/HearthstoneChannelClient's cast
+-- bar. Combat, death, leaving, H again or moving cancels it.
+
+local summons = {} -- [player] = { conns, thread }
+
+local function inSafeZone(player)
+	local zones = ServerScriptService:FindFirstChild("ZoneService")
+	local zs = zones and require(zones)
+	return zs ~= nil and zs.IsPlayerInSafeZone(player)
+end
+
+local function clearSummon(player)
+	local s = summons[player]
+	if not s then return nil end
+	summons[player] = nil
+	for _, conn in ipairs(s.conns) do conn:Disconnect() end
+	player:SetAttribute("MountChannelEnd", nil)
+	player:SetAttribute("MountChannelLength", nil)
+	return s
+end
+
+-- `reason` nil = the player's own cancel (H again), which needs no message.
+local function cancelSummon(player, reason)
+	local s = clearSummon(player)
+	if not s then return false end
+	if s.thread and coroutine.running() ~= s.thread then pcall(task.cancel, s.thread) end
+	local text = reason and MountConfig.SUMMON_INTERRUPTED[reason]
+	if text then flash(player, text) end
+	return true
+end
+
+local function startSummon(player)
+	local ok, reason = canMount(player)
+	if not ok then return false, reason end
+	if inSafeZone(player) then return mount(player) end
+
+	local root, hum = rootAndHumanoid(player)
+	local startPos = root.Position
+	local seconds = MountConfig.SUMMON_CHANNEL_SECONDS
+	local s = { conns = {} }
+	summons[player] = s
+	table.insert(s.conns, hum.Died:Connect(function() cancelSummon(player, "died") end))
+	table.insert(s.conns, player.CharacterRemoving:Connect(function() cancelSummon(player, "died") end))
+	table.insert(s.conns, RunService.Heartbeat:Connect(function()
+		if summons[player] ~= s then return end
+		if CombatStateService.IsInCombat(player) then
+			cancelSummon(player, "combat")
+			return
+		end
+		local drift = root.Position - startPos
+		if Vector3.new(drift.X, 0, drift.Z).Magnitude > MountConfig.SUMMON_MOVE_TOLERANCE then
+			cancelSummon(player, "moved")
+		end
+	end))
+	player:SetAttribute("MountChannelLength", seconds)
+	player:SetAttribute("MountChannelEnd", Workspace:GetServerTimeNow() + seconds)
+	s.thread = task.delay(seconds, function()
+		if summons[player] ~= s then return end
+		clearSummon(player)
+		if not player.Parent then return end
+		local okMount, why = mount(player) -- re-checks combat, cooldown and the saddle
+		if not okMount then
+			flash(player, MountConfig.REFUSALS[why] or "Your horse didn't come.")
+		end
+	end)
+	return true, "summoning"
+end
+
 function MountService.Toggle(player)
 	local now = os.clock()
 	if now - (lastToggle[player.UserId] or 0) < RATE then return false, "busy" end
@@ -264,7 +338,11 @@ function MountService.Toggle(player)
 		dismount(player, "toggle")
 		return true, "dismounted"
 	end
-	return mount(player)
+	if summons[player] then
+		cancelSummon(player, nil)
+		return true, "cancelled"
+	end
+	return startSummon(player)
 end
 
 -- For existing callers (MobManager calls it the moment a player strikes a mob): in combat that's
@@ -399,6 +477,7 @@ end
 Players.PlayerAdded:Connect(hookPlayer)
 for _, p in ipairs(Players:GetPlayers()) do task.spawn(hookPlayer, p) end
 Players.PlayerRemoving:Connect(function(p)
+	cancelSummon(p, nil)
 	dismount(p, "removed")
 	lastToggle[p.UserId] = nil
 	readyAt[p.UserId] = nil

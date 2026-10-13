@@ -511,7 +511,11 @@ function EquippedHotbar.syncFromProfile(player, profile)
 	-- (Helm/Chest/Legs/Boots/Shield armor + Weapon/Bow/Pickaxe/FishingSpear tools).
 	if type(equipped) == "table" then
 		for slot, uuid in pairs(equipped) do
-			trySpawn(slot, uuid)
+			-- The Mount socket is the horse's (H, MountService), not a held Tool: the saddle's
+			-- old Tool prefab would otherwise show up as a fifth tool.
+			if slot ~= "Mount" then
+				trySpawn(slot, uuid)
+			end
 		end
 	end
 	local character = player.Character

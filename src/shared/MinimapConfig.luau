@@ -61,7 +61,7 @@ MinimapConfig.MiniScale = 2.6         -- 95 cells = 380 studs across (scaled wit
 -- about what the corner map shows. Never further, so the M map can't be used to hunt people.
 MinimapConfig.OtherPlayerRadius = 190
 MinimapConfig.OtherPlayerColor = Color3.fromRGB(214, 92, 72)
-MinimapConfig.BigMinScale = .5
+MinimapConfig.BigMinScale = 1.2      -- zoomed fully out the T1 region about fills the M map; past it was empty fog (2026-10-11, was .5)
 MinimapConfig.BigMaxScale = 8
 MinimapConfig.ZoomStep = 1.25         -- per scroll notch / key press
 -- NPC markers (RS/NpcMapMarkers: every NPC with an NPCRegistry Nametag, as its nametag crest),
@@ -198,6 +198,13 @@ function MinimapConfig.ZoneOutline(zone)
 end
 
 -- Map extent in CELLS: { x0, z0, x1, z1 } (inclusive), or nil with no zones.
+-- The painted map's regions (RS/Assets/Images/WorldMapArt): the map always covers them whole,
+-- even past the zones (the zones alone clipped the T1 region's edges off the map, 2026-10-11).
+local okArt, WorldMapArt = pcall(function()
+	return require(script.Parent:WaitForChild("Assets"):WaitForChild("Images"):WaitForChild("WorldMapArt"))
+end)
+MinimapConfig.WorldArt = okArt and WorldMapArt or { Regions = {} }
+
 function MinimapConfig.CellBounds(zones)
 	local minX, minZ, maxX, maxZ = math.huge, math.huge, -math.huge, -math.huge
 	for _, zone in ipairs(zones) do
@@ -207,10 +214,26 @@ function MinimapConfig.CellBounds(zones)
 		end
 	end
 	if minX == math.huge then return nil end
+	for _, region in pairs(MinimapConfig.WorldArt.Regions) do
+		local b = region.Bounds
+		minX, maxX = math.min(minX, b.X0), math.max(maxX, b.X1)
+		minZ, maxZ = math.min(minZ, b.Z0), math.max(maxZ, b.Z1)
+	end
 	local m = MinimapConfig.BOUNDS_MARGIN
 	local x0, z0 = MinimapConfig.CellOf(minX - m, minZ - m)
 	local x1, z1 = MinimapConfig.CellOf(maxX + m, maxZ + m)
 	return { x0 = x0, z0 = z0, x1 = x1, z1 = z1 }
+end
+
+-- Is the centre of cell (cx, cz) on the painted map? (then the map shows the art there and the
+-- chunk image only draws the fog)
+function MinimapConfig.CellHasArt(cx, cz)
+	local x, z = (cx + .5) * MinimapConfig.CELL, (cz + .5) * MinimapConfig.CELL
+	for _, region in pairs(MinimapConfig.WorldArt.Regions) do
+		local b = region.Bounds
+		if x >= b.X0 and x < b.X1 and z >= b.Z0 and z < b.Z1 then return true end
+	end
+	return false
 end
 
 function MinimapConfig.CellInBounds(bounds, cx, cz)

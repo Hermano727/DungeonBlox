@@ -6,10 +6,11 @@ The top-down map of the overworld: a corner minimap, an expanded map on **M**, f
 
 - **Corner minimap:** top right, always on in the overworld, hidden inside dungeons.
   - Centred on the player, north up.
-  - A white arrow turns with the way the character faces.
-  - An ornate bronze ring with gold corner studs and an "N" notch frames it, and a small "M" keycap sits on its bottom-right corner (the key comes from `KeybindConfig.ToggleMap`).
+  - A painted compass needle (`MapUI.PLAYER_ARROW`) turns with the way the character faces; other players are the same needle tinted red.
+  - The flowering-vine frame (`MapUI.MINIMAP_FRAME`) sits round it, and the map moves in from the screen corner by however far the vines reach, with the quick-nav row hanging below them. No key badge: hovering it shows "World map" with its key (`KeybindConfig.ToggleMap`) as a key cap, and clicking it (free cursor) opens the M map.
+- **While the M map is open** the rest of the HUD steps back (`HudHider`, as behind the Tab menu: minimap, quick-nav row, hotbar); overlays such as the vitals stay.
 - **Expanded map (M):** opens centred on the player.
-  - Zoom with the scroll wheel or `+` / `-`; the controls are listed in the bottom-right corner.
+  - Zoom with the scroll wheel or `+` / `-`. The controls are listed bottom right on the small dark panel, one action per row with its keys as key caps (`HudQuickNav.KeyCap`; the list is `HINTS` in `init.client`).
   - Drag to look around. M or Esc closes it, and reopening re-centres on the player.
 - **Fog of war:** everything is black except:
   - ground the player has walked near (within `REVEAL_RADIUS` studs), saved to the profile;
@@ -30,6 +31,15 @@ The top-down map of the overworld: a corner minimap, an expanded map on **M**, f
     - The rays shoot up to about 140 studs in 0.6 s, hold for 1.3 s, then lift off and fade over 1.8 s.
     - A bright neon band on the ground traces the outline too. It shares one `Highlight` (AlwaysOnTop), so it shows through terrain and walls.
 
+## The painted map (2026-10-11)
+
+The ground on both maps is real top-down captures of the T1 region (`RS/Assets/Images/WorldMapArt`, 25 tiles at 2.22 px per stud), drawn by `MapView:SetWorldArt` UNDER the chunk images.
+- **Fog:** over the art, a chunk image is only the fog of war (explored = see-through, unexplored = `MapStyle.FOG`). Chunks entirely on the art never ask the server for colours. The raycast colours (and `MapStyle`) still cover anything outside an art region.
+- **Bounds:** the map always includes the art regions whole (`MinimapConfig.CellBounds`). Before, it stopped 200 studs past the zones and clipped the region's edges.
+- **Landmark layer:** the world tree's canopy (`Tree3`) over the ground, fading as you zoom in.
+- **Frames (2026-10-11):** the map's own art, `RS/Assets/Images/MapUI` (sources in `assets/UI/incoming/map/`): a thin double bronze rule with small flowering vines at the corners, like an explorer's map margin. Each frame's `Window` is the rule's centre line, laid right over the map's edge. The M map keeps the frame's shape (`UIAspectRatioConstraint`) so the vines and the top crest never stretch. The key hints sit on the small dark map panel (`MapUI.PANEL`). Without the art, plain bronze strokes.
+- **Capture method and recapturing:** `assets/ui/world_map/README.md`.
+
 ## Player markers (2026-10-10)
 
 Your own pins: **General**, **Mining**, **Fishing**, **Combat** (`MinimapConfig.PlayerMarkerTypes`). Client: `client/Minimap/PlayerMarkers`; server: `MinimapMarkerAction` in `SSS/MinimapService`.
@@ -48,7 +58,8 @@ Your own pins: **General**, **Mining**, **Fishing**, **Combat** (`MinimapConfig.
 - **Tracking** (one pin at a time, saved as `profile.map.tracked`): the pin wears a breathing ring on both maps; when it's out of view it sits on the view's edge with a pointer toward it (corner map and M map); in the world a beacon (its badge + distance, always on top) stands over it, hidden within 10 studs. Distances read in studs as "m".
 - **Saving:** `profile.map.markers` as `{ id, type, x, z }` in map cells, ids from `markerSeq`. The server validates every action (known type, in-map position, cap `PlayerMarkerMax` = 40, a 0.15 s rate limit). The client updates at once and rolls back if the server refuses. The F8 map reset keeps pins; a profile wipe clears them. Legend filters are per session.
 - **Input is hit-tested** from `UserInputService` (rows, pins, panels), not GuiButton events, and the M map is its own ScreenGui at `UILayers.WORLD_MAP` (300). It used to share the minimap's layer (30), under most of the HUD, and the quest tracker / banners swallowed the picker's clicks: only the first row worked.
-- **Look:** a dark round plate, a ring in the type's colour, the icon. Reused art for now (`MapView.PLAYER_MARKER_ICONS`): Combat = `HudIcons.COMBAT` (sword and shield), Fishing = `ConsumableIcons.FISH`, Mining = `ItemConfig.TOOL_ICONS.Pickaxe`, General = a drawn bronze diamond. Dedicated pin art replaces them with one registry entry each.
+- **Pin look:** the painted pin badge (`MapUI.PIN_RING`): a pale ring tinted in the type's colour round a dark disc, with a point below it. The icon in the disc comes from `MapView.PLAYER_MARKER_ICONS`: General = a planted pennant (`MapUI.MARKER_GENERAL`), Combat = `HudIcons.COMBAT`, Fishing = `ConsumableIcons.FISH`, Mining = `ItemConfig.TOOL_ICONS.Pickaxe`. A `WorldMapRequest` pin is a gold General badge.
+- **Menu look (`client/Minimap/MapNote`):** a cartographer's notes. The picker, the card, the hover tooltip, the toast and a requested pin's label are parchment slips pinned onto the map (`MapUI.NOTE`). The legend is the map's cartouche (`MapUI.CARTOUCHE`, drawn at its own width ratio so only its height stretches), its title on the ribbon. Text is ink in the Journal's serif and colours. The rows carry ink icons (`MapUI.MENU_ICONS`, one sheet: Track / Stop tracking, Change type, Remove, Shown / Hidden eyes, Centre), and a small leaf (`MapUI.ROW_POINTER`) slides in beside the hovered row.
 - **Not yet:** touch (no right click; a long press is the natural gesture), names / notes on pins, sharing pins with the party, saving the legend filters.
 
 ## Files
@@ -60,6 +71,8 @@ Your own pins: **General**, **Mining**, **Fishing**, **Combat** (`MinimapConfig.
 | `client/Minimap/init.client` | Controller: UI frames, input, local reveal, chunk images, remotes |
 | `client/Minimap/MapStyle` | Turns the raw cell colours into the stylized look (blur, colour bands, parchment grade, ink shores and cliffs, soft fog edge). Pure client-side post-processing |
 | `client/Minimap/MapView` | One rendering of the map in a frame; the corner and expanded maps are two MapViews over the same chunk images |
+| `client/Minimap/MapNote` | The map's paper: parchment slip / cartouche backings, ink labels, the ink icon sheet |
+| `RS/Assets/Images/MapUI` | The map's art ids and their measurements (frame rules, slices, the pin's circle, icon cells) |
 | `SSS/NpcLocations` | Publishes every registered NPC (one Folder per NpcId with `NpcType` / `Position` attributes) under `RS.NpcLocations.Markers`, tutorial copies left out; the client never needs the model streamed in |
 | `RS/NpcMapMarkers` | The middle man: maps those folders onto map markers from `NPCRegistry` (name, `Nametag`) and `NpcNametagArt` (icon); `List()` + `Changed` |
 | `client/Minimap/DiscoveryPeek` | The in-world see-through outline that rises and fades on a first discovery |

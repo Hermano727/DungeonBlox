@@ -16,9 +16,13 @@ Signature gear dropped by named elites (`MobData` `IsNamedElite`). The drop side
 | Base-stat "high roll" | `ItemGenerator` `options.highRoll` |
 | Mythic pieces (`Mythic` key on an entry) | `RS/MythicItemDefs` + `SSS/MythicItemBuilder.Build` |
 
+**No regular gear (2026-10-12):** a named elite never rolls the ordinary score-driven gear pool; its signature roll is its only gear. Its kill is worth `LootPityConfig.NAMED_ELITE_SCORE_PER_KILL` (5, vs 1 for an ordinary mob) plus the loot buff's bonus, credited to the Journal's loot score, the tier totals and the leaderboards only (no rolls, no pity streaks moved). Coins and key fragments still roll as for any mob (`LootService.tryDropGearByScore`).
+
 ## Mythic pieces from a named elite (Kane's set)
 
-Kane's def has `OneDrop = { EquivalentRarity = "Rare" }`: **one** roll per kill at 1/32 (T1 Rare chance), and a hit drops **exactly one** piece picked by `Weight`: the waraxe 1/3 (5 of 15), one of the five armour pieces 2/3 (2 each, so 2/15 apiece). Never two pieces from one kill. A pool entry like `{ Key = "KaneForsakenWaraxe", Mythic = "KaneForsakenWaraxe", Weight = 5 }` is then built by `NamedEliteLootService.BuildItem`, which hands it to `MythicItemBuilder.Build(entry.Mythic)`, the same factory the dungeon bosses use:
+**Who can take it (2026-10-12):** the drop is world loot owned by the player whose kill **summoned** the elite (`mob._summonerUserId`, set by MobManager's `trackNamedElite`, also for an F8 force-spawn), so stealing the last hit doesn't take it; if the summoner has left the server it goes to the killing blow's player. Only the owner can pick it up, for its whole 5-minute lifetime, after which it despawns. Mythic drops are `protected`, so the 60-drop cap (`MAX_CONCURRENT_MOB_LOOT`, oldest evicted first) never removes one early.
+
+Kane's def has `OneDrop = { Denominator = 10 }`: **one** roll per kill at a flat 1/10 (2026-10-12; it was the T1 Rare chance, 1/32, via `OneDrop = { EquivalentRarity = "Rare" }`, which still works for other elites), and a hit drops **exactly one** piece picked by `Weight`: the waraxe 1/3 (5 of 15), one of the five armour pieces 2/3 (2 each, so 2/15 apiece). Never two pieces from one kill. A pool entry like `{ Key = "KaneForsakenWaraxe", Mythic = "KaneForsakenWaraxe", Weight = 5 }` is then built by `NamedEliteLootService.BuildItem`, which hands it to `MythicItemBuilder.Build(entry.Mythic)`, the same factory the dungeon bosses use:
 
 - base stats roll as an ordinary item of the def's `BaseStatsAs` rarity (Kane: Rare, T1, level 12), anywhere in the Rare range, **not** high-rolled;
 - the def's `SubStats` are guaranteed, nothing random on top: an authored `{ min, max }`, or `useStandardRoll` for the registry's own tier window;

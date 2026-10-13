@@ -110,6 +110,7 @@ return {
 	CookSizzle = "",
 	FishEat = "",
 	Panting = "", -- looped heavy breathing while out of energy (PantingEffects); not chosen yet
+	DashWhoosh = "rbxassetid://99277096441013", -- the dash's rush of air (RS/DashFx); the Tab-switch whoosh for now, swap for a real one
 	ItemBreak = "", -- your gear broke (ItemBrokenClient); not chosen yet
 	LevelUp = "", -- a skill level-up (LevelUpEffect, played at the player for everyone nearby); not chosen yet
 

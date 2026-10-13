@@ -28,6 +28,10 @@ LootPityConfig.CHANCE_CAP     = 0.9999
 LootPityConfig.DEFAULT_LOOT_BUFF   = 1.0
 LootPityConfig.MAX_LOOT_BUFF       = 10.0
 LootPityConfig.BASE_SCORE_PER_KILL = 1
+-- A named elite's kill (2026-10-12): worth this much score, but it rolls NONE of the regular
+-- pool (its only gear is its signature roll, NamedEliteLootService), so the score is credit only:
+-- the Journal's loot score, the tier totals and the leaderboards (LootService.tryDropGearByScore).
+LootPityConfig.NAMED_ELITE_SCORE_PER_KILL = 5
 
 LootPityConfig.DUNGEON_SCORE_MULTIPLIER = { [1]=3.0, [2]=3.0, [3]=3.5, [4]=4.0, [5]=4.5 }
 LootPityConfig.DEATH_SCORE_RETENTION    = 1.0   -- dying costs nothing; key was already paid

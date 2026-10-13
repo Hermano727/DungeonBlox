@@ -81,6 +81,9 @@ local function trackNamedElite(player, mob)
     mob._lastCombatAt = os.clock() -- the idle-despawn clock starts at spawn
     if player then
         PlayerActiveEliteMob[player.UserId] = mob
+        -- The player whose kill summoned it: owns its signature-gear drop, whoever lands the
+        -- last hit (NamedEliteLootService, 2026-10-12: a kill-steal can't take a Mythic).
+        mob._summonerUserId = player.UserId
     end
 end
 
@@ -240,6 +243,7 @@ function ProcessMobDeath(mob, killingBlowPlayer)
                     local spawnedElite = mob.SpawnerRef:SpawnMob()
                     if spawnedElite and tutorialKill then
                         spawnedElite._tutorialOwner = killingBlowPlayer.UserId
+                        spawnedElite._summonerUserId = killingBlowPlayer.UserId
                         setBossBar(killingBlowPlayer, spawnedElite) -- their bar only
                     elseif spawnedElite then
                         trackNamedElite(killingBlowPlayer, spawnedElite)

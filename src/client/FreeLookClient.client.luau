@@ -1,7 +1,8 @@
 local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindConfig"))
 --[[
 	FreeLookClient
-	Hold Left or Right Ctrl to release the cursor from first-person lock.
+	Hold Keys.FreeLook (Left or Right Ctrl by default; rebindable on Settings > Controls) to
+	release the cursor from first-person lock.
 	Camera stops rotating (FirstPersonViewModel checks MouseBehavior each frame).
 	Release Ctrl to snap back to locked / camera-controlled mode.
 ]]
@@ -11,22 +12,18 @@ local UserInputService  = game:GetService("UserInputService")
 
 local CursorManager = require(ReplicatedStorage:WaitForChild("CursorManager"))
 
-local CTRL_KEYS = {
-	[Keys.FreeLook[1]] = true,
-	[Keys.FreeLook[2]] = true,
-}
 local held = {}
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if gameProcessed then return end
-	if CTRL_KEYS[input.KeyCode] then
+	if Keys.Matches(Keys.FreeLook, input.KeyCode) then
 		held[input.KeyCode] = true
 		CursorManager.setFree("freelook", true)
 	end
 end)
 
 UserInputService.InputEnded:Connect(function(input)
-	if CTRL_KEYS[input.KeyCode] then
+	if held[input.KeyCode] then -- whatever was held (even if rebound meanwhile) lets go
 		held[input.KeyCode] = nil
 		if not next(held) then
 			CursorManager.setFree("freelook", false)

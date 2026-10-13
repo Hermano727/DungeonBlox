@@ -350,6 +350,21 @@ local function tryDropGearByScore(mob, tier, level, killingBlowPlayer, deathPos,
         LeaderboardService.Add(killingBlowPlayer, tier, 1, gained)
     end
 
+    -- A named elite rolls only its signature gear (NamedEliteLootService, in onMobDied), never
+    -- this pool. Its kill still counts: NAMED_ELITE_SCORE_PER_KILL (5, vs 1 for an ordinary mob)
+    -- plus the loot buff's usual bonus, credited to the Journal and the leaderboards only.
+    if mob.Stats and mob.Stats.IsNamedElite and not DungeonScore.IsInRun(killingBlowPlayer) then
+        local PityConfig = require(ReplicatedStorage:WaitForChild("LootPityConfig"))
+        local buffBonus = PityConfig.RollScore(Pity.GetLootBuff(killingBlowPlayer)) - 1
+        local gained = PityConfig.NAMED_ELITE_SCORE_PER_KILL + math.max(0, buffBonus)
+        recordScore(tier, gained)
+        local profile = DungeonProfile.Get(killingBlowPlayer)
+        if profile then
+            JournalActivity.Add(profile, tier, { o = gained, k = 1 })
+        end
+        return scatterIndex
+    end
+
     -- In a dungeon the score is banked, not spent.
     if DungeonScore.IsInRun(killingBlowPlayer) then
         local _, gained = DungeonScore.AddKill(killingBlowPlayer, mob, contribution)
@@ -462,8 +477,9 @@ function LootService.onMobDied(mob, killingBlowPlayer)
         scatterIndex = tryDropGearByScore(mob, tier, level, killingBlowPlayer, deathPos, ownerUserId, scatterIndex)
         scatterIndex = tryDropMythic(mob, killingBlowPlayer, deathPos, scatterIndex)
     end
-    -- Named-elite signature gear: flat per-item chance, no score/pity, to the
-    -- killing player only. Separate from the Mythic path above -- see
+    -- Named-elite signature gear: its ONLY gear roll (tryDropGearByScore skips the regular
+    -- pool for a named elite; coins and key fragments still roll above). Owned by the player
+    -- who summoned it, else the killer. Separate from the dungeon Mythic path above -- see
     -- NamedEliteLootService and docs/named-elite-loot.md.
     if mob.Stats and mob.Stats.IsNamedElite then
         local EliteLoot = require(ServerScriptService:WaitForChild("NamedEliteLootService"))

@@ -176,6 +176,47 @@ end
 -- Action handlers  (each returns a result table {ok, err?, ...})
 ---------------------------------------------------------------------------
 
+-- A saddle (2026-10-12): mounts are unlocks (ProfileService UnlockMount / RideMount).
+--   tier <= unlocked      ride it: free, its saddle goes in the Mount slot
+--   tier == unlocked + 1  pay, unlock it for good, ride it
+--   higher                refused ("mount_locked"): T1, then T2, then T3, then T4
+local function handleMountPurchase(player, entry, def)
+    local tier = math.floor(tonumber(def.Tier) or 1)
+    local unlocked = DungeonProfile.MountTier(player)
+    if tier <= unlocked then
+        local okRide, errRide = DungeonProfile.RideMount(player, tier)
+        return { ok = okRide == true, err = errRide, rode = true }
+    end
+    if tier > unlocked + 1 then
+        return { ok = false, err = "mount_locked" }
+    end
+    local dProfile = getDungeonProfile(player)
+    if not dProfile then return { ok = false, err = "no_profile" } end
+    local cost = math.max(0, math.floor(tonumber(entry.Price) or 0))
+    local currency = entry.Currency or "Coins"
+    -- Take the payment first: unlocking can't fail once the tier is the next one.
+    if dProfile.currencies[currency] ~= nil then
+        local balance = dProfile.currencies[currency] or 0
+        if balance < cost then return { ok = false, err = "insufficient_funds" } end
+        dProfile.currencies[currency] = balance - cost
+    else
+        if countItem(player, currency) < cost then return { ok = false, err = "insufficient_funds" } end
+        if not removeItemAcrossStores(player, currency, cost) then return { ok = false, err = "remove_failed" } end
+    end
+    local okUnlock, errUnlock = DungeonProfile.UnlockMount(player, tier)
+    if not okUnlock then
+        -- Refund (another request raced this one to the same tier).
+        if dProfile.currencies[currency] ~= nil then
+            dProfile.currencies[currency] = (dProfile.currencies[currency] or 0) + cost
+        else
+            DungeonProfile.GrantItemId(player, currency, cost, { by = player, kind = ItemIdentity.SOURCE.SHOP_PURCHASE, src = "refund" })
+        end
+        DungeonProfile.PushProfile(player)
+        return { ok = false, err = errUnlock or "mount_locked" }
+    end
+    return { ok = true, wallet = dProfile.currencies.Coins or 0, unlocked = tier }
+end
+
 -- BuyItem: deduct currency, add item to slot inventory
 local function handleBuyItem(player, _npcId, npcType, params)
     local itemId = params.itemId
@@ -187,6 +228,9 @@ local function handleBuyItem(player, _npcId, npcType, params)
     if not entry then return {ok=false, err="not_in_catalog"} end
 
     if not ItemDefinitions.Get(itemId) then return {ok=false, err="unknown_item"} end
+    if tonumber(ItemDefinitions.Get(itemId).MountSpeed) then
+        return handleMountPurchase(player, entry, ItemDefinitions.Get(itemId))
+    end
 
     local cost     = entry.Price * qty
     local currency = entry.Currency or "Coins"

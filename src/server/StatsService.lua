@@ -1,7 +1,9 @@
 --[[
   Computes derived stats from base profile.stats + equipped item subStats.
   SubStat ids (additive):
-    MaxHp, ArmorRating, HPRegen, EnergyRegen, MiningLevel, FishingLevel
+    MaxHp, ArmorRating, HPRegen, EnergyRegen
+  Mining / fishing levels are the skill levels alone (2026-10-12): tools no longer add a level
+  bonus; every profession starts at 1 and is earned.
 ]]
 
 local StatsService = {}
@@ -48,15 +50,13 @@ function StatsService.BuildSnapshot(profile)
 	local addArmor   = sumEquipped(profile, "armor")
 	local addHps     = sumEquipped(profile, "hps")
 	local addEnergy  = sumEquipped(profile, "energy")
-	local addMining  = sumEquipped(profile, "MiningLevel")
-	local addFishing = sumEquipped(profile, "FishingLevel")
 
 	local maxHp       = math.max(1, c.maxHp + addHp)
 	local armor       = math.max(0, addArmor)
 	local hpRegen     = math.max(0, c.hpRegen + addHps)
 	local energyRegen = math.max(0, c.energyRegen + addEnergy)
-	local miningLevel = math.max(1, math.floor(m.miningLevel + addMining))
-	local fishingLevel = math.max(1, math.floor(f.fishingLevel + addFishing))
+	local miningLevel = math.max(1, math.floor(m.miningLevel))
+	local fishingLevel = math.max(1, math.floor(f.fishingLevel))
 
 	local hp = profile.runtime.currentHp
 	if hp > maxHp then

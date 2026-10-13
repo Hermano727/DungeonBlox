@@ -45,6 +45,7 @@ local ERRORS = {
 	remove_failed      = "Couldn't take the payment from your bags.",
 	grant_failed       = "Your bags are full.",
 	not_salvageable    = "Only unequipped weapons or armor can be salvaged.",
+	mount_locked       = "Unlock the horse before it first.",
 	equipped           = "Unequip it first.",
 	in_raid            = "Not during a dungeon run.",
 	not_owned          = "That's no longer in your bags.",
@@ -308,7 +309,7 @@ end
 -- the starting text; onChanged(text) fires as you type, onSubmit(text) on Enter.
 function ShopParts.Input(props: any)
 	return e("Frame", {
-		Position = props.Position, AnchorPoint = props.AnchorPoint, Size = props.Size,
+		Position = props.Position, AnchorPoint = props.AnchorPoint, Size = props.Size, LayoutOrder = props.LayoutOrder,
 		BackgroundColor3 = Style.Flat.Trough, BackgroundTransparency = 0.1, BorderSizePixel = 0,
 	}, {
 		Corner = e("UICorner", { CornerRadius = UDim.new(0, 5) }),

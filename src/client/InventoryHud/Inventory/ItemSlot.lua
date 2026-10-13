@@ -33,6 +33,9 @@ export type ItemSlotProps = {
 	-- slot contain-fit down to ~85 px, where an 8-unit outline shrinks to ~1.4 px). Defaults keep
 	-- every other caller (shops, Enchanting Station) exactly as it was.
 	borderThickness: number?,
+	-- The empty slot's outline (default 8, tuned for the bag's 508-unit canvas). Callers drawing at
+	-- real pixel size (the bank, ~42 px) pass their own, or 8 px swamps the cell.
+	emptyBorderThickness: number?,
 	iconScale: number?,
 	-- Rounds the outline to match a rounded pocket behind the slot (the bag's).
 	cornerRadius: number?,
@@ -63,7 +66,7 @@ local function ItemSlot(props: ItemSlotProps)
 	elseif item then
 		children.Stroke = e(RarityBorder, { rarity = rarity, thickness = thickness })
 	else
-		children.Stroke = e(RarityBorder, { color = EMPTY_BORDER_COLOR, thickness = 8 })
+		children.Stroke = e(RarityBorder, { color = EMPTY_BORDER_COLOR, thickness = props.emptyBorderThickness or 8 })
 	end
 
 	if item and rarity == "Legendary" then

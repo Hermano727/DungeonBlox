@@ -23,7 +23,7 @@ local function templateForTool(tool)
 			rarity = "Common",
 			tier = 1,
 			enchantLevel = 0,
-			subStats = { MiningLevel = 1 },
+			subStats = {}, -- no level bonus: profession skills start at 1 and are earned
 			equipSlot = "Pickaxe",
 		}
 	elseif name == "WoodenPickaxe" then
@@ -32,7 +32,7 @@ local function templateForTool(tool)
 			type = "Material",
 			rarity = "Common",
 			tier = 1, enchantLevel = 0,
-			subStats = { MiningLevel = 1 },
+			subStats = {}, -- no level bonus: profession skills start at 1 and are earned
 			equipSlot = "Pickaxe",
 			durability = 1500, maxDurability = 1500,
 		}
@@ -43,7 +43,7 @@ local function templateForTool(tool)
 			rarity = "Common",
 			tier = 1,
 			enchantLevel = 0,
-			subStats = { FishingLevel = 1 },
+			subStats = {},
 			equipSlot = "FishingSpear",
 		}
 	elseif name == "WoodenSpear" then
@@ -52,7 +52,7 @@ local function templateForTool(tool)
 			type = "Material",
 			rarity = "Common",
 			tier = 1, enchantLevel = 0,
-			subStats = { FishingLevel = 1 },
+			subStats = {},
 			equipSlot = "FishingSpear",
 			durability = 1500, maxDurability = 1500,
 		}

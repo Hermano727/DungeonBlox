@@ -1,13 +1,18 @@
 --!strict
 --  PlayerPreview -- the Inventory tab's left side (rebuilt 2026-09-30 as the "courtyard
 --  diorama"): your character standing on the painted flagstones (CharacterViewport, drag to
---  turn), with the nine gear slots as carved sockets around it:
+--  turn), with the ten gear slots as carved sockets around it:
 --
 --      Helm
---      Chest      character     Weapon
---      Legs                     Shield
---      Boots                    Bow
---               Pickaxe  Fishing Spear      (smaller, under the feet)
+--      Chest      character     Weapon   Pickaxe        } the tool column hangs on a timber
+--      Legs                     Shield   Fishing Spear  } rack (InventoryUI.TOOL_RACK), each
+--      Boots                    Bow      Mount          } socket on one of its iron bands
+--
+--  (2026-10-12: the profession tools left their small sockets under the feet for full-size ones
+--  beside the combat column, joined by Mount, which always shows the fastest saddle you own;
+--  the canvas widened, so the satchel moved right.) The tool sockets show an engraved disc
+--  (InventoryUI.SOCKET_DISCS: a pickaxe / fishing spear / horse head) so an empty one says
+--  what goes there.
 --
 --  The courtyard itself is InventoryBackdrop (its own ScreenGui, behind the menu).
 --
@@ -31,29 +36,45 @@ local EnchantBadge = require(script.Parent:WaitForChild("EnchantBadge"))
 local DurabilityBar = require(script.Parent:WaitForChild("DurabilityBar"))
 local CharacterViewport = require(script.Parent:WaitForChild("CharacterViewport"))
 local Style = require(script.Parent:WaitForChild("Journal"):WaitForChild("Style"))
+local InventoryUI = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Images"):WaitForChild("InventoryUI"))
 local e = React.createElement
 
-local DESIGN = Vector2.new(840, 1170) -- Inventory/init.lua's STAGE_ASPECT mirrors this
-local SOCKET = 150       -- armor + combat sockets
-local TOOL_SOCKET = 124  -- the two profession sockets under the feet
-local PLAQUE_H = 44
+local DESIGN = Vector2.new(1130, 1170) -- Inventory/init.lua's STAGE_ASPECT mirrors this
+-- 2026-10-12: sockets (ring, name plaque, rarity ring) and the spacing between them 15% larger.
+local SOCKET_SCALE = 1.15
+local SOCKET = math.floor(150 * SOCKET_SCALE + 0.5) -- every socket
+local DISC = 0.78        -- the engraved disc, of the socket (inside the carved ring)
+local PLAQUE_H = math.floor(44 * SOCKET_SCALE + 0.5)
+local PLAQUE_W = math.floor(180 * SOCKET_SCALE + 0.5)
 local ICON_FRACTION = 0.64 -- the item picture, of the socket (the carved ring is the rest)
-local RING_THICKNESS = 4 -- the rarity ring, design px
+local RING_THICKNESS = 4 * SOCKET_SCALE -- the rarity ring, design px
 
 -- The character: centred and as tall as the column allows, standing on the flagstones (FEET_Y
 -- is where its feet land; the viewport frames the model with 15% headroom, see
 -- CharacterViewport FRAME_PADDING). Above its head is a band for the HP / hunger cluster:
--- this component publishes that spot (VITALS_Y, at the figure's centre) as the vitals anchor,
+-- this component publishes that spot (just over the head, at the figure's centre) as the vitals anchor,
 -- ProfileMenusState.SetCarouselAnchor, so the bars sit over the player. The sockets tuck in
 -- around the figure, the right column centred on the left one.
-local VITALS_Y = 18
-local FIGURE = { x = 225, y = 110, w = 390, h = 900 }
-local FEET_Y = FIGURE.y + FIGURE.h * (1 - 0.15 / 2 / 1.15)
+-- 2026-10-12: the whole scene (figure, sockets, rack) sits SCENE_DROP lower on the canvas, nearer
+-- the bottom of the screen, and the vitals hang just over the character's head instead of at the
+-- canvas top: the anchor is the head's top in real px, minus the cluster's height (HP bar, gap,
+-- hunger + potion row: HealthClient HP_HEIGHT 10 + MENU_GAP_HP_TO_HUNGER 10 + the ~22 px row)
+-- and a small gap. Real px, not design px, because the cluster doesn't scale with the canvas.
+local SCENE_DROP = 50
+local FIGURE = { x = 225, y = 110 + SCENE_DROP, w = 390, h = 900 }
+local HEADROOM = 0.15 / 2 / 1.15 -- the empty space CharacterViewport leaves above the head, of FIGURE.h
+local FEET_Y = FIGURE.y + FIGURE.h * (1 - HEADROOM)
+local VITALS_CLUSTER_H = 42 -- real px
+local VITALS_GAP = 8 -- real px, between the cluster and the head
 
-local LEFT_X, RIGHT_X = 105, 735
-local LEFT_ROWS = { 250, 450, 650, 850 }
-local RIGHT_ROWS = { 350, 550, 750 }
-local TOOLS_Y = 1060
+-- Rows 230 apart (200 before the 15%), around the same centre (y 550). The tool column sits 270
+-- right of the combat column: the scaled 230 plus 40 of breathing room, so it doesn't crowd it.
+local ROW_STEP = 230
+local ROWS_MID = 550 + SCENE_DROP
+local LEFT_X, RIGHT_X, TOOL_X = 115, 735, 1005
+local LEFT_ROWS = { ROWS_MID - 1.5 * ROW_STEP, ROWS_MID - 0.5 * ROW_STEP, ROWS_MID + 0.5 * ROW_STEP, ROWS_MID + 1.5 * ROW_STEP }
+local RIGHT_ROWS = { ROWS_MID - ROW_STEP, ROWS_MID, ROWS_MID + ROW_STEP }
+local RACK_W = math.floor(180 * SOCKET_SCALE + 0.5) -- the timber rack behind the tool column (its bands line up with RIGHT_ROWS)
 
 local SLOTS = {
 	{ id = "Helmet",       label = "Helm",          slot = "Helm",         x = LEFT_X,  y = LEFT_ROWS[1] },
@@ -63,8 +84,9 @@ local SLOTS = {
 	{ id = "Weapon",       label = "Weapon",        slot = "Weapon",       x = RIGHT_X, y = RIGHT_ROWS[1] },
 	{ id = "Shield",       label = "Shield",        slot = "Shield",       x = RIGHT_X, y = RIGHT_ROWS[2] },
 	{ id = "Bow",          label = "Bow",           slot = "Bow",          x = RIGHT_X, y = RIGHT_ROWS[3] },
-	{ id = "Pickaxe",      label = "Pickaxe",       slot = "Pickaxe",      x = 330,     y = TOOLS_Y, small = true },
-	{ id = "FishingSpear", label = "Fishing Spear", slot = "FishingSpear", x = 510,     y = TOOLS_Y, small = true },
+	{ id = "Pickaxe",      label = "Pickaxe",       slot = "Pickaxe",      x = TOOL_X,  y = RIGHT_ROWS[1], disc = "Pickaxe" },
+	{ id = "FishingSpear", label = "Fishing Spear", slot = "FishingSpear", x = TOOL_X,  y = RIGHT_ROWS[2], disc = "FishingSpear" },
+	{ id = "Mount",        label = "Mount",         slot = "Mount",        x = TOOL_X,  y = RIGHT_ROWS[3], disc = "Mount" },
 }
 
 local function padScale(art: any): (UDim2, UDim2)
@@ -81,7 +103,7 @@ type SocketProps = {
 	slot: string,
 	x: number,
 	y: number,
-	small: boolean?,
+	disc: string?, -- an InventoryUI.SOCKET_DISCS cell: the engraved face inside the ring
 	item: any?,
 	onClick: (() -> ())?,
 	onRightClick: ((x: number, y: number) -> ())?,
@@ -92,7 +114,7 @@ type SocketProps = {
 
 local function Socket(props: SocketProps)
 	local hovered, setHovered = React.useState(false)
-	local size = props.small and TOOL_SOCKET or SOCKET
+	local size = SOCKET
 	local item = props.item
 	-- GetRarityForItem (not raw item.rarity): catalog grants without a stamped rarity still
 	-- resolve one from the catalog.
@@ -137,6 +159,11 @@ local function Socket(props: SocketProps)
 		inner.Durability = DurabilityBar.ForItem(item, { width = 0.7, bottom = 1.02 })
 	end
 
+	-- The engraved disc (tool / mount sockets): full strength while empty, dimmed under an item
+	-- so the engraving doesn't compete with the icon.
+	local discs = InventoryUI.SOCKET_DISCS
+	local discCell = props.disc and discs.Image ~= "" and discs.Cells[props.disc] or nil
+
 	return e("Frame", {
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromOffset(props.x, props.y),
@@ -144,6 +171,18 @@ local function Socket(props: SocketProps)
 		BackgroundTransparency = 1,
 	}, {
 		Ring = ring,
+		Disc = discCell and e("ImageLabel", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromScale(DISC, DISC),
+			BackgroundTransparency = 1,
+			Image = discs.Image,
+			ImageRectOffset = discCell.Offset,
+			ImageRectSize = discCell.Size,
+			ImageColor3 = item and Color3.fromRGB(110, 110, 110) or Color3.new(1, 1, 1),
+			ScaleType = Enum.ScaleType.Fit,
+			ZIndex = 2,
+		}) or nil,
 		-- Rarity: a thin coloured ring just inside the carved one (code-drawn, so it's crisp at
 		-- any size and Legendary/Mythic animate through RarityBorder).
 		Rarity = item and e("Frame", {
@@ -165,13 +204,13 @@ local function Socket(props: SocketProps)
 		}, inner),
 		Plaque = e("ImageLabel", {
 			AnchorPoint = Vector2.new(0.5, 0),
-			Position = UDim2.new(0.5, 0, 1, -6),
-			Size = UDim2.fromOffset(props.small and 196 or 180, PLAQUE_H),
+			Position = UDim2.new(0.5, 0, 1, -6 * SOCKET_SCALE),
+			Size = UDim2.fromOffset(PLAQUE_W, PLAQUE_H),
 			BackgroundTransparency = 1,
 			Image = (Style.Art("nav_plaque") or { Image = "" }).Image,
 			ScaleType = Style.Art("nav_plaque") and Enum.ScaleType.Slice or Enum.ScaleType.Stretch,
 			SliceCenter = Style.Art("nav_plaque") and (Style.Art("nav_plaque") :: any).SliceCenter or nil,
-			SliceScale = 0.22,
+			SliceScale = 0.22 * SOCKET_SCALE,
 			ZIndex = 5,
 		}, {
 			Label = e("TextLabel", {
@@ -179,7 +218,7 @@ local function Socket(props: SocketProps)
 				BackgroundTransparency = 1,
 				Text = props.label,
 				FontFace = Style.Font.Chrome,
-				TextSize = props.small and 21 or 24,
+				TextSize = math.floor((props.label == "Fishing Spear" and 21 or 24) * SOCKET_SCALE + 0.5),
 				TextColor3 = hovered and Style.Chrome.Selected or Style.Chrome.Label,
 				ZIndex = 6,
 			}),
@@ -258,7 +297,7 @@ local function PlayerPreview(props: PlayerPreviewProps?)
 			local pos = canvas.AbsolutePosition
 			ProfileMenusState.SetCarouselAnchor(Vector2.new(
 				pos.X + (FIGURE.x + FIGURE.w / 2) * k,
-				pos.Y + VITALS_Y * k
+				pos.Y + (FIGURE.y + FIGURE.h * HEADROOM) * k - VITALS_CLUSTER_H - VITALS_GAP
 			))
 		end
 		publish()
@@ -294,6 +333,22 @@ local function PlayerPreview(props: PlayerPreviewProps?)
 		sockets[def.id] = e(Socket, p)
 	end
 
+	-- The timber rack behind the tool column, scaled so its three iron bands sit at the three
+	-- sockets' centres (the rack's own height follows from that).
+	local rack = InventoryUI.TOOL_RACK
+	local rackEl = nil
+	if rack.Image ~= "" then
+		local k = (RIGHT_ROWS[2] - RIGHT_ROWS[1]) / (rack.Bands[2] - rack.Bands[1])
+		rackEl = e("ImageLabel", {
+			AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.fromOffset(TOOL_X, RIGHT_ROWS[1] - rack.Bands[1] * k),
+			Size = UDim2.fromOffset(RACK_W, rack.Size.Y * k),
+			BackgroundTransparency = 1,
+			Image = rack.Image,
+			ZIndex = 2,
+		})
+	end
+
 	local shadow = Style.Art("inv_shadow")
 	return e("Frame", {
 		ref = hostRef,
@@ -325,6 +380,7 @@ local function PlayerPreview(props: PlayerPreviewProps?)
 				zIndex = 2,
 				rotatable = true,
 			}),
+			Rack = rackEl,
 			Sockets = e("Frame", {
 				Size = UDim2.fromScale(1, 1),
 				BackgroundTransparency = 1,

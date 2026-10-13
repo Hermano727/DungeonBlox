@@ -7,7 +7,9 @@ local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindC
 	In the air it's an AIR DASH (2026-10-04): once per jump (resets on landing), AIR_DIST_MULT
 	further, and the fall is held off while it lasts, so it carries you across a gap.
 	It stops short of walls (a ray ahead), on the ground and in the air.
-	Server: EnergyServer RequestDash (energy cost + cooldown).
+	Server: EnergyServer RequestDash (energy cost + cooldown), which also tells nearby players to draw it.
+	Look (2026-10-12): the run frozen mid-stride for the burst (RS/Assets/Animations/DashAnimations, one of
+	three arm placements at random, armed or unarmed) plus RS/DashFx (air burst, dust, speed lines, whoosh).
 ]]
 
 local RunService = game:GetService("RunService")
@@ -16,6 +18,10 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 
 local Config = require(ReplicatedStorage:WaitForChild("EnergyConfig"))
+local DashFx = require(ReplicatedStorage:WaitForChild("DashFx"))
+local DashAnimations = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Animations"):WaitForChild("DashAnimations"))
+local CharacterAnimProfiles = require(ReplicatedStorage:WaitForChild("CharacterAnimProfiles"))
+local ActiveEquipment = require(ReplicatedStorage:WaitForChild("ActiveEquipment"))
 local player = Players.LocalPlayer
 
 local character = script.Parent
@@ -122,9 +128,15 @@ local function getDashUi()
 	fill.BorderSizePixel = 0
 	fill.Parent = keyChip
 	Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 3)
-	local keyText = slotLabel(keyChip, Keys.Dash.Name, 11)
+	local keyText = slotLabel(keyChip, Keys.DisplayName(Keys.Dash), 11)
 	keyText.Size = UDim2.fromScale(1, 1)
 	keyText.ZIndex = 2
+	-- The key label follows a rebind (Settings > Controls); dropped with the slot on respawn.
+	local keyConn
+	keyConn = Keys.Changed:Connect(function()
+		if not keyText:IsDescendantOf(game) then keyConn:Disconnect() return end
+		keyText.Text = Keys.DisplayName(Keys.Dash)
+	end)
 
 	local icon = Instance.new("ImageLabel")
 	icon.Name = "DashIcon"
@@ -185,6 +197,54 @@ local function flatOnXZ(v)
 	return Vector3.new(v.X, 0, v.Z)
 end
 
+-- The dash pose: loaded once per life, Action2 so it sits over the run, the jump and a swing.
+local POSE_FADE_IN, POSE_FADE_OUT, POSE_LINGER = 0.05, 0.18, 0.04
+local poseTracks = {} -- [variant][Unarmed|Armed] = AnimationTrack
+local lastVariant = nil
+local poseToken = 0
+
+local function poseTrack(variant, kind)
+	local byKind = poseTracks[variant]
+	if not byKind then byKind = {}; poseTracks[variant] = byKind end
+	if byKind[kind] then return byKind[kind] end
+	local animator = humanoid:FindFirstChildOfClass("Animator")
+	local id = DashAnimations.Clips[variant] and DashAnimations.Clips[variant][kind]
+	if not animator or not id or id == "" then return nil end
+	local animation = Instance.new("Animation")
+	animation.AnimationId = id
+	local ok, track = pcall(function() return animator:LoadAnimation(animation) end)
+	if not ok or not track then return nil end
+	track.Priority = Enum.AnimationPriority.Action2
+	track.Looped = false
+	byKind[kind] = track
+	return track
+end
+
+-- A different arm placement from the last dash, armed or not by what's in hand (the run's own rule).
+local function playDashPose(duration)
+	local options = {}
+	for _, variant in ipairs(DashAnimations.Variants) do
+		if variant ~= lastVariant then table.insert(options, variant) end
+	end
+	local variant = options[math.random(1, #options)]
+	lastVariant = variant
+	local armed = CharacterAnimProfiles.GetProfileForTool(ActiveEquipment.GetTool(character)) == "Sword"
+	local track = poseTrack(variant, armed and "Armed" or "Unarmed")
+	if not track then return end
+	poseToken += 1
+	local token = poseToken
+	track:Play(POSE_FADE_IN, 1, 1)
+	task.delay(duration + POSE_LINGER, function()
+		if token == poseToken and track.IsPlaying then track:Stop(POSE_FADE_OUT) end
+	end)
+end
+
+task.spawn(function() -- load the clips before the first dash
+	for _, variant in ipairs(DashAnimations.Variants) do
+		poseTrack(variant, "Unarmed"); poseTrack(variant, "Armed")
+	end
+end)
+
 local function easeOutQuad(t)
 	t = math.clamp(t, 0, 1)
 	return 1 - (1 - t) * (1 - t)
@@ -226,9 +286,18 @@ local function tryDash()
 		return
 	end
 
+	local dir = dashDirectionUnit()
+	local walk = math.max(1, humanoid.WalkSpeed)
+	local slideDuration = math.clamp(
+		SLIDE_DURATION_BASE + walk * SLIDE_DURATION_PER_SPEED,
+		SLIDE_DURATION_MIN,
+		SLIDE_DURATION_MAX
+	)
+
 	local dashOk = false
 	local invokeOk, invokeResult = pcall(function()
-		return RequestDash:InvokeServer()
+		-- Direction / air / length only so the server can show the dash to others; it trusts none of it.
+		return RequestDash:InvokeServer(dir, inAir, slideDuration)
 	end)
 	if invokeOk and invokeResult == true then
 		dashOk = true
@@ -237,23 +306,18 @@ local function tryDash()
 		return
 	end
 
-	local dir = dashDirectionUnit()
-	local walk = math.max(1, humanoid.WalkSpeed)
 	local studs = math.clamp(DIST_BASE + walk * DIST_PER_WALKSPEED, DIST_MIN, DIST_MAX)
 	if inAir then
 		airDashUsed = true
 		studs *= AIR_DIST_MULT
 	end
 	studs = clearDistance(dir, studs)
-	local slideDuration = math.clamp(
-		SLIDE_DURATION_BASE + walk * SLIDE_DURATION_PER_SPEED,
-		SLIDE_DURATION_MIN,
-		SLIDE_DURATION_MAX
-	)
 
 	isDashing = true
 	lastDashClock = os.clock()
 	startDashCooldownUI()
+	playDashPose(slideDuration)
+	DashFx.Play(character, dir, { duration = slideDuration, inAir = inAir })
 
 	local easedPrev = 0
 	local t0 = os.clock()

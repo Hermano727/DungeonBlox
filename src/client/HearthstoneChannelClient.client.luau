@@ -1,5 +1,7 @@
 --[[
-	HearthstoneChannelClient -- the cast bar while your hearthstone channels.
+	HearthstoneChannelClient -- the cast bar while your hearthstone channels, or while you call
+	your horse (2026-10-12: SSS/MountService, MountChannelEnd / MountChannelLength, 3 s out of a
+	safe zone). Every channel is one CHANNELS entry: its two attributes and the bar's title.
 
 	The server (SSS/HearthstoneService.StartChannel) runs the channel and publishes it as two
 	attributes on your Player: HearthChannelEnd (workspace:GetServerTimeNow() it completes at)
@@ -7,7 +9,7 @@
 	draws them: a bronze plate in the middle of the screen, just under the crosshair (a channel
 	is the thing you're doing right now), with the countdown and a filling bar. Out of combat
 	only, Lawful 10 / Neutral 20 / Chaotic 30 s (3 s in the tutorial); moving or entering combat
-	cancels it (the server decides and flashes why).
+	cancels it (the server decides and flashes why). The horse call works the same way.
 
 	Art: RS/Assets/Images/JournalUI nav_plaque (the plate) and bar_trough (the track).
 ]]
@@ -96,24 +98,42 @@ local function stop()
 	gui.Enabled = false
 end
 
+-- One entry per channel the server can run on you (the first live one is drawn).
+local CHANNELS = {
+	{ endAttr = "HearthChannelEnd", lengthAttr = "HearthChannelLength", title = "Hearthstone" },
+	{ endAttr = "MountChannelEnd", lengthAttr = "MountChannelLength", title = "Calling your horse" },
+}
+
+local function liveChannel()
+	for _, channel in ipairs(CHANNELS) do
+		local endsAt = player:GetAttribute(channel.endAttr)
+		local length = player:GetAttribute(channel.lengthAttr)
+		if type(endsAt) == "number" and type(length) == "number" and length > 0 then
+			return channel, endsAt, length
+		end
+	end
+	return nil
+end
+
 local function refresh()
-	local endsAt = player:GetAttribute("HearthChannelEnd")
-	local length = player:GetAttribute("HearthChannelLength")
-	if type(endsAt) ~= "number" or type(length) ~= "number" or length <= 0 then
+	if not liveChannel() then
 		stop()
 		return
 	end
 	gui.Enabled = true
 	if renderConn then return end
 	renderConn = RunService.RenderStepped:Connect(function()
+		local channel, endsAt, length = liveChannel()
+		if not channel then return end
 		local left = math.max(0, endsAt - workspace:GetServerTimeNow())
-		local done = 1 - left / length
-		fill.Size = UDim2.new(math.clamp(done, 0, 1), -8 * math.clamp(done, 0, 1), 1, -8)
-		label.Text = ("Hearthstone  %.1fs"):format(left)
-		endsAt = player:GetAttribute("HearthChannelEnd") or endsAt
+		local done = math.clamp(1 - left / length, 0, 1)
+		fill.Size = UDim2.new(done, -8 * done, 1, -8)
+		label.Text = ("%s  %.1fs"):format(channel.title, left)
 	end)
 end
 
-player:GetAttributeChangedSignal("HearthChannelEnd"):Connect(refresh)
-player:GetAttributeChangedSignal("HearthChannelLength"):Connect(refresh)
+for _, channel in ipairs(CHANNELS) do
+	player:GetAttributeChangedSignal(channel.endAttr):Connect(refresh)
+	player:GetAttributeChangedSignal(channel.lengthAttr):Connect(refresh)
+end
 refresh()

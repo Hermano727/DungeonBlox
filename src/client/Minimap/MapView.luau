@@ -4,6 +4,7 @@
 
 		local view = MapView.new(parentFrame, { labelScale = 5, labelMin = 10, labelMax = 16, cornerRadius = 6 })
 		view:SetBounds(bounds)                    -- MinimapConfig.CellBounds
+		view:SetWorldArt(regions)                 -- the painted map (WorldMapArt), under the fog
 		view:SetChunkImage(key, content)          -- Content.fromObject(EditableImage)
 		view:SetZones(zones, discovered, labelAt) -- discovered outlines + names
 		view:SetScale(pixelsPerCell)
@@ -27,6 +28,7 @@ local Config = require(ReplicatedStorage:WaitForChild("MinimapConfig"))
 local UIFonts = require(ReplicatedStorage:WaitForChild("UIFonts"))
 local NametagArt = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Images"):WaitForChild("NpcNametagArt"))
 local HudArt = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Images"):WaitForChild("HudArt"))
+local MapUI = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Images"):WaitForChild("MapUI"))
 local HudIcons = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Icons"):WaitForChild("Hud"):WaitForChild("HudIcons"))
 local ConsumableIcons = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Icons"):WaitForChild("Consumables"):WaitForChild("ConsumableIcons"))
 local ItemConfig = require(ReplicatedStorage:WaitForChild("ItemConfig"))
@@ -37,7 +39,7 @@ MapView.__index = MapView
 
 local OUTLINE_PX = 2
 local GLOW_PX = 9
-local ARROW_PX = 22
+local ARROW_PX = 22        -- the arrow's height (the painted one is narrower than it is tall)
 local OTHER_ARROW_PX = 17
 local BLACK = Color3.new(0, 0, 0)
 local NPC_GREEN = Color3.fromHex("28462C")
@@ -50,9 +52,9 @@ local NPC_RING = 1.16
 local NPC_SHADOW = 1.75
 local NPC_SHADOW_DROP = .1
 
--- Player marker icons (MVP: existing art; dedicated pins can replace these later). "" or a
--- missing entry = no image: General draws a bronze diamond pin instead.
+-- Player marker icons. "" or a missing entry = no image: a bronze diamond pin instead.
 local PLAYER_MARKER_ICONS = {
+	General = MapUI.MARKER_GENERAL.Image, -- a planted pennant
 	Combat = HudIcons.COMBAT,         -- the game's combat icon (sword and shield)
 	Fishing = ConsumableIcons.FISH,
 	Mining = ItemConfig.TOOL_ICONS.Pickaxe,
@@ -63,10 +65,27 @@ local MARKER_RING_PX = 2
 local LABEL_GOLD = Color3.fromRGB(240, 222, 178)
 
 -------------------------------------------------------------------------------------------------
--- The player arrow, drawn once into a small EditableImage (no uploaded asset needed).
+-- The player arrow: the painted compass needle (MapUI.PLAYER_ARROW), else one drawn once into a
+-- small EditableImage.
+
+-- Dresses an arrow ImageLabel `px` tall; false if there is no image at all.
+local arrowImage
+local function dressArrow(arrow, px)
+	local art = MapUI.PLAYER_ARROW
+	if art.Image ~= "" then
+		arrow.Image = art.Image
+		arrow.Size = UDim2.fromOffset(math.floor(px * art.Aspect + .5), px)
+		return true
+	end
+	local content = arrowImage()
+	if not content then return false end
+	arrow.ImageContent = content
+	arrow.Size = UDim2.fromOffset(px, px)
+	return true
+end
 
 local arrowContent
-local function arrowImage()
+function arrowImage()
 	if arrowContent ~= nil then return arrowContent end
 	arrowContent = false
 	local ok, img = pcall(function() return AssetService:CreateEditableImage({ Size = Vector2.new(32, 32) }) end)
@@ -147,6 +166,13 @@ function MapView.new(parent, options)
 		f.Parent = canvas
 		return f
 	end
+	-- The painted map (RS/Assets/Images/WorldMapArt): ground photos under everything, then big
+	-- landmarks seen from above (the world tree's canopy), then the chunk images, which over the
+	-- art only draw the fog of war.
+	self.artLayer = layer("WorldArt", -1)
+	self.landmarkLayer = layer("Landmarks", 0)
+	self.art = {}       -- { label, x, z, w, h } in map cells
+	self.landmarks = {} -- same
 	self.tileLayer = layer("Tiles", 1)
 	self.outlineLayer = layer("Outlines", 2)
 	self.labelLayer = layer("Labels", 3)
@@ -171,11 +197,9 @@ function MapView.new(parent, options)
 	local arrow = Instance.new("ImageLabel")
 	arrow.Name = "PlayerArrow"
 	arrow.AnchorPoint = Vector2.new(.5, .5)
-	arrow.Size = UDim2.fromOffset(ARROW_PX, ARROW_PX)
 	arrow.BackgroundTransparency = 1
 	arrow.ZIndex = 10
-	local content = arrowImage()
-	if content then arrow.ImageContent = content else arrow.BackgroundTransparency = 0; arrow.Size = UDim2.fromOffset(8, 8) end
+	if not dressArrow(arrow, ARROW_PX) then arrow.BackgroundTransparency = 0; arrow.Size = UDim2.fromOffset(8, 8) end
 	arrow.Parent = clip
 	self.arrow = arrow
 	self.others = {} -- pooled arrows for other players
@@ -191,11 +215,9 @@ function MapView:SetOthers(centreX, centreZ, list, colour)
 			arrow = Instance.new("ImageLabel")
 			arrow.Name = "OtherArrow"
 			arrow.AnchorPoint = Vector2.new(.5, .5)
-			arrow.Size = UDim2.fromOffset(OTHER_ARROW_PX, OTHER_ARROW_PX)
 			arrow.BackgroundTransparency = 1
 			arrow.ZIndex = 9 -- under your own arrow
-			local content = arrowImage()
-			if content then arrow.ImageContent = content else arrow.BackgroundTransparency = 0; arrow.Size = UDim2.fromOffset(6, 6) end
+			if not dressArrow(arrow, OTHER_ARROW_PX) then arrow.BackgroundTransparency = 0; arrow.Size = UDim2.fromOffset(6, 6) end
 			arrow.Parent = self.clip
 			self.others[i] = arrow
 		end
@@ -457,10 +479,62 @@ function MapView:_layoutNpcMarkers()
 	end
 end
 
--- One player marker: a dark round plate, a ring in its type's colour, the type's icon. Also
--- used by the controller for the picker's buttons. Fills `parent` (give it a square size).
+-- One player marker, filling `parent` (give it a square size): the painted pin badge
+-- (MapUI.PIN_RING: a pale ring tinted in the type's colour round a dark disc, a point below,
+-- 2026-10-11) with the type's icon in the disc. The round part fills `parent`; the point hangs
+-- below it. Without the art: a dark round plate with a coloured ring. Also used for the picker
+-- and legend rows, the off-view pointer and the world beacon. Returns the "Plate".
+local function addMarkerIcon(plate, typeEntry, zIndex, centre, size)
+	local image = PLAYER_MARKER_ICONS[typeEntry.id]
+	if image and image ~= "" then
+		local icon = Instance.new("ImageLabel")
+		icon.Name = "Icon"
+		icon.AnchorPoint = Vector2.new(.5, .5)
+		icon.Position = UDim2.fromScale(centre.X, centre.Y)
+		icon.Size = UDim2.fromScale(size.X, size.Y)
+		icon.BackgroundTransparency = 1
+		icon.Image = image
+		icon.ScaleType = Enum.ScaleType.Fit
+		icon.ZIndex = zIndex
+		icon.Parent = plate
+		return
+	end
+	-- No icon: a small bronze diamond with a dark edge.
+	local pin = Instance.new("Frame")
+	pin.Name = "Pin"
+	pin.AnchorPoint = Vector2.new(.5, .5)
+	pin.Position = UDim2.fromScale(centre.X, centre.Y)
+	pin.Size = UDim2.fromScale(size.X * .6, size.Y * .6)
+	pin.Rotation = 45
+	pin.BackgroundColor3 = typeEntry.ring
+	pin.BorderSizePixel = 0
+	pin.ZIndex = zIndex
+	pin.Parent = plate
+	local edge = Instance.new("UIStroke")
+	edge.Color = NPC_INK
+	edge.Thickness = 1
+	edge.Parent = pin
+end
+
 function MapView.BuildPlayerMarkerBadge(parent, typeEntry, zBase)
 	zBase = zBase or 5
+	local art = MapUI.PIN_RING
+	if art.Image ~= "" then
+		local c, w, h = art.Circle, art.Size.X, art.Size.Y
+		local plate = Instance.new("ImageLabel")
+		plate.Name = "Plate"
+		plate.BackgroundTransparency = 1
+		plate.Image = art.Image
+		plate.ImageColor3 = typeEntry.ring
+		plate.Size = UDim2.fromScale(w / c.D, h / c.D)
+		plate.Position = UDim2.fromScale(.5 - c.X / c.D, .5 - c.Y / c.D)
+		plate.ZIndex = zBase + 1
+		plate.Parent = parent
+		local inner = art.Disc * .78 -- the icon, inside the disc with a little room
+		addMarkerIcon(plate, typeEntry, zBase + 2, Vector2.new(c.X / w, c.Y / h), Vector2.new(inner / w, inner / h))
+		return plate
+	end
+
 	local plate = Instance.new("Frame")
 	plate.Name = "Plate"
 	plate.AnchorPoint = Vector2.new(.5, .5)
@@ -478,37 +552,25 @@ function MapView.BuildPlayerMarkerBadge(parent, typeEntry, zBase)
 	ring.Thickness = MARKER_RING_PX
 	ring.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 	ring.Parent = plate
-
-	local image = PLAYER_MARKER_ICONS[typeEntry.id]
-	if image and image ~= "" then
-		local icon = Instance.new("ImageLabel")
-		icon.Name = "Icon"
-		icon.AnchorPoint = Vector2.new(.5, .5)
-		icon.Position = UDim2.fromScale(.5, .5)
-		icon.Size = UDim2.fromScale(.72, .72)
-		icon.BackgroundTransparency = 1
-		icon.Image = image
-		icon.ScaleType = Enum.ScaleType.Fit
-		icon.ZIndex = zBase + 2
-		icon.Parent = plate
-	else
-		-- The general pin: a small bronze diamond with a dark edge.
-		local pin = Instance.new("Frame")
-		pin.Name = "Pin"
-		pin.AnchorPoint = Vector2.new(.5, .5)
-		pin.Position = UDim2.fromScale(.5, .5)
-		pin.Size = UDim2.fromScale(.42, .42)
-		pin.Rotation = 45
-		pin.BackgroundColor3 = typeEntry.ring
-		pin.BorderSizePixel = 0
-		pin.ZIndex = zBase + 2
-		pin.Parent = plate
-		local edge = Instance.new("UIStroke")
-		edge.Color = NPC_INK
-		edge.Thickness = 1
-		edge.Parent = pin
-	end
+	addMarkerIcon(plate, typeEntry, zBase + 2, Vector2.new(.5, .5), Vector2.new(.72, .72))
 	return plate
+end
+
+-- Fades a badge from BuildPlayerMarkerBadge (the legend's hidden types).
+function MapView.FadePlayerMarkerBadge(plate, faded)
+	local alpha = faded and .6 or 0
+	if plate:IsA("ImageLabel") then
+		plate.ImageTransparency = alpha
+	else
+		plate.BackgroundTransparency = alpha
+	end
+	for _, child in ipairs(plate:GetChildren()) do
+		if child:IsA("ImageLabel") then
+			child.ImageTransparency = alpha
+		elseif child:IsA("Frame") then
+			child.BackgroundTransparency = alpha
+		end
+	end
 end
 
 -- Your own markers. `list` = { { id, type, x, z } }, x/z in map cells. Always shown (they're
@@ -623,6 +685,54 @@ function MapView:SetBounds(bounds)
 	self:Layout()
 end
 
+-- The landmark canopy fades as you zoom in, so the ground under it can be read: fully drawn at
+-- LANDMARK_SOLID px per cell and below, LANDMARK_FAINT transparency from LANDMARK_FADED up.
+local LANDMARK_SOLID, LANDMARK_FADED, LANDMARK_FAINT = 1.2, 4, .78
+
+-- regions: WorldMapArt.Regions. Builds one ImageLabel per tile; Layout() places them.
+function MapView:SetWorldArt(regions)
+	self.artLayer:ClearAllChildren()
+	self.landmarkLayer:ClearAllChildren()
+	table.clear(self.art)
+	table.clear(self.landmarks)
+	local cell = Config.CELL
+	local function add(list, layer, entry)
+		local label = Instance.new("ImageLabel")
+		label.BackgroundTransparency = 1
+		label.BorderSizePixel = 0
+		label.Image = entry.Image
+		label.ScaleType = Enum.ScaleType.Stretch
+		label.Parent = layer
+		table.insert(list, { label = label, x = entry.X / cell, z = entry.Z / cell, w = entry.W / cell, h = entry.H / cell })
+	end
+	for _, region in pairs(regions) do
+		for _, entry in ipairs(region.Tiles or {}) do add(self.art, self.artLayer, entry) end
+		for _, entry in ipairs(region.Landmark or {}) do add(self.landmarks, self.landmarkLayer, entry) end
+	end
+	self:Layout()
+end
+
+function MapView:_layoutArt()
+	local b = self.bounds
+	if not b then return end
+	local s = self.scale
+	-- Rounded edges and +1 px, so neighbouring tiles never leave a hairline gap between them.
+	local function place(entry)
+		local x0 = math.floor((entry.x - b.x0) * s)
+		local z0 = math.floor((entry.z - b.z0) * s)
+		local x1 = math.ceil((entry.x + entry.w - b.x0) * s)
+		local z1 = math.ceil((entry.z + entry.h - b.z0) * s)
+		entry.label.Position = UDim2.fromOffset(x0, z0)
+		entry.label.Size = UDim2.fromOffset(x1 - x0 + 1, z1 - z0 + 1)
+	end
+	for _, entry in ipairs(self.art) do place(entry) end
+	local fade = math.clamp((s - LANDMARK_SOLID) / (LANDMARK_FADED - LANDMARK_SOLID), 0, 1) * LANDMARK_FAINT
+	for _, entry in ipairs(self.landmarks) do
+		place(entry)
+		entry.label.ImageTransparency = fade
+	end
+end
+
 function MapView:SetChunkImage(key, content)
 	local tile = self.tiles[key]
 	if not tile then
@@ -728,8 +838,14 @@ function MapView:_layoutTile(key, tile)
 	if not b then return end
 	local kx, kz = Config.ParseKey(key)
 	local s = self.scale
-	tile.Position = UDim2.fromOffset((kx * Config.CHUNK - b.x0) * s, (kz * Config.CHUNK - b.z0) * s)
-	tile.Size = UDim2.fromOffset(Config.CHUNK * s, Config.CHUNK * s)
+	-- Whole-pixel edges and 1 px of overlap: at fractional positions the bilinear edge of each
+	-- chunk faded out and the art under the fog showed through as a grid of lines (2026-10-11).
+	local x0 = math.floor((kx * Config.CHUNK - b.x0) * s)
+	local z0 = math.floor((kz * Config.CHUNK - b.z0) * s)
+	local x1 = math.ceil(((kx + 1) * Config.CHUNK - b.x0) * s)
+	local z1 = math.ceil(((kz + 1) * Config.CHUNK - b.z0) * s)
+	tile.Position = UDim2.fromOffset(x0, z0)
+	tile.Size = UDim2.fromOffset(x1 - x0 + 1, z1 - z0 + 1)
 end
 
 function MapView:_layoutSegment(seg)
@@ -751,6 +867,7 @@ function MapView:Layout()
 	if not b then return end
 	local s = self.scale
 	self.canvas.Size = UDim2.fromOffset((b.x1 - b.x0 + 1) * s, (b.z1 - b.z0 + 1) * s)
+	self:_layoutArt()
 	for key, tile in pairs(self.tiles) do self:_layoutTile(key, tile) end
 	for _, seg in ipairs(self.segments) do self:_layoutSegment(seg) end
 	local textSize = math.clamp(math.floor(self.labelScale * s + .5), self.labelMin, self.labelMax)
@@ -767,7 +884,8 @@ function MapView:Update(centreX, centreZ, playerX, playerZ, look)
 	local b = self.bounds
 	if not b then return end
 	local s = self.scale
-	self.canvas.Position = UDim2.new(.5, -(centreX - b.x0) * s, .5, -(centreZ - b.z0) * s)
+	-- Whole pixels, so every tile edge lands on the same pixel grid.
+	self.canvas.Position = UDim2.new(.5, -math.floor((centreX - b.x0) * s + .5), .5, -math.floor((centreZ - b.z0) * s + .5))
 	if playerX then
 		self.arrow.Visible = true
 		self.arrow.Position = UDim2.new(.5, (playerX - centreX) * s, .5, (playerZ - centreZ) * s)

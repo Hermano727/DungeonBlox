@@ -16,6 +16,15 @@ local PotionConfig = require(game:GetService("ReplicatedStorage"):WaitForChild("
 --   WeaponId  : weapons only. Key into WeaponData.Weapons.
 --   Armor     : armor pieces only. Flat armor rating added when equipped.
 --   ProtectedOnDeath : explicit boolean. true means never dropped on player death.
+--   Untradeable    : optional boolean. Can't change hands (RS/ItemBinding "untradeable"): can't be
+--                    auctioned, and dropped or lost on death it vanishes instead of landing on
+--                    the ground. Training gear.
+--   Soulbound      : optional boolean (2026-10-12). Profile-bound (RS/ItemBinding "bound"): no way
+--                    to lose it: can't be dropped, trashed or auctioned, never lost on death.
+--                    Profession tools and saddles are bound by their Slot already; this marks
+--                    anything else.
+--   Slot           : (Materials) the equip slot it wears into: "Pickaxe" / "FishingSpear" /
+--                    "Mount" (saddles: the inventory's Mount socket holds the best one).
 --   HotbarEquippable : optional boolean. If set, gates assigning this catalog item to the 9-slot dungeon hotbar.
 --       Raw materials / collectibles should be false; weapons, tools, ammo, potions, food typically true.
 --   DisplayName : optional string for UI when different from itemId.
@@ -45,6 +54,7 @@ local PotionConfig = require(game:GetService("ReplicatedStorage"):WaitForChild("
 
 local MaterialIcons   = require(script.Parent.Assets.Icons.Materials.MaterialIcons)
 local KeyIcons        = require(script.Parent.Assets.Icons.Keys.KeyIcons)
+local MountIcons      = require(script.Parent.Assets.Icons.Mounts.MountIcons)
 local ConsumableIcons = require(script.Parent.Assets.Icons.Consumables.ConsumableIcons)
 local ItemConfig      = require(script.Parent:WaitForChild("ItemConfig"))
 
@@ -102,10 +112,10 @@ local Items = {
 	T1OrbOfDivinity = { Stackable = true, MaxStack = 100, Kind = "Material", Tier = 1, Rarity = "Rare", DisplayName = "T1 Orb of Divinity", HotbarEquippable = false, ProtectedOnDeath = false, CraftingOrb = true, OrbKind = "Divinity", Icon = "rbxassetid://78151024612669", Description = "Crafting reagent (no stat effect yet). Must match item tier (T1). In Character: right-click the orb, then right-click a weapon or armor to consume it." },
 
 	-- Mount saddles (Animal Trainer): hotbar tools that spawn the Horse model; Humanoid.WalkSpeed scales by tier.
-	T1MountSaddle = { Stackable = false, MaxStack = 1, Kind = "Material", Tier = 1, Rarity = "Common", DisplayName = "T1 Mount Saddle", HotbarEquippable = true, ProtectedOnDeath = false, ToolPrefabName = "DungeonMountSaddleTool", MountSpeed = 20 },
-	T2MountSaddle = { Stackable = false, MaxStack = 1, Kind = "Material", Tier = 2, Rarity = "Uncommon", DisplayName = "T2 Mount Saddle", HotbarEquippable = true, ProtectedOnDeath = false, ToolPrefabName = "DungeonMountSaddleTool", MountSpeed = 30 },
-	T3MountSaddle = { Stackable = false, MaxStack = 1, Kind = "Material", Tier = 3, Rarity = "Rare", DisplayName = "T3 Mount Saddle", HotbarEquippable = true, ProtectedOnDeath = false, ToolPrefabName = "DungeonMountSaddleTool", MountSpeed = 40 },
-	T4MountSaddle = { Stackable = false, MaxStack = 1, Kind = "Material", Tier = 4, Rarity = "Epic", DisplayName = "T4 Mount Saddle", HotbarEquippable = true, ProtectedOnDeath = false, ToolPrefabName = "DungeonMountSaddleTool", MountSpeed = 50 },
+	T1MountSaddle = { Stackable = false, MaxStack = 1, Kind = "Material", Tier = 1, Rarity = "Common", DisplayName = "T1 Mount Saddle", HotbarEquippable = true, ProtectedOnDeath = false, ToolPrefabName = "DungeonMountSaddleTool", MountSpeed = 20, Slot = "Mount", Icon = MountIcons.SADDLE },
+	T2MountSaddle = { Stackable = false, MaxStack = 1, Kind = "Material", Tier = 2, Rarity = "Uncommon", DisplayName = "T2 Mount Saddle", HotbarEquippable = true, ProtectedOnDeath = false, ToolPrefabName = "DungeonMountSaddleTool", MountSpeed = 30, Slot = "Mount", Icon = MountIcons.SADDLE },
+	T3MountSaddle = { Stackable = false, MaxStack = 1, Kind = "Material", Tier = 3, Rarity = "Rare", DisplayName = "T3 Mount Saddle", HotbarEquippable = true, ProtectedOnDeath = false, ToolPrefabName = "DungeonMountSaddleTool", MountSpeed = 40, Slot = "Mount", Icon = MountIcons.SADDLE },
+	T4MountSaddle = { Stackable = false, MaxStack = 1, Kind = "Material", Tier = 4, Rarity = "Epic", DisplayName = "T4 Mount Saddle", HotbarEquippable = true, ProtectedOnDeath = false, ToolPrefabName = "DungeonMountSaddleTool", MountSpeed = 50, Slot = "Mount", Icon = MountIcons.SADDLE },
 
 	-- Key fragments + forged keys (Dungeoneer: 40 fragments -> 1 key per tier)
 	T1KeyFragment = { Icon = "rbxassetid://96030572412553", Stackable = true, MaxStack = 100, Kind = "Material", Tier = 1, Rarity = "Uncommon", DisplayName = "T1 Key Fragment", HotbarEquippable = false, ProtectedOnDeath = false },
@@ -160,12 +170,12 @@ local Items = {
 	-- Regular (non-fish) food: TimeToEat > 0, no buffs by default.
 	Bread       = { Stackable = true, MaxStack = 100, Kind = "Food", Tier = 1, Rarity = "Common",   DisplayName = "Bread",       HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 2, TimeToEat = 2.0 },
 	CookedMeat  = { Stackable = true, MaxStack = 100, Kind = "Food", Tier = 1, Rarity = "Uncommon", DisplayName = "Cooked Meat", HotbarEquippable = true, ProtectedOnDeath = false, HungerAmount = 3, TimeToEat = 3.0 },
-	WoodenPickaxe = { Icon = ItemConfig.TOOL_ICONS.Pickaxe, Stackable = false, MaxStack = 1, Kind = "Material", Tier = 1, Rarity = "Common", DisplayName = "Wooden Pickaxe", HotbarEquippable = true, ProtectedOnDeath = true, ToolPrefabName = "WoodenPickaxe" },
-	WoodenSpear   = { Icon = ItemConfig.TOOL_ICONS.FishingRod, Stackable = false, MaxStack = 1, Kind = "Material", Tier = 1, Rarity = "Common", DisplayName = "Wooden Fishing Rod", HotbarEquippable = true, ProtectedOnDeath = true, ToolPrefabName = "WoodenSpear" },
+	WoodenPickaxe = { Icon = ItemConfig.TOOL_ICONS.Pickaxe, Stackable = false, MaxStack = 1, Kind = "Material", Tier = 1, Rarity = "Common", DisplayName = "Wooden Pickaxe", HotbarEquippable = true, ProtectedOnDeath = true, Soulbound = true, ToolPrefabName = "WoodenPickaxe" },
+	WoodenSpear   = { Icon = ItemConfig.TOOL_ICONS.FishingRod, Stackable = false, MaxStack = 1, Kind = "Material", Tier = 1, Rarity = "Common", DisplayName = "Wooden Fishing Rod", HotbarEquippable = true, ProtectedOnDeath = true, Soulbound = true, ToolPrefabName = "WoodenSpear" },
 
 	-- Weapons: each row maps to a WeaponData entry.
-	TrainingSword = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Sword, Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 1, Rarity = "Common", WeaponId = "TrainingSword", HotbarEquippable = true, ProtectedOnDeath = false, DisplayName = "Training Sword", ToolPrefabName = "TrainingSword" },
-	TrainingBow   = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Bow, Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 1, Rarity = "Common", WeaponId = "WoodenBow", HotbarEquippable = true, ProtectedOnDeath = false, DisplayName = "Training Bow" },
+	TrainingSword = { Untradeable = true, Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Sword, Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 1, Rarity = "Common", WeaponId = "TrainingSword", HotbarEquippable = true, ProtectedOnDeath = false, DisplayName = "Training Sword", ToolPrefabName = "TrainingSword" },
+	TrainingBow   = { Untradeable = true, Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Bow, Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 1, Rarity = "Common", WeaponId = "WoodenBow", HotbarEquippable = true, ProtectedOnDeath = false, DisplayName = "Training Bow" },
 	WoodenSword   = { Icon = ItemConfig.GENERATED_ITEM_ICONS[1].Sword, Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 1, Rarity = "Common", WeaponId = "WoodenSword", HotbarEquippable = true, ProtectedOnDeath = false, DisplayName = "Wooden Sword", ToolPrefabName = "Wood Sword" },
 	Low_tier_sword = { Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 1, Rarity = "Common", WeaponId = "WoodenSword", HotbarEquippable = true, ProtectedOnDeath = false, DisplayName = "Low Tier Sword", ToolPrefabName = "Low_tier_sword" },
 	AdminSword    = { Icon = ItemConfig.ADMIN_SWORD_ICON, Stackable = false, MaxStack = 1, Kind = "Weapon", Tier = 99, Rarity = "Legendary", WeaponId = "AdminSword", HotbarEquippable = true, ProtectedOnDeath = false, DisplayName = "Admin Sword", ToolPrefabName = "TrainingSword" },

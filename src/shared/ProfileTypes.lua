@@ -69,6 +69,8 @@ ProfileTypes.BAG_SLOT_COUNT = 30
 function ProfileTypes.DefaultProfile()
 	return {
 		version = ProfileTypes.VERSION,
+		-- The highest horse tier unlocked (2026-10-12, ProfileService UnlockMount / RideMount).
+		mountTier = 0,
 		-- Which one-way migrations have run on this profile. See ProfileTypes.MIGRATIONS.
 		migrations = {},
 		-- Stamped by Reconcile from the loading player. Lets an admin reading raw
@@ -270,6 +272,7 @@ local VALID_SLOTS = {
 	Ring        = true,
 	Pickaxe     = true,
 	FishingSpear = true,
+	Mount       = true, -- 2026-10-12: the saddle socket (ProfileService keeps the best one there)
 	Potion      = true,
 }
 
@@ -331,6 +334,12 @@ function ProfileTypes.GetAllowedEquipSlot(item)
 	end
 	if type(item.equipSlot) == "string" and VALID_SLOTS[item.equipSlot] then
 		return item.equipSlot
+	end
+	-- A catalog material with a Slot (tools, saddles) minted before its record carried an
+	-- equipSlot: the catalog still knows where it goes.
+	local def = type(item.itemId) == "string" and ItemDefinitions.Get(item.itemId) or nil
+	if def and type(def.Slot) == "string" and VALID_SLOTS[def.Slot] and item.type ~= "Weapon" and item.type ~= "Armor" then
+		return def.Slot
 	end
 	if item.type == "Weapon" then
 		warn("[ProfileTypes] GetAllowedEquipSlot: weapon item without a valid equipSlot, falling back to generic 'Weapon' -- itemId=", item.itemId)

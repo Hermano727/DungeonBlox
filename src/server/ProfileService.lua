@@ -27,6 +27,7 @@ local ArmorVisualsService = require(ServerScriptService:WaitForChild("ArmorVisua
 local InventoryAudit = require(ServerScriptService:WaitForChild("InventoryAudit"))
 local DurabilityService = require(ServerScriptService:WaitForChild("DurabilityService"))
 local ScriptedRigs = require(ServerScriptService:WaitForChild("ScriptedRigs"))
+local ItemBinding = require(ReplicatedStorage:WaitForChild("ItemBinding"))
 
 local ProfileService = {}
 
@@ -449,7 +450,7 @@ end
 -- invisible to the player).
 local STORAGE_EQUIP_SLOTS = {
 	Helm = true, Chest = true, Legs = true, Boots = true, Shield = true,
-	Weapon = true, Bow = true, Pickaxe = true, FishingSpear = true,
+	Weapon = true, Bow = true, Pickaxe = true, FishingSpear = true, Mount = true,
 }
 
 -- Returns the equip-box slot `item` could land in if the bag is full, or nil if it
@@ -1976,6 +1977,7 @@ local function isValidEquipSlot(slot)
 		or slot == "Ring"
 		or slot == "Pickaxe"
 		or slot == "FishingSpear"
+		or slot == "Mount"
 		or slot == "Potion"
 end
 
@@ -2003,6 +2005,11 @@ function ProfileService.EquipItem(player, itemUuid, equipOpts)
 	if not slot then
 		return false, "not_equippable"
 	end
+	-- The Mount slot is filled by unlocking / riding at the Animal Trainer (UnlockMount /
+	-- RideMount), never by hand.
+	if slot == "Mount" then
+		return false, "mount_seated"
+	end
 
 	if type(profile.equipped) == "table" and profile.equipped[slot] == itemUuid then
 		return true, nil
@@ -2028,6 +2035,9 @@ end
 function ProfileService.UnequipItem(player, slot)
 	if not isValidEquipSlot(slot) then
 		return false, "bad_slot"
+	end
+	if slot == "Mount" then
+		return false, "mount_seated" -- the slot's saddle only changes at the Animal Trainer
 	end
 	local profile = ProfileService.Load(player)
 	if type(profile.equipped) ~= "table" or profile.equipped[slot] == nil then
@@ -2088,16 +2098,48 @@ end
 	player is in combat -- dumping gear mid-fight (e.g. to bait/deny a killer, or duck
 	death-drop rules) isn't a safe-anytime action, same spirit as the trash/safe-zone
 	rule below.
+
+	`count` (optional, 2026-10-12): drop only part of a stack. For a stackable item with more
+	than `count` in it, the stack just shrinks and the returned table is a plain
+	{ itemId, count } (SpawnPlayerDrop drops stackables by itemId + count). No count, a count
+	of the whole stack or more, or a non-stackable item: the whole item goes, as before.
 ]]
-function ProfileService.DropItem(player, itemUuid)
+function ProfileService.DropItem(player, itemUuid, count)
 	local cs = getCombatState()
 	if cs and cs.IsInCombat(player) then
 		return false, "in_combat"
 	end
 	local profile = ProfileService.Load(player)
+	local owned = type(itemUuid) == "string" and profile.inventory[itemUuid] or nil
+	-- Binding (RS/ItemBinding): a profile-bound item (tools, saddles) can't be dropped at all; an
+	-- untradeable one (training gear) vanishes instead of landing on the ground (no 3rd value,
+	-- so ProfileBootstrap spawns nothing), so it can't be handed to someone else.
+	local binding = type(owned) == "table" and ItemBinding.Level(owned) or nil
+	if binding == ItemBinding.BOUND then
+		return false, "bound"
+	end
+	count = tonumber(count)
+	if type(owned) == "table" and count and ItemDefinitions.IsStackable(owned.itemId) then
+		count = math.floor(count)
+		if count < 1 then
+			return false, "bad_count"
+		end
+		local have = math.max(1, math.floor(tonumber(owned.count) or 1))
+		if count < have then
+			owned.count = have - count
+			ProfileService.PushProfile(player)
+			if binding == ItemBinding.UNTRADEABLE then
+				return true, nil, nil
+			end
+			return true, nil, { itemId = owned.itemId, count = count }
+		end
+	end
 	local item, err = removeOwnedItemFromProfile(player, profile, itemUuid)
 	if not item then
 		return false, err
+	end
+	if binding == ItemBinding.UNTRADEABLE then
+		return true, nil, nil
 	end
 	return true, nil, item
 end
@@ -2138,6 +2180,10 @@ function ProfileService.TrashItem(player, itemUuid)
 		return false, "not_safe_zone"
 	end
 	local profile = ProfileService.Load(player)
+	local owned = type(itemUuid) == "string" and profile.inventory[itemUuid] or nil
+	if type(owned) == "table" and ItemBinding.IsBound(owned) then
+		return false, "bound" -- profile-bound (RS/ItemBinding): no way to lose it
+	end
 	local item, err = removeOwnedItemFromProfile(player, profile, itemUuid)
 	if not item then
 		return false, err
@@ -2158,16 +2204,155 @@ local function stripOriginFromItems(inv)
 	return out
 end
 
+--[[
+	Mounts (2026-10-12) are UNLOCKS, not items you collect:
+	  - profile.mountTier = the highest horse unlocked (0 = none). Tiers unlock in order:
+	    T1, then T2, then T3, then T4 (UnlockMount refuses a skip).
+	  - The Mount slot holds exactly one saddle: the tier you ride. Unlocking a tier rides it,
+	    and the saddle it replaces vanishes. Any unlocked tier can be ridden again for free at
+	    the Animal Trainer (RideMount), e.g. to ride a slower horse.
+	  - Saddles never sit in the bag or the bank. normalizeMounts (every snapshot build) turns
+	    any saddle found there into an unlock and clears it: old saves, dev grants, a bank copy.
+	The horse rides whatever saddle is in the slot (MountConfig.BestSaddle reads it first).
+]]
+local function saddleTierOf(item)
+	local def = type(item) == "table" and type(item.itemId) == "string" and ItemDefinitions.Get(item.itemId) or nil
+	if def and tonumber(def.MountSpeed) then
+		return math.floor(tonumber(def.Tier) or 1)
+	end
+	return nil
+end
+
+local function saddleItemIdForTier(tier)
+	local itemId = ("T%dMountSaddle"):format(tier)
+	local def = ItemDefinitions.Get(itemId)
+	return (def and tonumber(def.MountSpeed)) and itemId or nil
+end
+
+-- Puts a fresh saddle of `tier` in the Mount slot; the one there vanishes.
+local function seatMountTier(player, profile, tier)
+	local itemId = saddleItemIdForTier(tier)
+	if not itemId then return false end
+	local it = ItemFactory.CreateOwnedItem(itemId, {
+		origin = { by = player, kind = ItemIdentity.SOURCE.SHOP_PURCHASE, src = itemId },
+	})
+	if not it then return false end
+	local old = profile.equipped.Mount
+	if type(old) == "string" and old ~= "" then
+		profile.inventory[old] = nil
+		clearItemUuidFromAllHotbar(profile, old)
+		clearUuidFromBagSlots(profile, old)
+	end
+	profile.inventory[it.uuid] = it
+	profile.equipped.Mount = it.uuid
+	return true
+end
+
+local function normalizeMounts(player, profile)
+	if type(profile.equipped) ~= "table" or type(profile.inventory) ~= "table" then return end
+	local before = math.floor(tonumber(profile.mountTier) or 0)
+	local unlocked = before
+	local seated = profile.equipped.Mount
+	if seated ~= nil and not saddleTierOf(profile.inventory[seated]) then
+		profile.equipped.Mount = nil -- a stale pointer (the item is gone)
+		seated = nil
+	end
+	-- Every other saddle is an unlock to record, then clear.
+	local spare = {}
+	for uuid, item in pairs(profile.inventory) do
+		local tier = saddleTierOf(item)
+		if tier then
+			unlocked = math.max(unlocked, tier)
+			if uuid ~= seated then table.insert(spare, uuid) end
+		end
+	end
+	local chest = type(profile.chestInventory) == "table" and profile.chestInventory or nil
+	local spareChest = {}
+	for uuid, item in pairs(chest or {}) do
+		local tier = saddleTierOf(item)
+		if tier then
+			unlocked = math.max(unlocked, tier)
+			table.insert(spareChest, uuid)
+		end
+	end
+	if #spare + #spareChest > 0 then
+		InventoryAudit.Sanction(player, "spare saddles cleared (mounts are unlocks now)")
+		for _, uuid in ipairs(spare) do
+			profile.inventory[uuid] = nil
+			clearItemUuidFromAllHotbar(profile, uuid)
+			clearUuidFromBagSlots(profile, uuid)
+			clearItemUuidFromAllEquipped(profile, uuid)
+		end
+		for _, uuid in ipairs(spareChest) do
+			chest[uuid] = nil
+			if type(profile.chestSlots) == "table" then
+				for k, v in pairs(profile.chestSlots) do
+					if v == uuid then profile.chestSlots[k] = nil end
+				end
+			end
+		end
+	end
+	profile.mountTier = unlocked
+	-- A tier unlocked outside the Animal Trainer (an old save's saddles, a dev grant), or an
+	-- empty slot with something unlocked: ride the best.
+	if unlocked > 0 and (unlocked > before or profile.equipped.Mount == nil) then
+		seatMountTier(player, profile, unlocked)
+	end
+end
+
+-- The highest horse tier unlocked (0 = none).
+function ProfileService.MountTier(player)
+	local profile = ProfileService.Load(player)
+	normalizeMounts(player, profile)
+	return math.floor(tonumber(profile.mountTier) or 0)
+end
+
+-- Rides an already-unlocked tier: its saddle goes in the Mount slot (free).
+function ProfileService.RideMount(player, tier)
+	local profile = ProfileService.Load(player)
+	normalizeMounts(player, profile)
+	tier = math.floor(tonumber(tier) or 0)
+	if tier < 1 or tier > (profile.mountTier or 0) then
+		return false, "mount_locked"
+	end
+	if not seatMountTier(player, profile, tier) then
+		return false, "unknown_item"
+	end
+	ProfileService.PushProfile(player)
+	return true, nil
+end
+
+-- Unlocks the NEXT tier and rides it. The caller (NPCService) has already taken the payment.
+function ProfileService.UnlockMount(player, tier)
+	local profile = ProfileService.Load(player)
+	normalizeMounts(player, profile)
+	tier = math.floor(tonumber(tier) or 0)
+	if tier ~= (profile.mountTier or 0) + 1 or not saddleItemIdForTier(tier) then
+		return false, "mount_locked"
+	end
+	profile.mountTier = tier
+	seatMountTier(player, profile, tier)
+	ProfileService.PushProfile(player)
+	return true, nil
+end
+
 function ProfileService.BuildSnapshotPayload(player)
 	local profile = ProfileService.Load(player)
 	ensureHotbar(profile)
 	ensureBagSlots(profile)
 	ensureChest(profile)
+	normalizeMounts(player, profile)
 	rehomeOrphanedItems(profile) -- nothing owned may be left invisible in what the client draws
 	-- Every weapon / armor piece has durability, whichever path granted it (cheap: one pass
 	-- over a few dozen items, and it's a no-op once they have it).
 	for _, item in pairs(profile.inventory) do
 		DurabilityService.EnsureDurability(item)
+		-- Tools used to carry a +1 mining / fishing level bonus; levels are earned only now
+		-- (2026-10-12), so the old stat is cleared off any tool that still has it.
+		if type(item) == "table" and type(item.subStats) == "table" then
+			item.subStats.MiningLevel = nil
+			item.subStats.FishingLevel = nil
+		end
 	end
 	local derived = StatsService.BuildSnapshot(profile)
 	local uid = player.UserId

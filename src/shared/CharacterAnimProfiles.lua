@@ -14,10 +14,18 @@
 	CombatAnimConfig and played by CombatClient at Action priority over
 	these locomotion tracks.
 
-	RunStart ids (2026-09-14) are re-authored 1.5x faster than the original
-	export -- the original pace looked clunky against this game's actual
-	sprint-start acceleration, which ramps up faster than the first cut of
-	the clip assumed.
+	Walk / RunStart / RunLoop (2026-10-12) are authored by script, not exported
+	FBX: assets/models/main character/locomotion/author_locomotion.py (4-step
+	asymmetric loops: uneven step timing, the left arm leads, overlap on elbow /
+	wrist / head, loops start on the passing pose; Run_Start ends on it). Walk is
+	authored for speed 8.7 and RunLoop for the sprint speed (Animate2 scales both
+	by the real speed). CrouchIdle / CrouchWalk (2026-10-12) come from the same script: an athletic
+	crouch (hips low between the feet, torso forward through the spine, knees over the toes), not the
+	old lean-back "invisible chair"), all sharing one base pose: CrouchEnter (standing -> crouch, ends on
+	CrouchIdle's first pose), CrouchIdle (4 s, breathing), CrouchWalk (4 studs/s = the crouch speed, ~0.9 s
+	per left/right cycle) and CrouchExit (crouch -> standing). Enter / Exit hold their last pose; Animate2
+	hands off on its own clock (CROUCH_ENTER_LENGTH / CROUCH_EXIT_LENGTH). Old FBX ids in the comments,
+	kept for a quick revert.
 ]]
 
 local BowConfig = require(script.Parent:WaitForChild("BowConfig"))
@@ -26,20 +34,24 @@ local CharacterAnimProfiles = {}
 
 CharacterAnimProfiles.Profiles = {
 	Unarmed = {
-		CrouchIdle = "rbxassetid://88535647574045",
-		CrouchWalk = "rbxassetid://75552957909461",
+		CrouchIdle = "rbxassetid://79347873142496", -- old FBX 88535647574045
+		CrouchWalk = "rbxassetid://124190788617594", -- old FBX 75552957909461
+		CrouchEnter = "rbxassetid://114249007153841", -- standing -> crouch, 0.32 s, then holds
+		CrouchExit = "rbxassetid://93551354269514",  -- crouch -> standing, 0.30 s, then holds
 		Idle = "rbxassetid://72094441737047",
-		Walk = "rbxassetid://95948405960169",
-		RunStart = "rbxassetid://140166382441030",
-		RunLoop = "rbxassetid://115075307442771",
+		Walk = "rbxassetid://105971759730904",      -- old FBX 95948405960169
+		RunStart = "rbxassetid://106277664313122", -- old FBX 140166382441030
+		RunLoop = "rbxassetid://126353627348863",   -- old FBX 115075307442771
 	},
 	Sword = {
-		CrouchIdle = "rbxassetid://125056721204059",
-		CrouchWalk = "rbxassetid://95552267471977",
+		CrouchIdle = "rbxassetid://102877477973093", -- old FBX 125056721204059
+		CrouchWalk = "rbxassetid://78931282062519", -- old FBX 95552267471977
+		CrouchEnter = "rbxassetid://136724588218577", -- standing -> crouch, 0.32 s, then holds
+		CrouchExit = "rbxassetid://94017312820670",  -- crouch -> standing, 0.30 s, then holds
 		Idle = "rbxassetid://134742105465889",
-		Walk = "rbxassetid://120007605000208",
-		RunStart = "rbxassetid://118461840134893",
-		RunLoop = "rbxassetid://83948294410663",
+		Walk = "rbxassetid://82335503911683",      -- old FBX 120007605000208
+		RunStart = "rbxassetid://106932126155402",  -- old FBX 118461840134893
+		RunLoop = "rbxassetid://110924516145160",  -- old FBX 83948294410663
 	},
 }
 
@@ -68,8 +80,9 @@ function CharacterAnimProfiles.GetProfileForTool(tool)
 end
 
 --------------------------------------------------------------------------
--- Sword grip offset (Hand_R bone-local CFrame) -- see
--- WeaponAttachClient.client.lua for how this is applied
+-- Seeded one-handed grip frame (Hand_R bone-local CFrame), now used by the pickaxe and
+-- spear only (the sword has its own measured grip since 2026-10-13, SWORD_GRIP_OFFSET
+-- below) -- see WeaponAttachClient.client.lua for how this is applied
 -- (Hand_R.TransformedWorldCFrame * SWORD_GRIP_OFFSET).
 --
 -- Seeded from the Blender authoring master (MaleBase_Skinned_5Studs.blend)'s
@@ -133,16 +146,6 @@ local GRIP_POSITION_HAND_R_LOCAL do
 		+ bladeUnit * GRIP_ALONG_BLADE_OFFSET
 end
 
--- TrainingSword.Handle's own PivotOffset: the grip point sits 0.951825 studs
--- below the mesh's geometric center along local +Y (blade extends +Y) --
--- see WeaponMeshes.luau's GripDrop and the CLAUDE.md weapon-authoring
--- convention. We're setting Handle.CFrame directly (its geometric center),
--- so back-solve from the desired PIVOT (grip) transform to the center
--- transform that puts the pivot there.
--- Sword resized to 70%, then narrowed 15% and lengthened 5% (2026-09-15).
--- Long-axis factor is 0.735; preserve the grip point rather than mesh center.
-local HANDLE_PIVOT_OFFSET = CFrame.new(0, -0.951825, 0)
-
 -- The grip frame in Hand_R's local space: origin in the palm, +Y along the blade, +X along
 -- the sword's edge (TrainingSword's handle is wide in X, thin in Z).
 local GRIP_FRAME_HAND_R_LOCAL do
@@ -157,7 +160,17 @@ local GRIP_FRAME_HAND_R_LOCAL do
 	GRIP_FRAME_HAND_R_LOCAL = CFrame.fromMatrix(GRIP_POSITION_HAND_R_LOCAL, right, up, right:Cross(up))
 end
 
-CharacterAnimProfiles.SWORD_GRIP_OFFSET = GRIP_FRAME_HAND_R_LOCAL * HANDLE_PIVOT_OFFSET:Inverse()
+-- The sword's own grip (2026-10-13): TrainingSword.Handle's CFrame (its bounding-box centre) in Hand_R's
+-- bone space, measured, not seeded. Posed by hand in assets/models/main character/locomotion/
+-- FP_Swing_Edit.blend: handle diagonal across the palm, pommel at the heel of the hand, blade near the
+-- line of the forearm. Hero_Sword there is TrainingSword's own mesh at its in-game size (vertex fit
+-- within 0.02 studs), and the bone conversion is export_fp_swing.py's. The fist that closes on it
+-- (fingers, thumb, a fixed wrist tilt) is client/SwordGripPose. Re-pose in that file and re-measure;
+-- do not hand-tune these numbers.
+CharacterAnimProfiles.SWORD_GRIP_OFFSET = CFrame.fromMatrix(
+	Vector3.new(0.517394, 0.920754, 0.464199),
+	Vector3.new(-0.59551, 0.722707, -0.350803),
+	Vector3.new(0.622693, 0.691154, 0.366823))
 
 -- Any other one-handed tool held like the sword: give the grip point, the shaft direction (toward
 -- the business end) and the striking side, all in the tool Handle's own space. The shaft lands

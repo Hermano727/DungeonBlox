@@ -56,6 +56,7 @@ local ResetEvent = GameEvents:WaitForChild("MinimapReset")
 local MarkerAction = GameEvents:WaitForChild("MinimapMarkerAction")
 local UILayers = require(ReplicatedStorage:WaitForChild("UILayers"))
 local PlayerMarkers = require(script:WaitForChild("PlayerMarkers"))
+local HudHider = require(script.Parent:WaitForChild("HudHider"))
 
 local player = Players.LocalPlayer
 local CHUNK, CELL = Config.CHUNK, Config.CELL
@@ -64,11 +65,8 @@ local RENDERS_PER_FRAME = 2 -- stylizing a chunk costs more than the old raw cop
 
 local PANEL = MapStyle.FOG
 local EDGE = Color3.fromRGB(8, 6, 6)       -- the dark line right at the map edge
-local BRONZE = QuickNav.STYLE.Edge         -- the ornate ring around it
-local GOLD = QuickNav.STYLE.EdgeHover
-local RING_DARK = Color3.fromRGB(30, 25, 19)
+local BRONZE = QuickNav.STYLE.Edge         -- the shared bronze edge (quick-nav plates)
 local TEXT = Color3.fromRGB(226, 220, 204)
-local MUTED = Color3.fromRGB(150, 144, 132)
 
 -------------------------------------------------------------------------------------------------
 -- State
@@ -207,122 +205,87 @@ local function stroke(parent, colour, thickness)
 	return s
 end
 
--- Ornate frame: a bronze ring around the map with gold corner studs, an "N" notch at the top,
--- and an optional key badge. The ring sits OUTSIDE the map's own bounds (negative offsets), so the
--- layout code that hangs things under the map keeps using the map rectangle.
-local function frameMap(target, ring, opts)
-	local plate = Instance.new("Frame")
-	plate.Name = "Ring"
-	plate.Position = UDim2.fromOffset(-ring, -ring)
-	plate.Size = UDim2.new(1, ring * 2, 1, ring * 2)
-	plate.BackgroundColor3 = RING_DARK
-	plate.BorderSizePixel = 0
-	plate.ZIndex = 0
-	plate.Parent = target
-	local plateCorner = Instance.new("UICorner")
-	plateCorner.CornerRadius = UDim.new(0, ring + 4)
-	plateCorner.Parent = plate
-	local gradient = Instance.new("UIGradient")
-	gradient.Rotation = 90
-	gradient.Color = ColorSequence.new(Color3.fromRGB(46, 38, 29), Color3.fromRGB(20, 17, 13))
-	gradient.Parent = plate
-	stroke(plate, BRONZE, 2)
+-- Frames (2026-10-11): the map's own art, RS/Assets/Images/MapUI: a thin double bronze rule with
+-- small flowering vines at the corners, like the margin of an explorer's map. Each frame is laid
+-- so its rule runs right over the map's edge (MapUI Window = the rule's centre lines); the vines
+-- reach outside the map. Without the art, the old plain bronze stroke.
+local MapUI = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Images"):WaitForChild("MapUI"))
 
-	local function stud(x, y)
-		local s = Instance.new("Frame")
-		s.Name = "Stud"
-		s.AnchorPoint = Vector2.new(.5, .5)
-		-- Centred on the ring band: half a ring outside the map edge on that side.
-		s.Position = UDim2.new(x, x == 0 and -ring / 2 or ring / 2, y, y == 0 and -ring / 2 or ring / 2)
-		s.Size = UDim2.fromOffset(9, 9)
-		s.Rotation = 45
-		s.BackgroundColor3 = GOLD
-		s.BorderSizePixel = 0
-		s.ZIndex = 12
-		s.Parent = target
-		local sc = Instance.new("UICorner")
-		sc.CornerRadius = UDim.new(0, 2)
-		sc.Parent = s
-		stroke(s, EDGE, 1)
-	end
-	-- Corner studs (the bottom-right corner is left for the key badge).
-	stud(0, 0)
-	stud(1, 0)
-	stud(0, 1)
-	if not opts.badge then stud(1, 1) end
-
-	if opts.north then
-		local n = Instance.new("TextLabel")
-		n.Name = "North"
-		n.AnchorPoint = Vector2.new(.5, .5)
-		n.Position = UDim2.new(.5, 0, 0, -ring / 2)
-		n.Size = UDim2.fromOffset(18, 14)
-		n.BackgroundColor3 = RING_DARK
-		n.BorderSizePixel = 0
-		n.FontFace = UIFonts.DisplayBold
-		n.Text = "N"
-		n.TextSize = 11
-		n.TextColor3 = GOLD
-		n.ZIndex = 12
-		n.Parent = target
-		local nc = Instance.new("UICorner")
-		nc.CornerRadius = UDim.new(0, 4)
-		nc.Parent = n
-	end
-	return plate
+local function hasArt(art)
+	return art ~= nil and art.Image ~= ""
 end
 
--- A small keycap sitting on the frame's bottom-right corner ("M"), instead of a typed-out hint.
-local function keycap(target, text)
-	local cap = Instance.new("TextLabel")
-	cap.Name = "KeyBadge"
-	cap.AnchorPoint = Vector2.new(1, 1)
-	cap.Position = UDim2.new(1, 7, 1, 7)
-	cap.Size = UDim2.fromOffset(26, 26)
-	cap.BackgroundColor3 = Color3.fromRGB(14, 12, 10)
-	cap.BorderSizePixel = 0
-	cap.FontFace = UIFonts.DisplayBold
-	cap.Text = string.upper(text)
-	cap.TextSize = 15
-	cap.TextColor3 = QuickNav.STYLE.Text
-	cap.ZIndex = 13 -- over the NPC markers (5..8) and arrows (9, 10)
-	cap.Parent = target
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 6)
-	corner.Parent = cap
-	stroke(cap, GOLD, 1.5)
-	return cap
+-- How far the frame art reaches past `size` (px) on each side: left, top, right, bottom.
+local function frameOutset(art, size)
+	local w = art.Window
+	local kx, ky = size.X / (w.X1 - w.X0), size.Y / (w.Y1 - w.Y0)
+	return w.X0 * kx, w.Y0 * ky, (art.Size.X - w.X1) * kx, (art.Size.Y - w.Y1) * ky
 end
 
--- Corner minimap
-local MINI_RING = 6
+local function mapFrame(target, art, zIndex)
+	local w = art.Window
+	local spanX, spanY = w.X1 - w.X0, w.Y1 - w.Y0
+	local frame = Instance.new("ImageLabel")
+	frame.Name = "MapFrame"
+	frame.BackgroundTransparency = 1
+	frame.Image = art.Image
+	frame.Size = UDim2.fromScale(art.Size.X / spanX, art.Size.Y / spanY)
+	frame.Position = UDim2.fromScale(-w.X0 / spanX, -w.Y0 / spanY)
+	frame.ZIndex = zIndex
+	frame.Parent = target
+	return frame
+end
+
+-- Corner minimap. With the frame art it moves in from the screen's corner by however far the
+-- vines reach, so they aren't cut off.
+local MINI_SIZE = Vector2.new(Config.MiniSize, Config.MiniSize)
+local miniArt = hasArt(MapUI.MINIMAP_FRAME) and MapUI.MINIMAP_FRAME or nil
+local miniPadRight, miniPadTop = QuickNav.MARGIN, QuickNav.MARGIN
+if miniArt then
+	local _, top, right = frameOutset(miniArt, MINI_SIZE)
+	miniPadRight = math.max(miniPadRight, math.ceil(right) + 2)
+	miniPadTop = math.max(miniPadTop, math.ceil(top) + 2)
+end
 local mini = Instance.new("Frame")
 mini.Name = "Minimap"
 mini.AnchorPoint = Vector2.new(1, 0)
--- Inset by the ring so the ornate frame, not the map, touches the top-right margin.
-mini.Position = UDim2.new(1, -QuickNav.MARGIN - MINI_RING, 0, QuickNav.MARGIN + MINI_RING)
+mini.Position = UDim2.new(1, -miniPadRight, 0, miniPadTop)
 mini.Size = UDim2.fromOffset(Config.MiniSize, Config.MiniSize)
 mini.BackgroundColor3 = PANEL
 mini.BorderSizePixel = 0
 mini.Visible = false
 mini.Parent = gui
-local miniCorner = Instance.new("UICorner")
-miniCorner.CornerRadius = UDim.new(0, 6)
-miniCorner.Parent = mini
+if not miniArt then
+	local miniCorner = Instance.new("UICorner")
+	miniCorner.CornerRadius = UDim.new(0, 6)
+	miniCorner.Parent = mini
+end
 local miniView = MapView.new(mini, {
 	scale = Config.MiniScale, labelScale = 5, labelMin = 13, labelMax = 18,
 	npcMarkerPx = Config.NpcMarkerMiniPx, -- no npcNameScale: never named on the corner map
 	playerMarkerPx = Config.PlayerMarkerMiniPx,
-	cornerRadius = 6,
+	cornerRadius = (not miniArt) and 6 or nil,
 })
-stroke(miniView.clip, EDGE, 2) -- on the clip, not `mini`: the ring is drawn over mini's own stroke
-frameMap(mini, MINI_RING, { north = true, badge = true })
-keycap(mini, Keys.ToggleMap.Name)
+-- The frame over the map (ZIndex 12: over the NPC markers 5..8 and arrows 9, 10). No key badge:
+-- hovering the minimap names it with its key (QuickNav tooltip) and a click opens the M map.
+if miniArt then
+	mapFrame(mini, miniArt, 12)
+else
+	local edge = stroke(miniView.clip, QuickNav.STYLE.Edge, 2)
+	edge.ZIndex = 12
+end
 
--- The quick-nav buttons (settings, ...) hang under the minimap's bottom-left corner.
+-- The quick-nav buttons (settings, ...) hang under the minimap's bottom-right corner, clear of
+-- the frame's vines.
+if miniArt then
+	local _, _, _, bottom = frameOutset(miniArt, MINI_SIZE)
+	QuickNav.GAP = math.max(QuickNav.GAP, math.ceil(bottom) + 4)
+end
 QuickNav.FollowBelow(mini)
 
--- Expanded map
+-- Expanded map. With the frame art it keeps the art's shape (UIAspectRatioConstraint, so the
+-- vines and the crest never stretch) inside the same share of the screen.
+local bigArt = hasArt(MapUI.WORLD_MAP_FRAME) and MapUI.WORLD_MAP_FRAME or nil
 local big = Instance.new("Frame")
 big.Name = "WorldMap"
 big.AnchorPoint = Vector2.new(.5, .5)
@@ -341,66 +304,143 @@ bigGui.IgnoreGuiInset = true
 bigGui.DisplayOrder = UILayers.WORLD_MAP
 bigGui.Parent = player:WaitForChild("PlayerGui")
 big.Parent = bigGui
-local bigCorner = Instance.new("UICorner")
-bigCorner.CornerRadius = UDim.new(0, 8)
-bigCorner.Parent = big
+if bigArt then
+	local w = bigArt.Window
+	local shape = Instance.new("UIAspectRatioConstraint")
+	shape.AspectRatio = (w.X1 - w.X0) / (w.Y1 - w.Y0)
+	shape.Parent = big
+else
+	local bigCorner = Instance.new("UICorner")
+	bigCorner.CornerRadius = UDim.new(0, 8)
+	bigCorner.Parent = big
+end
 local bigView = MapView.new(big, {
 	scale = 2, labelScale = 7, labelMin = 12, labelMax = 40,
 	npcMarkerPerCell = Config.NpcMarkerPerCell, npcMarkerMin = Config.NpcMarkerBigMin,
 	npcMarkerMax = Config.NpcMarkerBigMax, npcNameScale = Config.NpcNameScale,
 	playerMarkerPerCell = Config.PlayerMarkerPerCell, playerMarkerMin = Config.PlayerMarkerBigMin,
 	playerMarkerMax = Config.PlayerMarkerBigMax,
-	cornerRadius = 8,
+	cornerRadius = (not bigArt) and 8 or nil,
 })
-stroke(bigView.clip, EDGE, 3)
-frameMap(big, 10, { north = true })
+if bigArt then
+	mapFrame(big, bigArt, 25) -- over the map's own layers, under the panels (40+)
+else
+	stroke(bigView.clip, EDGE, 2)
+	stroke(big, QuickNav.STYLE.Edge, 2)
+end
 bigView.clip.Active = true
 
+-- The controls, bottom right, on the small dark map panel (MapUI.PANEL, 9-slice): one row per
+-- action, its name on the left and its keys on the right as key caps (QuickNav.KeyCap). The
+-- panel and the rows are siblings, so the list layout only ever sees the rows.
+local HINT_INSET = 22 -- px in from the map's edge, clear of the frame's rule
+local HINT_ROW_H, HINT_GAP, HINT_KEY_H = 20, 4, 18
+-- Keys by KeybindConfig action id where rebindable (drawn with the CURRENT key, redrawn on a
+-- rebind), else as written ("Scroll" and the other mouse inputs draw the mouse icons).
+local HINTS = {
+	{ "Zoom", { "Scroll", "MapZoomIn", "MapZoomOut" } },
+	{ "Look around", { "Drag" } },
+	{ "Place marker", { "Right click" } },
+	{ "Marker options", { "Click" } },
+	{ "Remove marker", { "MapDeleteMarker" } },
+	{ "Centre on me", { "MapRecentre" } },
+	{ "Close", { "ToggleMap", "Esc" } },
+}
+local hintKeyRows = {} -- { frame, names }
 local hints = Instance.new("Frame")
 hints.Name = "Hints"
 hints.AnchorPoint = Vector2.new(1, 1)
-hints.Position = UDim2.new(1, -12, 1, -12)
-hints.Size = UDim2.fromOffset(260, 60)
-hints.BackgroundColor3 = PANEL
-hints.BackgroundTransparency = .15
+hints.Position = UDim2.new(1, -HINT_INSET, 1, -HINT_INSET)
+hints.Size = UDim2.fromOffset(268, 0)
+hints.AutomaticSize = Enum.AutomaticSize.Y
+hints.BackgroundTransparency = 1
 hints.BorderSizePixel = 0
 hints.ZIndex = 20
 hints.Parent = big
-stroke(hints, BRONZE, 1)
-local hintLayout = Instance.new("UIListLayout")
-hintLayout.Padding = UDim.new(0, 4)
-hintLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
-hintLayout.Parent = hints
-local hintPad = Instance.new("UIPadding")
-hintPad.PaddingTop, hintPad.PaddingBottom = UDim.new(0, 6), UDim.new(0, 6)
-hintPad.PaddingLeft, hintPad.PaddingRight = UDim.new(0, 8), UDim.new(0, 8)
-hintPad.Parent = hints
-
-local function keyName(binding)
-	local k = typeof(binding) == "EnumItem" and binding or binding[1]
-	return ({ Equals = "+", Minus = "-" })[k.Name] or k.Name
+if hasArt(MapUI.PANEL) then
+	local plate = Instance.new("ImageLabel")
+	plate.Name = "Panel"
+	plate.BackgroundTransparency = 1
+	plate.Image = MapUI.PANEL.Image
+	plate.ScaleType = Enum.ScaleType.Slice
+	plate.SliceCenter = MapUI.PANEL.SliceCenter
+	plate.SliceScale = .16
+	plate.Size = UDim2.fromScale(1, 1)
+	plate.ZIndex = 20
+	plate.Parent = hints
+else
+	hints.BackgroundColor3 = PANEL
+	hints.BackgroundTransparency = .15
+	stroke(hints, BRONZE, 1)
 end
-
-local function hintRow(text, order)
-	local row = Instance.new("TextLabel")
-	row.BackgroundTransparency = 1
-	row.Size = UDim2.new(1, 0, 0, 20)
-	row.Font = Enum.Font.GothamMedium
-	row.TextSize = 14
-	row.TextColor3 = TEXT
-	row.TextXAlignment = Enum.TextXAlignment.Right
-	row.RichText = true
-	row.Text = text
+local hintRows = Instance.new("Frame")
+hintRows.Name = "Rows"
+hintRows.Size = UDim2.fromScale(1, 0)
+hintRows.AutomaticSize = Enum.AutomaticSize.Y
+hintRows.BackgroundTransparency = 1
+hintRows.ZIndex = 21
+hintRows.Parent = hints
+do
+	local layout = Instance.new("UIListLayout")
+	layout.Padding = UDim.new(0, HINT_GAP)
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Parent = hintRows
+	local pad = Instance.new("UIPadding")
+	pad.PaddingTop, pad.PaddingBottom = UDim.new(0, 15), UDim.new(0, 12)
+	pad.PaddingLeft, pad.PaddingRight = UDim.new(0, 18), UDim.new(0, 15)
+	pad.Parent = hintRows
+end
+for order, hint in ipairs(HINTS) do
+	local row = Instance.new("Frame")
+	row.Name = hint[1]
 	row.LayoutOrder = order
+	row.Size = UDim2.new(1, 0, 0, HINT_ROW_H)
+	row.BackgroundTransparency = 1
 	row.ZIndex = 21
-	row.Parent = hints
-	return row
+	row.Parent = hintRows
+	local label = Instance.new("TextLabel")
+	label.Name = "Action"
+	label.BackgroundTransparency = 1
+	label.Size = UDim2.fromScale(.5, 1)
+	label.FontFace = UIFonts.SerifBold
+	label.TextSize = 13
+	label.TextColor3 = TEXT
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.Text = hint[1]
+	label.ZIndex = 22
+	label.Parent = row
+	local keys = Instance.new("Frame")
+	keys.Name = "Keys"
+	keys.AnchorPoint = Vector2.new(1, 0)
+	keys.Position = UDim2.fromScale(1, 0)
+	keys.Size = UDim2.fromScale(.5, 1)
+	keys.BackgroundTransparency = 1
+	keys.ZIndex = 22
+	keys.Parent = row
+	local keyLayout = Instance.new("UIListLayout")
+	keyLayout.FillDirection = Enum.FillDirection.Horizontal
+	keyLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
+	keyLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+	keyLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	keyLayout.Padding = UDim.new(0, 4)
+	keyLayout.Parent = keys
+	table.insert(hintKeyRows, { frame = keys, names = hint[2] })
 end
-hintRow(("Zoom  <font color=\"#968F84\">[Scroll]  [%s]  [%s]</font>"):format(keyName(Keys.MapZoomIn), keyName(Keys.MapZoomOut)), 1)
-hintRow("Place marker  <font color=\"#968F84\">[Right click]</font>", 2)
-hintRow(("Marker options  <font color=\"#968F84\">[Click]</font>   Remove  <font color=\"#968F84\">[%s]</font>"):format(Keys.MapDeleteMarker.Name), 3)
-hintRow(("Centre  <font color=\"#968F84\">[%s]</font>   Close  <font color=\"#968F84\">[%s]</font>"):format(Keys.MapRecentre.Name, Keys.ToggleMap.Name), 4)
-hints.Size = UDim2.fromOffset(300, 108)
+local function drawHintKeys()
+	for _, entry in ipairs(hintKeyRows) do
+		for _, old in ipairs(entry.frame:GetChildren()) do
+			if old.Name == "KeyCap" then old:Destroy() end
+		end
+		for i, name in ipairs(entry.names) do
+			local cap = QuickNav.KeyCap(entry.frame, QuickNav.KeyName(name), HINT_KEY_H)
+			cap.LayoutOrder = i
+			cap.ZIndex = 23
+			cap.Face.ZIndex = 24
+		end
+	end
+end
+drawHintKeys()
+Keys.Changed:Connect(drawHintKeys)
 
 -------------------------------------------------------------------------------------------------
 -- Rendering chunks
@@ -428,15 +468,34 @@ local function renderChunk(key)
 	local c = chunks[key]
 	if not c then return end
 	c.dirty = false
+	-- Which cells of this chunk lie on the painted map (computed once). Over the art the chunk
+	-- image is only the fog of war, so a chunk entirely on it never needs the server's colours.
+	if c.artMask == nil then
+		local kx, kz = Config.ParseKey(key)
+		local mask, any, all = buffer.create(CHUNK * CHUNK), false, true
+		for row = 0, CHUNK - 1 do
+			for col = 0, CHUNK - 1 do
+				if Config.CellHasArt(kx * CHUNK + col, kz * CHUNK + row) then
+					buffer.writeu8(mask, row * CHUNK + col, 1)
+					any = true
+				else
+					all = false
+				end
+			end
+		end
+		c.artMask = any and mask or false
+		c.allArt = any and all
+	end
 	local visible = anyBit(c.bits) or c.defaultMask ~= nil
-	if not visible then
+	-- A chunk on the painted map always renders: unexplored, it's solid fog over the art.
+	if not visible and not c.artMask then
 		-- Nothing shown here (any more, after a reset): clear what the image may still hold.
 		if c.image then c.image:WritePixelsBuffer(Vector2.zero, Vector2.new(CHUNK, CHUNK), buffer.create(CHUNK * CHUNK * 4)) end
 		return
 	end
-	if not c.colours then
+	if not c.colours and not c.allArt then
 		c.wantsColours = true
-		return
+		if not c.artMask then return end -- part art: draw the fog now, the coloured part when they come
 	end
 	if not c.image then
 		local ok, img = pcall(function() return AssetService:CreateEditableImage({ Size = Vector2.new(CHUNK, CHUNK) }) end)
@@ -451,7 +510,7 @@ local function renderChunk(key)
 	end
 	-- Stylize once per chunk (blur, colour bands, ink lines), then only re-apply the reveal mask
 	-- and soft fog edge on each re-render, which is the cheap part.
-	if not c.styled then c.styled = MapStyle.Stylize(c.colours, CHUNK) end
+	if not c.styled and c.colours then c.styled = MapStyle.Stylize(c.colours, CHUNK) end
 	local shown = buffer.create(CHUNK * CHUNK)
 	local kx, kz = Config.ParseKey(key)
 	for row = 0, CHUNK - 1 do
@@ -463,7 +522,21 @@ local function renderChunk(key)
 		end
 	end
 	local pixels = buffer.create(CHUNK * CHUNK * 4)
-	MapStyle.Compose(c.styled, shown, pixels, CHUNK)
+	if c.styled then MapStyle.Compose(c.styled, shown, pixels, CHUNK) end
+	if c.artMask then
+		-- On the painted map: explored = see-through (the art shows), unexplored = fog.
+		local fr, fg, fb = math.floor(MapStyle.FOG.R * 255 + .5), math.floor(MapStyle.FOG.G * 255 + .5), math.floor(MapStyle.FOG.B * 255 + .5)
+		for i = 0, CHUNK * CHUNK - 1 do
+			if buffer.readu8(c.artMask, i) == 1 then
+				local at = i * 4
+				if buffer.readu8(shown, i) == 1 then
+					buffer.writeu32(pixels, at, 0)
+				else
+					buffer.writeu8(pixels, at, fr); buffer.writeu8(pixels, at + 1, fg); buffer.writeu8(pixels, at + 2, fb); buffer.writeu8(pixels, at + 3, 255)
+				end
+			end
+		end
+	end
 	c.image:WritePixelsBuffer(Vector2.zero, Vector2.new(CHUNK, CHUNK), pixels)
 end
 
@@ -508,6 +581,8 @@ local function setZones(list)
 	bounds = Config.CellBounds(zones)
 	miniView:SetBounds(bounds)
 	bigView:SetBounds(bounds)
+	miniView:SetWorldArt(Config.WorldArt.Regions)
+	bigView:SetWorldArt(Config.WorldArt.Regions)
 	for _, zone in ipairs(zones) do
 		if Config.DefaultDiscovered[zone.name] then discovered[zone.id] = true end
 	end
@@ -604,42 +679,41 @@ end
 -- Expanded map: open/close, zoom, drag
 
 local isOpen = false
+local releaseHud          -- HudHider release while the expanded map is open
 local bigScale = 2
 local panX, panZ          -- map cell at the centre of the expanded view (nil = follow player)
 local pin                 -- { x, z } in map cells while a WorldMapRequest pin is shown
 
--- The pin another screen asked for (WorldMapRequest.ShowAt): a marker + its label, drawn
--- over the expanded map until it closes.
+-- The pin another screen asked for (WorldMapRequest.ShowAt): a gold General pin badge and a
+-- parchment slip with its label (Minimap/MapNote), drawn over the expanded map until it closes.
+local MapNote = require(script:WaitForChild("MapNote"))
 local pinMarker = Instance.new("Frame")
 pinMarker.Name = "RequestPin"
 pinMarker.AnchorPoint = Vector2.new(.5, .5)
-pinMarker.Size = UDim2.fromOffset(14, 14)
-pinMarker.Rotation = 45
-pinMarker.BackgroundColor3 = Color3.fromRGB(214, 172, 84)
-pinMarker.BorderSizePixel = 0
+pinMarker.Size = UDim2.fromOffset(24, 24)
+pinMarker.BackgroundTransparency = 1
 pinMarker.Visible = false
 pinMarker.ZIndex = 12
 pinMarker.Parent = bigView.clip
-stroke(pinMarker, Color3.fromRGB(20, 16, 12), 2)
-local pinLabel = Instance.new("TextLabel")
+MapView.BuildPlayerMarkerBadge(pinMarker, { id = "General", ring = Color3.fromRGB(214, 172, 84) }, 12)
+local pinLabel = Instance.new("Frame")
 pinLabel.Name = "RequestPinLabel"
 pinLabel.AnchorPoint = Vector2.new(.5, 1)
-pinLabel.Size = UDim2.fromOffset(0, 22)
+pinLabel.Size = UDim2.fromOffset(0, 28)
 pinLabel.AutomaticSize = Enum.AutomaticSize.X
-pinLabel.BackgroundColor3 = PANEL
-pinLabel.BackgroundTransparency = .1
-pinLabel.BorderSizePixel = 0
-pinLabel.Font = Enum.Font.GothamBold
-pinLabel.TextSize = 14
-pinLabel.TextColor3 = TEXT
+pinLabel.BackgroundTransparency = 1
 pinLabel.Visible = false
 pinLabel.ZIndex = 12
 pinLabel.Parent = bigView.clip
-stroke(pinLabel, EDGE, 1)
+MapNote.Backing(pinLabel, MapUI.NOTE, .1, 12)
+local pinText = MapNote.Label({
+	Name = "Text", Size = UDim2.new(0, 0, 1, 0), AutomaticSize = Enum.AutomaticSize.X,
+	FontFace = MapNote.FONT.Heading, TextSize = 14, TextColor3 = MapNote.INK.Heading, ZIndex = 13,
+}, pinLabel)
 do
 	local pad = Instance.new("UIPadding")
-	pad.PaddingLeft, pad.PaddingRight = UDim.new(0, 8), UDim.new(0, 8)
-	pad.Parent = pinLabel
+	pad.PaddingLeft, pad.PaddingRight, pad.PaddingTop = UDim.new(0, 14), UDim.new(0, 12), UDim.new(0, 3)
+	pad.Parent = pinText
 end
 local dragging, dragFrom, dragPan
 
@@ -661,8 +735,13 @@ local function setOpen(open)
 	big.Visible = open
 	if open then
 		InteractionLock.Acquire(LOCK_OWNER)
+		-- Everything else steps back (the minimap, the quick-nav row, the hotbar...), as behind
+		-- the Tab menu; overlays (vitals, centre flashes) stay up.
+		releaseHud = HudHider.Acquire(bigGui, { keepOverlays = true, keepCore = true })
+		QuickNav.HideTip()
 	else
 		InteractionLock.Release(LOCK_OWNER)
+		if releaseHud then releaseHud(); releaseHud = nil end
 	end
 	if open then
 		panX, panZ = nil, nil
@@ -678,6 +757,20 @@ local function setOpen(open)
 	end
 end
 
+-- The minimap names itself with its key on hover, and a click opens the M map (when the cursor
+-- is free: in a menu, or Ctrl).
+mini.Active = true
+mini.MouseEnter:Connect(function()
+	QuickNav.ShowTip("World map", Keys.ToggleMap, mini.AbsolutePosition, mini.AbsoluteSize)
+end)
+mini.MouseLeave:Connect(QuickNav.HideTip)
+mini.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		QuickNav.HideTip()
+		setOpen(true)
+	end
+end)
+
 -- Another screen (the Journal's "Show on map") asks for a spot: open centred on it, pinned.
 WorldMapRequest.Listen(function(position, label)
 	if not bounds then return end
@@ -685,7 +778,7 @@ WorldMapRequest.Listen(function(position, label)
 	if not isOpen then return end -- refused (another blocking overlay is up)
 	pin = { x = position.X / CELL, z = position.Z / CELL }
 	panX, panZ = pin.x, pin.z
-	pinLabel.Text = label or ""
+	pinText.Text = label or ""
 	pinLabel.Visible = (label or "") ~= ""
 	pinMarker.Visible = true
 end)
@@ -897,7 +990,7 @@ RunService.RenderStepped:Connect(function()
 				local s = bigView.scale
 				local at = UDim2.new(.5, (pin.x - cx) * s, .5, (pin.z - cz) * s)
 				pinMarker.Position = at
-				pinLabel.Position = at + UDim2.fromOffset(0, -14)
+				pinLabel.Position = at + UDim2.fromOffset(0, -18)
 			end
 		end
 		markers:Update(px, pz, panX or px, panZ or pz)

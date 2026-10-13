@@ -7,7 +7,12 @@
 --           currency, Buy
 --
 --    e(Catalog, { key = ..., npcId, snapshot, entries, heading, sub?, side?, tabs?,
---                 describe?(entry, def) -> string?, extraLines?(entry, def) -> { {label, value} } })
+--                 describe?(entry, def) -> string?, extraLines?(entry, def) -> { {label, value} },
+--                 entryState?(entry, profile) -> { sub?, subColor?, actionText?, disabled?,
+--                                                  free?, doneText? } })
+--  entryState lets a shop say more than a price per row (the stable: "Riding", "Unlocked: ride
+--  for free", "Locked"): `sub` replaces the row's price line, `free` makes the action skip the
+--  price check, `actionText` / `disabled` override the button, `doneText` the success line.
 --
 --  Give it a `key` per tab / filter so the selection resets when the list changes.
 --  Buying is NPCRequest BuyItem (qty 1); the server checks the price, so the red / disabled
@@ -65,12 +70,13 @@ local function Catalog(props: any)
 		local price, currency = priceOf(entry)
 		local qty = entry.Qty or 1
 		local afford = ShopParts.countOf(profile, currency) >= price
+		local state = props.entryState and props.entryState(entry, profile) or nil
 		rows["E" .. i] = e(ShopParts.ItemRow, {
 			item = item,
 			name = entry.Label or ShopParts.displayName(entry.ItemId),
 			nameColor = ShopParts.rarityColor(item),
-			sub = (qty > 1 and ("Bundle of %d, "):format(qty) or "") .. ShopParts.priceText(price, currency),
-			subColor = (not afford) and Style.Text.Bad or nil,
+			sub = (state and state.sub) or ((qty > 1 and ("Bundle of %d, "):format(qty) or "") .. ShopParts.priceText(price, currency)),
+			subColor = (state and state.subColor) or ((not afford and not (state and state.free)) and Style.Text.Bad or nil),
 			selected = i == selected,
 			order = i,
 			onSelect = function() setSelected(i) end,
@@ -89,6 +95,7 @@ local function Catalog(props: any)
 		local name = entry.Label or ShopParts.displayName(entry.ItemId)
 		local price, currency = priceOf(entry)
 		local have = ShopParts.countOf(profile, currency)
+		local state = props.entryState and props.entryState(entry, profile) or nil
 		local lines = {
 			{ "Price", ShopParts.priceText(price, currency) },
 			{ "You have", currency == "Coins" and ShopParts.priceText(have, "Coins") or (have .. " " .. ShopParts.displayName(currency)), have >= price },
@@ -103,7 +110,7 @@ local function Catalog(props: any)
 			local ok, res = ShopParts.request(props.npcId, { action = "BuyItem", itemId = entry.ItemId, qty = 1 })
 			setBusy(false)
 			if ok then
-				setStatus("Bought " .. name .. ".", true)
+				setStatus((state and state.doneText) or ("Bought " .. name .. "."), true)
 				DungeonMenuNet.requestSync() -- the push can race; pull the new bags and wallet
 			else
 				setStatus(ShopParts.errorText(res and res.err), false)
@@ -116,7 +123,11 @@ local function Catalog(props: any)
 			kind = kindLine(item, def),
 			body = (props.describe and props.describe(entry, def)) or (def and def.Description) or "",
 			lines = lines,
-			action = { text = busy and "Buying..." or "Buy", disabled = busy or have < price, onClick = buy },
+			action = {
+				text = busy and "..." or ((state and state.actionText) or "Buy"),
+				disabled = busy or (state and state.disabled) or (not (state and state.free) and have < price),
+				onClick = buy,
+			},
 		}
 	else
 		detail = { emptyText = "Nothing to show." }

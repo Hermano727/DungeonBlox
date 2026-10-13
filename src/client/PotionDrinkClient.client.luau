@@ -5,6 +5,7 @@ local ContentProvider = game:GetService("ContentProvider")
 local Config = require(RS:WaitForChild("PotionDrinkConfig"))
 local Assets = require(RS:WaitForChild("Assets"):WaitForChild("Animations"):WaitForChild("PotionAnimations"))
 local PotionAction = require(RS:WaitForChild("PotionAction"))
+local JumpAnimations = require(RS:WaitForChild("Assets"):WaitForChild("Animations"):WaitForChild("JumpAnimations"))
 
 local Effect = require(script.Parent:WaitForChild("PotionDrinkEffect"))
 local Presentation = require(script.Parent:WaitForChild("PotionPresentation"))
@@ -20,7 +21,10 @@ local owner
 -- whole drink: a T-pose that slid along without stepping, and the player could not "walk" while drinking.
 local function isActionLayer(track)
 	local value = track.Priority.Value
-	return value >= Enum.AnimationPriority.Action.Value and value <= Enum.AnimationPriority.Action4.Value
+	if value < Enum.AnimationPriority.Action.Value or value > Enum.AnimationPriority.Action4.Value then return false end
+	-- A jump's BODY clip (legs and spine, RS/Assets/Animations/JumpAnimations) is not the drink's to stop:
+	-- it keeps the legs posed while the arms drink. Its ARMS clip is, like any other arm animation.
+	return not (track.Animation and JumpAnimations.IsBodyClip(track.Animation.AnimationId))
 end
 
 local function clearOwner()
