@@ -60,7 +60,20 @@ local TOOL_SLOTS = 4
 local SLOT_NAMES = { "Weapon", "Bow", "Pickaxe", "FishingSpear" }
 local SLOT_INDEX_BY_NAME = { Weapon = 1, Bow = 2, Pickaxe = 3, FishingSpear = 4 }
 
-local KEY_TO_SLOT_NAME = Keys.ToolSlot
+local KEY_TO_SLOT_NAME = Keys.ToolSlot -- rebuilt in place by KeybindConfig on a rebind
+
+-- The key shown on slot i: its equip action's current key (Settings > Controls can rebind it).
+local slotKeyLabels = {} -- [i] = { label, shadow }
+local function slotKeyName(i)
+	local entry = Keys.EQUIP_SLOTS[i]
+	return entry and Keys.DisplayName(Keys[entry.id]) or tostring(i)
+end
+Keys.Changed:Connect(function()
+	for i, pair in pairs(slotKeyLabels) do
+		pair[1].Text = slotKeyName(i)
+		pair[2].Text = slotKeyName(i)
+	end
+end)
 
 ---------------------------------------------------------------------------
 -- Visual tuning constants -- everything you'd want to tweak lives here.
@@ -282,7 +295,7 @@ for i = 1, TOOL_SLOTS do
 	numberShadow.TextScaled = true
 	numberShadow.TextColor3 = Color3.new(0, 0, 0)
 	numberShadow.TextTransparency = 0.35
-	numberShadow.Text = tostring(i)
+	numberShadow.Text = slotKeyName(i)
 	numberShadow.ZIndex = 2
 	numberShadow.Parent = diamond
 
@@ -295,9 +308,10 @@ for i = 1, TOOL_SLOTS do
 	numberLabel.FontFace = UIFonts.HUDLabel
 	numberLabel.TextScaled = true
 	numberLabel.TextColor3 = Color3.new(1, 1, 1)
-	numberLabel.Text = tostring(i)
+	numberLabel.Text = slotKeyName(i)
 	numberLabel.ZIndex = 3
 	numberLabel.Parent = diamond
+	slotKeyLabels[i] = { numberLabel, numberShadow }
 
 	local idx = i
 	diamond.InputBegan:Connect(function(input)

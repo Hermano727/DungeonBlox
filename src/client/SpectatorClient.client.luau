@@ -108,8 +108,12 @@ hint.Font = Enum.Font.GothamMedium
 hint.TextSize = 12
 hint.TextColor3 = MUTED
 hint.TextStrokeTransparency = .5
-hint.Text = ("You fell in the boss room. Right-drag to look around, scroll to zoom, [%s] [%s] to switch.")
-	:format(Keys.SpectatePrev.Name, Keys.SpectateNext.Name)
+local function paintHint()
+	hint.Text = ("You fell in the boss room. Right-drag to look around, scroll to zoom, [%s] [%s] to switch.")
+		:format(Keys.DisplayName(Keys.SpectatePrev), Keys.DisplayName(Keys.SpectateNext))
+end
+paintHint()
+Keys.Changed:Connect(paintHint) -- rebound on Settings > Controls
 hint.Parent = gui
 
 -------------------------------------------------------------------------------------------------

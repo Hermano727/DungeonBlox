@@ -304,6 +304,9 @@ local function setupFirstPersonCamera(character)
 			if perspective == PERSPECTIVE_FIRST then
 				eyePosition += yaw.LookVector * movementCameraForward
 			end
+			-- How far the eyes sit ahead of the body right now: FirstPersonSwingOverlay draws the body that much
+			-- ahead during a swing, so the sword arm keeps its distance from the eyes (the camera itself never moves).
+			camera:SetAttribute("FirstPersonForward", perspective == PERSPECTIVE_FIRST and movementCameraForward or 0)
 
             local effectsEnabled = perspective == PERSPECTIVE_FIRST and humanoid.Health > 0
                 and UserInputService.MouseBehavior == Enum.MouseBehavior.LockCenter

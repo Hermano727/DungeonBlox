@@ -73,6 +73,7 @@ AudioCategories.PREFIXES = {
 	{ "Miasma", "creatures" }, { "Poison", "creatures" }, { "Kane", "creatures" }, { "Underling", "creatures" },
 	{ "Reveal", "rewards" }, { "Relic", "rewards" }, { "Mythic", "rewards" }, { "Enchant", "rewards" },
 	{ "Entrance", "ambient" },
+	{ "Dash", "movement" },
 }
 
 -- Where an unmarked, ungrouped Sound lives -> bucket (client/SoundRouter).

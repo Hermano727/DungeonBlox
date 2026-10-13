@@ -35,6 +35,22 @@ local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local SettingsRanges = require(ReplicatedStorage:WaitForChild("SettingsRanges"))
+-- Category "keys" (2026-10-11): the player's rebound keys, { [actionId] = "KeyCodeName" }, only
+-- the changed ones. Validated against KeybindConfig (a known rebindable action + an allowed key);
+-- the value "" removes the entry (back to the default).
+local Keybinds = require(ReplicatedStorage:WaitForChild("KeybindConfig"))
+local KEYS_CATEGORY = "keys"
+
+local function sanitizeKeys(src)
+	local dst = {}
+	if type(src) ~= "table" then return dst end
+	for id, name in pairs(src) do
+		if Keybinds.IsRebindable(id) and Keybinds.IsAllowedKey(name) then
+			dst[id] = name
+		end
+	end
+	return dst
+end
 
 local STORE_NAME = "PlayerSettings_v1"
 local AUTOSAVE_INTERVAL = 90
@@ -74,6 +90,10 @@ local function sanitize(loaded)
 				clean[category] = dst
 			end
 		end
+	end
+	local keys = sanitizeKeys(loaded[KEYS_CATEGORY])
+	if next(keys) then
+		clean[KEYS_CATEGORY] = keys
 	end
 	return clean
 end
@@ -170,12 +190,25 @@ rfGet.OnServerInvoke = function(player)
 end
 
 -- UpdatePlayerSettings (client -> server)
---   Args: category: "volume" | "video", key: string, value: number
+--   Args: category: "volume" | "video" | "hud", key: string, value: number
+--         or category "keys", key: an action id, value: a KeyCode name ("" = default)
 --   Fired once per slider release (SettingsClient's onCommit), not per
 --   drag frame -- see that file. Silently drops anything not in
 --   SettingsRanges instead of erroring, since a stale client build sending
 --   an old field name shouldn't be able to spam warnings.
 evUpdate.OnServerEvent:Connect(function(player, category, key, value)
+	if category == KEYS_CATEGORY then
+		-- A rebound key: (actionId, "KeyCodeName"), or "" to go back to the default.
+		if not Keybinds.IsRebindable(key) or type(value) ~= "string" then return end
+		if value ~= "" and not Keybinds.IsAllowedKey(value) then return end
+		local data = getOrLoad(player.UserId)
+		if type(data[KEYS_CATEGORY]) ~= "table" then
+			data[KEYS_CATEGORY] = {}
+		end
+		data[KEYS_CATEGORY][key] = value ~= "" and value or nil
+		dirty[player.UserId] = true
+		return
+	end
 	if type(category) ~= "string" or type(key) ~= "string" or type(value) ~= "number" then
 		return
 	end

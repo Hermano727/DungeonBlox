@@ -89,7 +89,7 @@ end
 
 local pressId = 0
 local stepped = false
-ContextActionService:BindActionAtPriority("FishQuickEat", function(_, state)
+local function onQuickEat(_, state)
 	if UserInputService:GetFocusedTextBox() ~= nil or GuiService.MenuIsOpen then return Enum.ContextActionResult.Pass end
 	if state == Enum.UserInputState.Begin then
 		pressId += 1
@@ -116,7 +116,15 @@ ContextActionService:BindActionAtPriority("FishQuickEat", function(_, state)
 		if not stepped then quickEat() end
 	end
 	return Enum.ContextActionResult.Sink
-end, false, Enum.ContextActionPriority.High.Value, Keys.QuickEat)
+end
+-- Bound to the current key, and again whenever it's rebound (Settings > Controls).
+local function bindQuickEat()
+	ContextActionService:BindActionAtPriority("FishQuickEat", onQuickEat, false, Enum.ContextActionPriority.High.Value, Keys.QuickEat)
+end
+bindQuickEat()
+Keys.Changed:Connect(function(id)
+	if id == nil or id == "QuickEat" then bindQuickEat() end
+end)
 script.Destroying:Connect(function() ContextActionService:UnbindAction("FishQuickEat") end)
 
 ---------------------------------------------------------------------------
@@ -167,9 +175,18 @@ Instance.new("UICorner", holdFill).CornerRadius = UDim.new(0, 3)
 setHoldFill = function(u)
 	holdFill.Size = UDim2.fromScale(1, u)
 end
-local keyText = label(keyChip, Keys.QuickEat.Name, 11)
+local keyText = label(keyChip, Keys.DisplayName(Keys.QuickEat), 11)
 keyText.Size = UDim2.fromScale(1, 1)
 keyText.ZIndex = 2
+
+-- The key label follows a rebind (Settings > Controls).
+do
+	local conn
+	conn = Keys.Changed:Connect(function()
+		if not keyText.Parent then conn:Disconnect() return end
+		keyText.Text = Keys.DisplayName(Keys.QuickEat)
+	end)
+end
 
 local icon = Instance.new("ImageLabel")
 icon.Name = "FishCarried"

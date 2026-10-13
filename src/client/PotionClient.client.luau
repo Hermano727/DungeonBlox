@@ -41,6 +41,9 @@ bindQuickDrink(Enum.KeyCode.Z) -- rebound below from KeybindConfig once it loads
 
 Keys = require(ReplicatedStorage:WaitForChild("KeybindConfig"))
 bindQuickDrink(Keys.QuickDrink)
+Keys.Changed:Connect(function(id) -- rebound on Settings > Controls
+	if id == nil or id == "QuickDrink" then bindQuickDrink(Keys.QuickDrink) end
+end)
 DrinkRequest = require(ReplicatedStorage:WaitForChild("PotionDrinkRequest"))
 script.Destroying:Connect(function() ContextActionService:UnbindAction("PotionQuickDrink") end)
 
@@ -152,8 +155,17 @@ keyChip.BackgroundTransparency = HudBarStyle.TROUGH_TRANSPARENCY
 keyChip.Parent = mount
 corner(keyChip)
 stroke(keyChip, HudBarStyle.BRONZE, 1, 0.2)
-local keyText = label(keyChip, Keys.QuickDrink.Name, 11)
+local keyText = label(keyChip, Keys.DisplayName(Keys.QuickDrink), 11)
 keyText.Size = UDim2.fromScale(1, 1)
+
+-- The key label follows a rebind (Settings > Controls).
+do
+	local conn
+	conn = Keys.Changed:Connect(function()
+		if not keyText.Parent then conn:Disconnect() return end
+		keyText.Text = Keys.DisplayName(Keys.QuickDrink)
+	end)
+end
 
 -- The vial: what you carry.
 local vial = Instance.new("ImageLabel")

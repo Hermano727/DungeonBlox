@@ -149,6 +149,10 @@ The full process (mockup, then pieces, build, play-test) is [UI Development Proc
 **Good examples:**
 - the Journal kit in `assets/UI/incoming/journal UI and fishing/`: `Journal Leather Panel Frame.png`, `Ornate Bronze Progress Bar and Divider.png`, `nav_medallion.png`, `ribbon.png`;
 - the loading-screen pieces in [Loading Screen](./loading-screen.md).
+- the map set in `assets/UI/incoming/map/` (2026-10-11): `Minimap Preview Frame.png` and `map_note_panel.png`. A fine outline, a slim double rule, small cream and dusty-rose five-petal flowers on thin vines, kept to the corners. This is the nature-UI look: delicate, never chunky.
+
+**Bad examples:**
+- the first "living branch" minimap frame (2026-10-11): a sticker-thick outline on everything, twisted-rope wood, moss blobs, and corner clusters (oak leaves, acorns, a fern) far too big. It read as clip-art. Nature frames go thin and delicate: a fine outline, a slender rim, small flowers and fine vines, the frame's middle left to the content.
 
 **After:** `tools/ui_assets/process.py`, then MCP `upload_image`; ids go in `RS/Assets/Images/JournalUI` (or the feature's own registry).
 

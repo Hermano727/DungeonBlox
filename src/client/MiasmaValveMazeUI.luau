@@ -128,9 +128,7 @@ local function lockInput()
 	local controls = getControls()
 	if controls then controls:Disable() end
 	ContextActionService:BindActionAtPriority(LOCK_ACTION, function() return Enum.ContextActionResult.Sink end, false, 3000,
-		Enum.KeyCode.W, Enum.KeyCode.A, Enum.KeyCode.S, Enum.KeyCode.D, Enum.KeyCode.Up, Enum.KeyCode.Down,
-		Enum.KeyCode.Left, Enum.KeyCode.Right, Enum.KeyCode.Space, Enum.KeyCode.LeftShift, Enum.KeyCode.C,
-		Keys.Dash, Keys.TogglePerspective, Enum.KeyCode.LeftControl, Enum.KeyCode.RightControl)
+		table.unpack(Keys.LockKeys())) -- movement + the current dash / sprint / crouch / ... keys
 end
 
 local pointerSaved = nil
@@ -525,7 +523,7 @@ function UI.Open(payload, send, cancel)
 			BackgroundColor3 = Color3.fromRGB(96, 214, 255),
 			BorderSizePixel = 0,
 			FontFace = hintFont,
-			Text = Keys.ReleaseValve and Keys.ReleaseValve.Name or "X",
+			Text = Keys.DisplayName(Keys.ReleaseValve),
 			TextSize = 28,
 			TextColor3 = Color3.fromRGB(10, 12, 16),
 			ZIndex = 21,

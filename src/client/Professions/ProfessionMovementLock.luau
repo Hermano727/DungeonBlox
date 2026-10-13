@@ -6,6 +6,7 @@
 ]]
 
 local ContextActionService = game:GetService("ContextActionService")
+local Keys = require(game:GetService("ReplicatedStorage"):WaitForChild("KeybindConfig"))
 
 local ACTION = "ProfessionMovementLock"
 
@@ -16,11 +17,7 @@ function ProfessionMovementLock.Set(on: boolean)
 		ContextActionService:BindActionAtPriority(ACTION, function()
 			return Enum.ContextActionResult.Sink
 		end, false, Enum.ContextActionPriority.High.Value + 100,
-			Enum.KeyCode.W, Enum.KeyCode.A, Enum.KeyCode.S, Enum.KeyCode.D, Enum.KeyCode.Up, Enum.KeyCode.Down,
-			Enum.KeyCode.Left, Enum.KeyCode.Right, Enum.KeyCode.Space, Enum.KeyCode.LeftShift, Enum.KeyCode.LeftControl,
-			Enum.KeyCode.C, Enum.KeyCode.Q, Enum.KeyCode.E, Enum.KeyCode.F, Enum.KeyCode.R, Enum.KeyCode.Tab,
-			Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three, Enum.KeyCode.Four, Enum.KeyCode.Five,
-			Enum.KeyCode.Six, Enum.KeyCode.Seven, Enum.KeyCode.Eight, Enum.KeyCode.Nine)
+			table.unpack(Keys.LockKeys())) -- movement + the current dash / sprint / crouch / ... keys
 	else
 		ContextActionService:UnbindAction(ACTION)
 	end

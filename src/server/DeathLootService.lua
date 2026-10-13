@@ -26,6 +26,7 @@ local DungeonProfile = require(ServerScriptService:WaitForChild("ProfileService"
 local Hotbar = require(ServerScriptService:WaitForChild("EquippedHotbar"))
 local WorldLoot = require(ServerScriptService:WaitForChild("WorldLootService"))
 local DeathProtection = require(ServerScriptService:WaitForChild("DeathProtection"))
+local ItemBinding = require(game:GetService("ReplicatedStorage"):WaitForChild("ItemBinding"))
 local InventoryAudit = require(ServerScriptService:WaitForChild("InventoryAudit"))
 
 local COIN_LOSS_PERCENT = 0.15
@@ -104,7 +105,11 @@ function DeathLootService.applyToPlayer(player, deathPosition, keepInventory)
 	if type(inv) == "table" and not keepInventory then
 		for uuid, item in pairs(inv) do
 			if type(uuid) == "string" and not DeathProtection.ShouldKeepOnDeath(uuid, item, equippedSlotByUuid) then
-				table.insert(droppedItems, item)
+				-- Untradeable (training gear, RS/ItemBinding): lost, but it vanishes instead of
+				-- landing on the ground, so it can't change hands.
+				if not ItemBinding.IsUntradeable(item) then
+					table.insert(droppedItems, item)
+				end
 				inv[uuid] = nil
 			end
 		end

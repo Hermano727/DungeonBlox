@@ -16,6 +16,11 @@
 	Every control here is hit-tested from UserInputService, not from GuiButton events: input
 	reaches us even if some other screen ever sits on top of the map (that is how the first
 	picker lost its clicks: the map then drew under most of the HUD).
+
+	Look (2026-10-11, Minimap/MapNote): a cartographer's notes. The picker, the card, the tooltip
+	and the toast are parchment slips pinned onto the map; the legend is the map's cartouche,
+	its title on the ribbon. Ink text in the Journal's serif, ink icons (MapUI.MENU_ICONS), and a
+	small leaf that slides in beside the hovered row.
 ]]
 
 local Players = game:GetService("Players")
@@ -27,19 +32,30 @@ local Config = require(ReplicatedStorage:WaitForChild("MinimapConfig"))
 local Keys = require(ReplicatedStorage:WaitForChild("KeybindConfig"))
 local UILayers = require(ReplicatedStorage:WaitForChild("UILayers"))
 local MapView = require(script.Parent:WaitForChild("MapView"))
+local MapNote = require(script.Parent:WaitForChild("MapNote"))
+local QuickNav = require(ReplicatedStorage:WaitForChild("HudQuickNav"))
+local MapUI = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Images"):WaitForChild("MapUI"))
+local JournalUI = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Images"):WaitForChild("JournalUI"))
 
 local player = Players.LocalPlayer
 local CELL = Config.CELL
 
-local PANEL = Color3.fromRGB(14, 13, 16)
-local ROW_HOVER = Color3.fromRGB(38, 34, 30)
-local EDGE = Color3.fromRGB(70, 66, 60)
-local TEXT = Color3.fromRGB(226, 220, 204)
-local MUTED = Color3.fromRGB(150, 144, 132)
-local DANGER = Color3.fromRGB(214, 96, 80)
+-- Ink on parchment (MapNote, the Journal's page colours); TEXT is for the world beacon's label.
+local INK, FONT = MapNote.INK, MapNote.FONT
+local TEXT = Color3.fromRGB(236, 226, 208)
 
-local ROW_H = 30
-local PANEL_W = 184
+local ROW_H = 28
+local PANEL_W = 196        -- the picker and card slips
+local NOTE_SCALE = .17     -- the slip's 9-slice (MapUI.NOTE): corners ~22 px, its rule ~6 px in
+local NOTE_PAD = { top = 16, bottom = 12, left = 8, right = 12 }
+-- The legend's cartouche is drawn at its art's own width ratio, so only its height stretches
+-- (the ribbon and the bottom sprig keep their shape).
+local LEGEND_W = 212
+local LEGEND_SCALE = LEGEND_W / MapUI.CARTOUCHE.Size.X
+local LEGEND_PAD = { top = 36, bottom = 38, left = 16, right = 20 }
+local ROW_INSET = 18       -- room at each row's left for the hover leaf
+local LEAF_W = 15          -- the hover leaf (MapUI.ROW_POINTER)
+local ICON_PX = 18         -- the ink icons in rows
 local Z = 40 -- panels draw above everything the map frame holds (map 1..12, hints 20..21)
 local BEACON_HIDE_WITHIN = 10 -- studs: you're there
 local EDGE_INSET = 14 -- px: the off-view pointer sits this far inside a view's edge
@@ -65,28 +81,61 @@ local function stroke(parent, colour, thickness)
 	make("UIStroke", { Color = colour, Thickness = thickness, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, parent)
 end
 
-local function panel(name, parent)
+-- A slip (or, kind "legend", the cartouche) holding a column of rows. Returns the panel (what
+-- is shown / hidden / hit-tested) and its Content frame (where rows go).
+local function panel(name, parent, kind)
+	local legend = kind == "legend"
 	local frame = make("Frame", {
-		Name = name, Size = UDim2.fromOffset(PANEL_W, 0), AutomaticSize = Enum.AutomaticSize.Y,
-		BackgroundColor3 = PANEL, BackgroundTransparency = .04, BorderSizePixel = 0,
+		Name = name, Size = UDim2.fromOffset(legend and LEGEND_W or PANEL_W, 0),
+		AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
 		Active = true, Visible = false, ZIndex = Z,
 	}, parent)
-	corner(frame, 6)
-	stroke(frame, EDGE, 1)
-	make("UIPadding", {
-		PaddingTop = UDim.new(0, 6), PaddingBottom = UDim.new(0, 6),
-		PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6),
+	if legend then
+		MapNote.Backing(frame, MapUI.CARTOUCHE, LEGEND_SCALE, Z)
+	else
+		MapNote.Backing(frame, MapUI.NOTE, NOTE_SCALE, Z)
+	end
+	local content = make("Frame", {
+		Name = "Content", Size = UDim2.fromScale(1, 0), AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1, ZIndex = Z + 1,
 	}, frame)
-	make("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, frame)
-	return frame
+	local pad = legend and LEGEND_PAD or NOTE_PAD
+	make("UIPadding", {
+		PaddingTop = UDim.new(0, pad.top), PaddingBottom = UDim.new(0, pad.bottom),
+		PaddingLeft = UDim.new(0, pad.left), PaddingRight = UDim.new(0, pad.right),
+	}, content)
+	make("UIListLayout", { Padding = UDim.new(0, 1), SortOrder = Enum.SortOrder.LayoutOrder }, content)
+	return frame, content
 end
 
-local function heading(parent, order)
-	return make("TextLabel", {
-		Name = "Heading", LayoutOrder = order, Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1,
-		Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = MUTED, TextXAlignment = Enum.TextXAlignment.Left,
-		ZIndex = Z + 1, Text = "",
-	}, parent)
+local function heading(content, order)
+	local label = MapNote.Label({
+		Name = "Heading", LayoutOrder = order, Size = UDim2.new(1, 0, 0, 22),
+		FontFace = FONT.Heading, TextSize = 14, TextColor3 = INK.Heading, ZIndex = Z + 2,
+	}, content)
+	make("UIPadding", { PaddingLeft = UDim.new(0, ROW_INSET) }, label) -- in line with the rows' text
+	return label
+end
+
+-- The divider between the legend's types and its actions: the Journal's ink rule.
+local function divider(content, order)
+	local holder = make("Frame", {
+		Name = "Divider", LayoutOrder = order, Size = UDim2.new(1, 0, 0, 11), BackgroundTransparency = 1, ZIndex = Z + 1,
+	}, content)
+	local art = JournalUI.divider
+	if type(art) == "table" and art.Image ~= "" then
+		make("ImageLabel", {
+			AnchorPoint = Vector2.new(.5, .5), Position = UDim2.fromScale(.5, .5),
+			Size = UDim2.new(1, -8, 0, math.floor((LEGEND_W - 8) / art.Aspect + .5)),
+			BackgroundTransparency = 1, Image = art.Image, ImageColor3 = INK.Muted, ZIndex = Z + 2,
+		}, holder)
+	else
+		make("Frame", {
+			AnchorPoint = Vector2.new(.5, .5), Position = UDim2.fromScale(.5, .5), Size = UDim2.new(1, -8, 0, 1),
+			BackgroundColor3 = INK.Muted, BorderSizePixel = 0, ZIndex = Z + 2,
+		}, holder)
+	end
+	return holder
 end
 
 local function distanceText(studs)
@@ -124,34 +173,78 @@ end
 -------------------------------------------------------------------------------------------------
 -- Rows (hit-tested buttons)
 
--- A clickable row in a panel: optional marker badge, a label, optional right-hand text.
-function PlayerMarkers:_row(panelFrame, order, text, onClick, typeEntry)
+-- A clickable row in a panel. opts (all optional):
+--   typeEntry   a marker badge at the left
+--   icon        an ink icon at the left (MapNote.MenuIcon name), instead of a badge
+--   eye         an eye icon at the far right (the legend's show / hide)
+-- Returns row, label, right-hand text, the left icon, the eye.
+function PlayerMarkers:_row(panelFrame, order, text, onClick, opts)
+	opts = opts or {}
+	local content = panelFrame:FindFirstChild("Content")
 	local row = make("Frame", {
 		Name = "Row", LayoutOrder = order, Size = UDim2.new(1, 0, 0, ROW_H),
-		BackgroundColor3 = ROW_HOVER, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = Z + 1,
-	}, panelFrame)
-	corner(row, 4)
-	local left = 8
-	if typeEntry then
-		local badge = make("Frame", {
-			Name = "Badge", AnchorPoint = Vector2.new(0, .5), Position = UDim2.new(0, 4, .5, 0),
-			Size = UDim2.fromOffset(ROW_H - 6, ROW_H - 6), BackgroundTransparency = 1, ZIndex = Z + 1,
+		BackgroundColor3 = INK.Wash, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = Z + 1,
+	}, content)
+	corner(row, 3)
+
+	-- The hover leaf, pointing at the row.
+	local pointer
+	local leaf = MapUI.ROW_POINTER
+	if leaf.Image ~= "" then
+		pointer = make("ImageLabel", {
+			Name = "Pointer", AnchorPoint = Vector2.new(0, .5), Position = UDim2.new(0, 1, .5, 0),
+			Size = UDim2.fromOffset(LEAF_W, math.floor(LEAF_W / leaf.Aspect + .5)),
+			BackgroundTransparency = 1, Image = leaf.Image, Visible = false, ZIndex = Z + 3,
 		}, row)
-		MapView.BuildPlayerMarkerBadge(badge, typeEntry, Z + 1)
-		left = ROW_H + 4
 	end
-	local label = make("TextLabel", {
-		Name = "Label", Position = UDim2.fromOffset(left, 0), Size = UDim2.new(1, -left - 6, 1, 0),
-		BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 15, TextColor3 = TEXT,
-		TextXAlignment = Enum.TextXAlignment.Left, Text = text, ZIndex = Z + 2,
+
+	local left = ROW_INSET
+	local leftIcon
+	if opts.typeEntry then
+		local badge = make("Frame", {
+			Name = "Badge", AnchorPoint = Vector2.new(0, .5), Position = UDim2.new(0, left, .5, -1),
+			Size = UDim2.fromOffset(ROW_H - 8, ROW_H - 8), BackgroundTransparency = 1, ZIndex = Z + 1,
+		}, row)
+		MapView.BuildPlayerMarkerBadge(badge, opts.typeEntry, Z + 1)
+		left += ROW_H - 4
+	elseif opts.icon then
+		leftIcon = MapNote.MenuIcon(opts.icon, row, Z + 2)
+		if leftIcon then
+			leftIcon.AnchorPoint = Vector2.new(0, .5)
+			leftIcon.Position = UDim2.new(0, left, .5, 0)
+			leftIcon.Size = UDim2.fromOffset(ICON_PX, ICON_PX)
+			left += ICON_PX + 7
+		end
+	end
+
+	local eye
+	local rightEdge = 4
+	if opts.eye then
+		eye = MapNote.MenuIcon("Shown", row, Z + 2)
+		if eye then
+			eye.AnchorPoint = Vector2.new(1, .5)
+			eye.Position = UDim2.new(1, -4, .5, 0)
+			eye.Size = UDim2.fromOffset(ICON_PX, ICON_PX)
+			rightEdge = ICON_PX + 10
+		end
+	end
+
+	local label = MapNote.Label({
+		Name = "Label", Position = UDim2.fromOffset(left, 0), Size = UDim2.new(1, -left - rightEdge - 26, 1, 0),
+		Text = text, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = Z + 2,
 	}, row)
-	local right = make("TextLabel", {
-		Name = "Right", AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -6, 0, 0),
-		Size = UDim2.new(0, 60, 1, 0), BackgroundTransparency = 1, Font = Enum.Font.GothamMedium,
-		TextSize = 13, TextColor3 = MUTED, TextXAlignment = Enum.TextXAlignment.Right, Text = "", ZIndex = Z + 2,
+	local right = MapNote.Label({
+		Name = "Right", AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -rightEdge, 0, 0),
+		Size = UDim2.new(0, 60, 1, 0), TextSize = 13, TextColor3 = INK.Muted,
+		TextXAlignment = Enum.TextXAlignment.Right, ZIndex = Z + 2,
 	}, row)
-	table.insert(self.buttons, { frame = row, panel = panelFrame, onClick = onClick })
-	return row, label, right
+	table.insert(self.buttons, { frame = row, panel = panelFrame, onClick = onClick, pointer = pointer })
+	return row, label, right, leftIcon, eye
+end
+
+local function setRowHover(button, on)
+	button.frame.BackgroundTransparency = on and .86 or 1
+	if button.pointer then button.pointer.Visible = on end
 end
 
 local function inside(gui, point)
@@ -187,12 +280,12 @@ end
 -- Picker: place a pin, or change a pin's type
 
 function PlayerMarkers:_buildPicker()
-	local frame = panel("MarkerPicker", self.ctx.big)
+	local frame, content = panel("MarkerPicker", self.ctx.big)
 	self.picker = frame
 	table.insert(self.panels, frame)
-	self.pickerTitle = heading(frame, 0)
+	self.pickerTitle = heading(content, 0)
 	for order, typeEntry in ipairs(Config.PlayerMarkerTypes) do
-		self:_row(frame, order, typeEntry.label, function() self:_pick(typeEntry.id) end, typeEntry)
+		self:_row(frame, order, typeEntry.label, function() self:_pick(typeEntry.id) end, { typeEntry = typeEntry })
 	end
 end
 
@@ -201,7 +294,7 @@ function PlayerMarkers:_openPicker(point, mode, arg)
 	self:_closeCard()
 	self.pickerMode, self.pickerArg = mode, arg
 	if mode == "place" then
-		self.pickerTitle.Text = ("Place marker  %d / %d"):format(#self.markers, Config.PlayerMarkerMax)
+		self.pickerTitle.Text = ("Place marker   %d/%d"):format(#self.markers, Config.PlayerMarkerMax)
 	else
 		self.pickerTitle.Text = "Change type"
 	end
@@ -228,15 +321,27 @@ end
 -- Card: one pin's options
 
 function PlayerMarkers:_buildCard()
-	local frame = panel("MarkerCard", self.ctx.big)
+	local frame, content = panel("MarkerCard", self.ctx.big)
 	self.card = frame
 	table.insert(self.panels, frame)
-	self.cardTitle = heading(frame, 0)
-	self.cardTitle.TextColor3 = TEXT
-	self.cardTitle.TextSize = 15
-	self.cardSub = heading(frame, 1)
-	self.cardSub.Font = Enum.Font.GothamMedium
-	local _, trackLabel = self:_row(frame, 2, "Track", function()
+	-- Header: the pin's badge, its name, and how far away it is in a small italic hand.
+	local header = make("Frame", {
+		Name = "Header", LayoutOrder = 0, Size = UDim2.new(1, 0, 0, 40), BackgroundTransparency = 1, ZIndex = Z + 1,
+	}, content)
+	self.cardBadge = make("Frame", {
+		Name = "BadgeHolder", AnchorPoint = Vector2.new(0, .5), Position = UDim2.new(0, ROW_INSET, .5, -2),
+		Size = UDim2.fromOffset(28, 28), BackgroundTransparency = 1, ZIndex = Z + 1,
+	}, header)
+	self.cardTitle = MapNote.Label({
+		Name = "Title", Position = UDim2.fromOffset(ROW_INSET + 36, 3), Size = UDim2.new(1, -ROW_INSET - 36, 0, 19),
+		FontFace = FONT.Heading, TextSize = 14, TextColor3 = INK.Heading, TextTruncate = Enum.TextTruncate.AtEnd,
+		ZIndex = Z + 2,
+	}, header)
+	self.cardSub = MapNote.Label({
+		Name = "Distance", Position = UDim2.fromOffset(ROW_INSET + 36, 21), Size = UDim2.new(1, -ROW_INSET - 36, 0, 16),
+		FontFace = FONT.Note, TextSize = 13, TextColor3 = INK.Muted, ZIndex = Z + 2,
+	}, header)
+	local _, trackLabel, _, trackIcon = self:_row(frame, 2, "Track", function()
 		local id = self.selected
 		self:_closeCard()
 		if not id then return end
@@ -245,18 +350,18 @@ function PlayerMarkers:_buildCard()
 		else
 			self:_setTracked(id)
 		end
-	end)
-	self.cardTrackLabel = trackLabel
+	end, { icon = "Track" })
+	self.cardTrackLabel, self.cardTrackIcon = trackLabel, trackIcon
 	self:_row(frame, 3, "Change type", function()
 		local id = self.selected
 		if id then self:_openPicker(self.lastPoint, "retype", id) end
-	end)
+	end, { icon = "ChangeType" })
 	local _, removeLabel = self:_row(frame, 4, "Remove", function()
 		local id = self.selected
 		self:_closeCard()
 		if id then self:_remove(id) end
-	end)
-	removeLabel.TextColor3 = DANGER
+	end, { icon = "Remove" })
+	removeLabel.TextColor3 = INK.Danger
 end
 
 function PlayerMarkers:_openCard(id)
@@ -266,7 +371,11 @@ function PlayerMarkers:_openCard(id)
 	self.selected = id
 	local typeEntry = Config.PlayerMarkerType(marker.type)
 	self.cardTitle.Text = (typeEntry and typeEntry.label or "Marker") .. " marker"
-	self.cardTrackLabel.Text = self.tracked == id and "Stop tracking" or "Track"
+	self.cardBadge:ClearAllChildren()
+	if typeEntry then MapView.BuildPlayerMarkerBadge(self.cardBadge, typeEntry, Z + 1) end
+	local tracking = self.tracked == id
+	self.cardTrackLabel.Text = tracking and "Stop tracking" or "Track"
+	MapNote.SetMenuIcon(self.cardTrackIcon, tracking and "StopTracking" or "Track")
 	self:_refreshCardDistance()
 	self.card.Visible = true
 	local at = self.ctx.bigView:PlayerMarkerCentre(id) or self.lastPoint
@@ -288,34 +397,47 @@ end
 -- Legend: counts, show / hide by type, centre, clear all
 
 function PlayerMarkers:_buildLegend()
-	local frame = panel("MarkerLegend", self.ctx.big)
-	frame.Position = UDim2.fromOffset(12, 12)
+	local frame, content = panel("MarkerLegend", self.ctx.big, "legend")
+	frame.Position = UDim2.fromOffset(24, 26) -- inside the map frame's rule
 	frame.Visible = true
 	self.legend = frame
 	table.insert(self.panels, frame)
-	local title = heading(frame, 0)
-	title.Text = "Markers"
+	-- The title sits on the cartouche's ribbon (or heads the list without the art).
+	local ribbon = MapUI.CARTOUCHE.Ribbon
+	if MapNote.HasArt(MapUI.CARTOUCHE) then
+		MapNote.Label({
+			Name = "Title", Position = UDim2.fromOffset(0, ribbon.Y0 * LEGEND_SCALE),
+			Size = UDim2.new(1, 0, 0, (ribbon.Y1 - ribbon.Y0) * LEGEND_SCALE),
+			FontFace = FONT.Heading, TextSize = 14, TextColor3 = INK.Heading,
+			TextXAlignment = Enum.TextXAlignment.Center, Text = "Markers", ZIndex = Z + 2,
+		}, frame)
+	else
+		heading(content, 0).Text = "Markers"
+	end
 	self.legendRows = {}
 	for order, typeEntry in ipairs(Config.PlayerMarkerTypes) do
-		local row, label, right = self:_row(frame, order, typeEntry.label, function()
+		local row, label, right, _, eye = self:_row(frame, order, typeEntry.label, function()
 			self.hidden[typeEntry.id] = not self.hidden[typeEntry.id] or nil
 			self:_render()
-		end, typeEntry)
-		self.legendRows[typeEntry.id] = { row = row, label = label, right = right }
+		end, { typeEntry = typeEntry, eye = true })
+		self.legendRows[typeEntry.id] = { row = row, label = label, right = right, eye = eye }
 	end
-	local _, npcLabel, npcRight = self:_row(frame, 10, "NPCs", function()
+	local _, npcLabel, npcRight, _, npcEye = self:_row(frame, 10, "NPCs", function()
 		self.npcsHidden = not self.npcsHidden
 		self.ctx.setNpcsVisible(not self.npcsHidden)
 		self:_refreshLegend()
+	end, { eye = true })
+	self.npcLegend = { label = npcLabel, right = npcRight, eye = npcEye }
+	divider(content, 20)
+	local centreRow = self:_row(frame, 21, "Centre on me", function() self.ctx.recentre() end, { icon = "Centre" })
+	local centreKey = QuickNav.KeyCap(centreRow, QuickNav.KeyName("MapRecentre"), 18)
+	centreKey.AnchorPoint = Vector2.new(1, .5)
+	centreKey.Position = UDim2.new(1, -4, .5, 0)
+	centreKey.ZIndex, centreKey.Face.ZIndex = Z + 2, Z + 3
+	Keys.Changed:Connect(function() -- rebound on Settings > Controls
+		centreKey.Face.Text = QuickNav.KeyName("MapRecentre")
 	end)
-	self.npcLegend = { label = npcLabel, right = npcRight }
-	make("Frame", {
-		Name = "Divider", LayoutOrder = 20, Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = EDGE,
-		BorderSizePixel = 0, ZIndex = Z + 1,
-	}, frame)
-	local _, _, centreRight = self:_row(frame, 21, "Centre on me", function() self.ctx.recentre() end)
-	centreRight.Text = "[" .. Keys.MapRecentre.Name .. "]"
-	local _, clearLabel = self:_row(frame, 22, "Clear all", function()
+	local _, clearLabel, clearRight = self:_row(frame, 22, "Clear all", function()
 		if #self.markers == 0 then return end
 		if self.clearArmedUntil and os.clock() < self.clearArmedUntil then
 			self.clearArmedUntil = nil
@@ -324,8 +446,8 @@ function PlayerMarkers:_buildLegend()
 			self.clearArmedUntil = os.clock() + 3
 			self:_refreshLegend()
 		end
-	end)
-	self.clearLabel = clearLabel
+	end, { icon = "Remove" })
+	self.clearLabel, self.clearRight = clearLabel, clearRight
 	self:_refreshLegend()
 end
 
@@ -334,50 +456,58 @@ function PlayerMarkers:_refreshLegend()
 	for _, m in ipairs(self.markers) do counts[m.type] = (counts[m.type] or 0) + 1 end
 	for id, entry in pairs(self.legendRows) do
 		local hidden = self.hidden[id] == true
-		entry.right.Text = hidden and "Hidden" or tostring(counts[id] or 0)
-		entry.label.TextColor3 = hidden and MUTED or TEXT
+		entry.right.Text = hidden and "" or tostring(counts[id] or 0)
+		entry.label.TextColor3 = hidden and INK.Muted or INK.Body
+		MapNote.SetMenuIcon(entry.eye, hidden and "Hidden" or "Shown")
+		if not entry.eye then entry.right.Text = hidden and "Hidden" or tostring(counts[id] or 0) end
 		local badge = entry.row:FindFirstChild("Badge")
 		local plate = badge and badge:FindFirstChild("Plate")
-		if plate then plate.BackgroundTransparency = hidden and .6 or 0 end
+		if plate then MapView.FadePlayerMarkerBadge(plate, hidden) end
 	end
-	self.npcLegend.right.Text = self.npcsHidden and "Hidden" or "Shown"
-	self.npcLegend.label.TextColor3 = self.npcsHidden and MUTED or TEXT
+	local npc = self.npcLegend
+	npc.label.TextColor3 = self.npcsHidden and INK.Muted or INK.Body
+	MapNote.SetMenuIcon(npc.eye, self.npcsHidden and "Hidden" or "Shown")
+	npc.right.Text = npc.eye and "" or (self.npcsHidden and "Hidden" or "Shown")
 	local armed = self.clearArmedUntil and os.clock() < self.clearArmedUntil
-	self.clearLabel.Text = armed and ("Click again to clear %d"):format(#self.markers) or "Clear all"
-	self.clearLabel.TextColor3 = #self.markers == 0 and MUTED or DANGER
+	self.clearLabel.Text = armed and "Confirm clear" or "Clear all"
+	self.clearRight.Text = armed and tostring(#self.markers) or ""
+	self.clearLabel.TextColor3 = #self.markers == 0 and INK.Muted or INK.Danger
 end
 
 -------------------------------------------------------------------------------------------------
 -- Tooltip, toast
 
+-- A small slip with one line of ink on it: the tooltip and the toast. Returns holder, text.
+local function slip(name, parent, height, sliceScale, zIndex, props)
+	local holder = make("Frame", {
+		Name = name, Size = UDim2.fromOffset(0, height), AutomaticSize = Enum.AutomaticSize.X,
+		BackgroundTransparency = 1, Visible = false, ZIndex = zIndex,
+	}, parent)
+	for k, v in pairs(props) do holder[k] = v end
+	MapNote.Backing(holder, MapUI.NOTE, sliceScale, zIndex)
+	local text = MapNote.Label({
+		Name = "Text", Size = UDim2.new(0, 0, 1, 0), AutomaticSize = Enum.AutomaticSize.X,
+		FontFace = FONT.Heading, TextSize = 13, TextColor3 = INK.Heading, ZIndex = zIndex + 1,
+	}, holder)
+	make("UIPadding", { PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 12), PaddingTop = UDim.new(0, 3) }, text)
+	return holder, text
+end
+
 function PlayerMarkers:_buildTooltip()
-	local tip = make("TextLabel", {
-		Name = "MarkerTooltip", AnchorPoint = Vector2.new(.5, 1), Size = UDim2.fromOffset(0, 24),
-		AutomaticSize = Enum.AutomaticSize.X, BackgroundColor3 = PANEL, BackgroundTransparency = .05,
-		BorderSizePixel = 0, Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = TEXT,
-		Visible = false, ZIndex = Z + 5, Text = "",
-	}, self.ctx.big)
-	corner(tip, 4)
-	stroke(tip, EDGE, 1)
-	make("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, tip)
-	self.tooltip = tip
+	self.tooltip, self.tooltipText = slip("MarkerTooltip", self.ctx.big, 28, .1, Z + 5, {
+		AnchorPoint = Vector2.new(.5, 1),
+	})
 end
 
 function PlayerMarkers:_buildToast()
-	local toast = make("TextLabel", {
-		Name = "MarkerToast", AnchorPoint = Vector2.new(.5, 0), Position = UDim2.new(.5, 0, 0, 14),
-		Size = UDim2.fromOffset(0, 30), AutomaticSize = Enum.AutomaticSize.X, BackgroundColor3 = PANEL,
-		BackgroundTransparency = .05, BorderSizePixel = 0, Font = Enum.Font.GothamBold, TextSize = 15,
-		TextColor3 = TEXT, Visible = false, ZIndex = Z + 6, Text = "",
-	}, self.ctx.big)
-	corner(toast, 5)
-	stroke(toast, EDGE, 1)
-	make("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, toast)
-	self.toast = toast
+	self.toast, self.toastText = slip("MarkerToast", self.ctx.big, 34, .12, Z + 6, {
+		AnchorPoint = Vector2.new(.5, 0), Position = UDim2.new(.5, 0, 0, 26),
+	})
+	self.toastText.TextSize = 15
 end
 
 function PlayerMarkers:_say(text)
-	self.toast.Text = text
+	self.toastText.Text = text
 	self.toast.Visible = true
 	self.toastUntil = os.clock() + 2.5
 end
@@ -446,7 +576,7 @@ function PlayerMarkers:_buildBeacon()
 	}, gui)
 	local label = make("TextLabel", {
 		Name = "Distance", AnchorPoint = Vector2.new(.5, 1), Position = UDim2.fromScale(.5, 1),
-		Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1, Font = Enum.Font.GothamBold,
+		Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1, FontFace = FONT.Heading,
 		TextSize = 15, TextColor3 = TEXT, TextStrokeTransparency = .3, Text = "",
 	}, gui)
 	self.beacon = { anchor = anchor, gui = gui, badgeHolder = badgeHolder, label = label, type = nil, groundY = nil, nextRay = 0, id = nil }
@@ -659,7 +789,7 @@ function PlayerMarkers:Update(miniCentreX, miniCentreZ, bigCentreX, bigCentreZ)
 			if at then
 				local rel = at - ctx.big.AbsolutePosition
 				self.tooltip.Position = UDim2.fromOffset(rel.X, rel.Y - 18)
-				self.tooltip.Text = (typeEntry and typeEntry.label or "Marker") .. (dist and ("   " .. distanceText(dist)) or "")
+				self.tooltipText.Text = (typeEntry and typeEntry.label or "Marker") .. (dist and ("   " .. distanceText(dist)) or "")
 				self.tooltip.Visible = true
 			end
 		else
@@ -683,12 +813,11 @@ end
 -- Input
 
 function PlayerMarkers:_hoverAt(point)
-	for _, b in ipairs(self.buttons) do
-		b.frame.BackgroundTransparency = 1
-	end
 	local button = self:_buttonAt(point)
+	for _, b in ipairs(self.buttons) do
+		setRowHover(b, b == button)
+	end
 	if button then
-		button.frame.BackgroundTransparency = 0
 		self.hover = nil
 		return
 	end

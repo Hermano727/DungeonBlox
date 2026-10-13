@@ -177,7 +177,7 @@ end
         | { kind = "ApplyEnchantScroll", scrollUuid = string, targetUuid = string }
         | { kind = "ApplyProtectionScroll", scrollUuid = string, targetUuid = string }
         | { kind = "ApplyCraftingOrb", scrollUuid = string, targetUuid = string }
-        | { kind = "DropItem", uuid = string }
+        | { kind = "DropItem", uuid = string, count = number? }
         | { kind = "TrashItem", uuid = string }
 ]]
 rfInventoryAct.OnServerInvoke = function(player, act)
@@ -234,9 +234,11 @@ rfInventoryAct.OnServerInvoke = function(player, act)
 	elseif act.kind == "ApplyCraftingOrb" then
 		return DungeonProfile.ApplyCraftingOrb(player, act.scrollUuid, act.targetUuid)
 	elseif act.kind == "DropItem" then
-		local ok, err, removedItem = DungeonProfile.DropItem(player, act.uuid)
+		local ok, err, removedItem = DungeonProfile.DropItem(player, act.uuid, act.count)
 		if ok then
-			WorldLootService.SpawnPlayerDrop(player, removedItem)
+			if removedItem then -- nil: an untradeable item vanished instead (RS/ItemBinding)
+				WorldLootService.SpawnPlayerDrop(player, removedItem)
+			end
 			return true, DungeonProfile.BuildSnapshotPayload(player)
 		end
 		return false, err

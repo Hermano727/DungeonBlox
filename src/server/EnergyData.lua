@@ -5,7 +5,7 @@ EnergyData.onEnergyDepleted=nil
 EnergyData.onEnergyRecovered=nil
 
 function EnergyData.init(p)
-    _d[p]={energy=Config.MAX_ENERGY,isSprintHeld=false,isBlocked=false,isPanting=false,lastSent=0,regenRate=Config.REGEN_RATE}
+    _d[p]={energy=Config.MAX_ENERGY,isSprintHeld=false,isBlocked=false,isPanting=false,isBackward=false,lastSent=0,regenRate=Config.REGEN_RATE}
     local ev=Instance.new("NumberValue") ev.Name="Energy" ev.Value=Config.MAX_ENERGY ev.Parent=p
     p:SetAttribute("EnergyPanting", false)
 end
@@ -18,6 +18,9 @@ function EnergyData.setBlocked(p,v) local d=_d[p] if d then d.isBlocked=v end en
 function EnergyData.setRegenRate(p,rate) local d=_d[p] if d and type(rate)=="number" and rate>=0 then d.regenRate=rate end end
 function EnergyData.chargeHitEnergy(p) local d=_d[p] if not d or d.isBlocked or d.isPanting then return end d.energy=math.max(0,d.energy-Config.SWING_COST*0.5) end
 function EnergyData.setSprintHeld(p,v) local d=_d[p] if d then d.isSprintHeld=v end end
+-- Moving backward (EnergyServer decides it from the replicated velocity): no sprint, so no sprint drain.
+function EnergyData.setBackward(p,v) local d=_d[p] if d then d.isBackward=v == true end end
+function EnergyData.isSprinting(p) local d=_d[p] return d ~= nil and d.isSprintHeld == true and not d.isPanting and not d.isBackward end
 function EnergyData.isBlocked(p) local d=_d[p] return d~=nil and d.isBlocked end
 
 -- Dev tool (F8 Profile tab): full energy now, ending Low Energy Mode if it was on.
@@ -104,7 +107,7 @@ function EnergyData.applyTick(p,dt)
     -- point of energy-regen gear: once a player's regen reaches SPRINT_COST they can sprint
     -- forever (2026-10-03, by design; regen used to be switched off while sprinting).
     local regen = baseRegen
-    local drain = d.isSprintHeld and (Config.SPRINT_COST * dt) or 0
+    local drain = (d.isSprintHeld and not d.isBackward) and (Config.SPRINT_COST * dt) or 0
     local prev = d.energy
     d.energy = math.clamp(d.energy - drain + regen, 0, Config.MAX_ENERGY)
     if d.energy <= 0.5 and prev > 0.5 then

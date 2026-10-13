@@ -18,6 +18,7 @@ local TweenService = game:GetService("TweenService")
 
 local AppearanceOptions = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Appearance"):WaitForChild("AppearanceOptions"))
 local CursorUtils = require(ReplicatedStorage:WaitForChild("CursorUtils"))
+local Keys = require(ReplicatedStorage:WaitForChild("KeybindConfig"))
 local HudHider = require(script.Parent:WaitForChild("HudHider"))
 local WardrobeStage = require(script:WaitForChild("WardrobeStage"))
 local WardrobeMenu = require(script:WaitForChild("WardrobeMenu"))
@@ -60,11 +61,7 @@ local function freezeMovement(on)
 	if on then
 		ContextActionService:BindActionAtPriority(FREEZE_ACTION, function() return Enum.ContextActionResult.Sink end, false,
 			Enum.ContextActionPriority.High.Value + 100,
-			Enum.KeyCode.W, Enum.KeyCode.A, Enum.KeyCode.S, Enum.KeyCode.D, Enum.KeyCode.Up, Enum.KeyCode.Down,
-			Enum.KeyCode.Left, Enum.KeyCode.Right, Enum.KeyCode.Space, Enum.KeyCode.LeftShift, Enum.KeyCode.LeftControl,
-			Enum.KeyCode.C, Enum.KeyCode.Q, Enum.KeyCode.E, Enum.KeyCode.F, Enum.KeyCode.R, Enum.KeyCode.Tab,
-			Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three, Enum.KeyCode.Four, Enum.KeyCode.Five,
-			Enum.KeyCode.Six, Enum.KeyCode.Seven, Enum.KeyCode.Eight, Enum.KeyCode.Nine)
+			table.unpack(Keys.LockKeys())) -- movement + the current dash / sprint / crouch / ... keys
 	else
 		ContextActionService:UnbindAction(FREEZE_ACTION)
 	end

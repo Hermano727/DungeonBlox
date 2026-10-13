@@ -29,6 +29,15 @@
 		                               buttons keep authoring in BUTTON_SIZE units
 		Tooltip(button, text, key?)    a small label under the button while hovered
 		STYLE                          the palette, shared with the minimap frame
+		PaintPlate(frame)              the plate look, for other HUD pieces that should match the row
+		KeyCap(parent, text, height?)  a keyboard key drawn as a little bronze key ("M", "Tab", "Esc"):
+		                               the one way a keybind is shown (tooltips, the map's hints);
+		                               "Click" / "Right click" / "Scroll" / "Drag" draw the mouse
+		                               icon instead (MenuUI.MOUSE_ICONS)
+
+	Keybinds are NOT stamped on the buttons (2026-10-11: a badge on one button and not the
+	others read as noise). A button's key shows in its hover tooltip as a KeyCap; the full list
+	is the Settings > Controls page.
 
 	ORDER.Settings = 10        (the settings gear, SettingsClient)
 	ORDER.CursorLock = 25      (re-lock a stuck cursor, client/CursorLockButton)
@@ -44,6 +53,10 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
+
+local MapUI = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Images"):WaitForChild("MapUI"))
+local MenuUI = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Images"):WaitForChild("MenuUI"))
+local Keys = require(ReplicatedStorage:WaitForChild("KeybindConfig"))
 
 local QuickNav = {}
 
@@ -79,6 +92,7 @@ local ICON_SIZE = 22
 local HOVER_TI = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 local gui, container, followConns
+local tip, hovered -- the shared tooltip and the button it's showing for (QuickNav.Tooltip)
 
 local function fonts()
 	return require(ReplicatedStorage:WaitForChild("UIFonts"))
@@ -94,6 +108,13 @@ local function ensure()
 	gui.DisplayOrder = 251
 	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 	gui.Parent = playerGui
+	-- Hidden behind a menu (HudHider turns Enabled off): no tooltip may outlive it.
+	gui:GetPropertyChangedSignal("Enabled"):Connect(function()
+		if not gui.Enabled then
+			hovered = nil
+			if tip then tip.Visible = false end
+		end
+	end)
 
 	container = Instance.new("Frame")
 	container.Name = "Row"
@@ -121,16 +142,44 @@ end
 -------------------------------------------------------------------------------------------------
 -- Plate + key badge (shared by Button and Adopt)
 
+-- The plate is the painted tile (MapUI.BUTTON_PLATE, 2026-10-11: dark wood, gold rim, a leaf and
+-- flower top left), laid so its face fills the button and the sprig sticks out past it. Without
+-- the art: the old gradient, bronze edge and bevel. Either way it returns what hover lights up
+-- (the plate image, or the edge UIStroke).
+local PLATE = MapUI.BUTTON_PLATE
+local PLATE_IDLE = Color3.fromRGB(222, 222, 222) -- dimmed a touch, so hover can brighten it
+local PLATE_HOVER = Color3.new(1, 1, 1)
+
 local function paintPlate(button)
 	button.AutoButtonColor = false
-	button.BackgroundColor3 = Color3.new(1, 1, 1) -- the gradient supplies the colour
-	button.BackgroundTransparency = 0
 	button.BorderSizePixel = 0
 	button.Size = UDim2.fromOffset(QuickNav.BUTTON_SIZE, QuickNav.BUTTON_SIZE)
 
 	for _, old in ipairs(button:GetChildren()) do
-		if old:IsA("UIStroke") or old:IsA("UICorner") or old:IsA("UIGradient") then old:Destroy() end
+		if old:IsA("UIStroke") or old:IsA("UICorner") or old:IsA("UIGradient")
+			or old.Name == "Plate" or old.Name == "Bevel" then
+			old:Destroy()
+		end
 	end
+
+	if PLATE and PLATE.Image ~= "" then
+		button.BackgroundTransparency = 1
+		local body = PLATE.Body
+		local bodyW, bodyH = body.X1 - body.X0, body.Y1 - body.Y0
+		local plate = Instance.new("ImageLabel")
+		plate.Name = "Plate"
+		plate.Image = PLATE.Image
+		plate.ImageColor3 = PLATE_IDLE
+		plate.BackgroundTransparency = 1
+		plate.Size = UDim2.fromScale(PLATE.Size.X / bodyW, PLATE.Size.Y / bodyH)
+		plate.Position = UDim2.fromScale(-body.X0 / bodyW, -body.Y0 / bodyH)
+		plate.ZIndex = button.ZIndex
+		plate.Parent = button
+		return plate
+	end
+
+	button.BackgroundColor3 = Color3.new(1, 1, 1) -- the gradient supplies the colour
+	button.BackgroundTransparency = 0
 
 	local corner = Instance.new("UICorner")
 	corner.CornerRadius = UDim.new(0, 7)
@@ -149,8 +198,6 @@ local function paintPlate(button)
 	edge.Parent = button
 
 	-- A faint inner bevel line, so the plate reads as a raised tile instead of a flat square.
-	local old = button:FindFirstChild("Bevel")
-	if old then old:Destroy() end
 	local bevel = Instance.new("Frame")
 	bevel.Name = "Bevel"
 	bevel.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -171,47 +218,105 @@ local function paintPlate(button)
 	return edge
 end
 
-local function makeKeyBadge(button, text)
-	local old = button:FindFirstChild("KeyBadge")
-	if old then old:Destroy() end
-	local badge = Instance.new("TextLabel")
-	badge.Name = "KeyBadge"
-	badge.AnchorPoint = Vector2.new(1, 1)
-	badge.Position = UDim2.new(1, 3, 1, 3)
-	badge.Size = UDim2.fromOffset(0, 13)
-	badge.AutomaticSize = Enum.AutomaticSize.X
-	badge.BackgroundColor3 = Color3.fromRGB(10, 9, 8)
-	badge.BackgroundTransparency = 0.05
-	badge.BorderSizePixel = 0
-	badge.FontFace = fonts().BodyBold
-	badge.TextSize = 9
-	badge.TextColor3 = S.Text
-	badge.Text = string.upper(text)
-	badge.ZIndex = button.ZIndex + 5
-	badge.Parent = button
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 3)
-	corner.Parent = badge
-	local pad = Instance.new("UIPadding")
-	pad.PaddingLeft, pad.PaddingRight = UDim.new(0, 4), UDim.new(0, 4)
-	pad.Parent = badge
-	local stroke = Instance.new("UIStroke")
-	stroke.Color = S.Edge
-	stroke.Thickness = 1
-	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-	stroke.Parent = badge
-	return badge
+-- What hover tweens on paintPlate's result.
+local function hoverGoal(lit, on)
+	if lit:IsA("UIStroke") then
+		return { Color = on and S.EdgeHover or S.Edge }
+	end
+	return { ImageColor3 = on and PLATE_HOVER or PLATE_IDLE }
+end
+
+-- A keyboard key: a cream face standing on a darker bronze base that shows as a lip along the
+-- bottom, a dark outline, the key's name in dark ink. Grows sideways with its text ("Tab",
+-- "Scroll"), never narrower than it is tall. `height` in px (default 20).
+local KEY_FACE = Color3.fromRGB(236, 222, 186)
+local KEY_BASE = Color3.fromRGB(122, 98, 62)
+local KEY_INK = Color3.fromRGB(43, 30, 20)
+local KEY_OUTLINE = Color3.fromRGB(26, 18, 12)
+
+-- Mouse inputs are drawn as the mouse icons (MenuUI.MOUSE_ICONS), not as a key with a word on it.
+local MOUSE_CELLS = {
+	Click = "Left", ["Left click"] = "Left", ["Right click"] = "Right", Scroll = "Scroll", Drag = "Drag",
+}
+
+local function makeMouseCap(parent, cellName, height)
+	local cell = MenuUI.MOUSE_ICONS.Rects[cellName]
+	local cap = Instance.new("Frame")
+	cap.Name = "KeyCap"
+	cap.BackgroundTransparency = 1
+	cap.Size = UDim2.fromOffset(math.floor(height * cell.Size.X / cell.Size.Y + .5), height)
+	local face = Instance.new("ImageLabel")
+	face.Name = "Face" -- same child name as a key cap's, so callers can treat both alike
+	face.BackgroundTransparency = 1
+	face.Size = UDim2.fromScale(1, 1)
+	face.Image = MenuUI.MOUSE_ICONS.Image
+	face.ImageRectOffset = cell.Offset
+	face.ImageRectSize = cell.Size
+	face.ScaleType = Enum.ScaleType.Fit
+	face.Parent = cap
+	cap.Parent = parent
+	return cap
+end
+
+local function makeKeyCap(parent, text, height)
+	height = height or 20
+	local mouse = MOUSE_CELLS[text]
+	if mouse and MenuUI.MOUSE_ICONS.Image ~= "" then
+		return makeMouseCap(parent, mouse, height + 2)
+	end
+	local lip = math.max(2, math.floor(height * .16 + .5))
+	local cap = Instance.new("Frame")
+	cap.Name = "KeyCap"
+	cap.Size = UDim2.fromOffset(0, height)
+	cap.AutomaticSize = Enum.AutomaticSize.X
+	cap.BackgroundColor3 = KEY_BASE
+	cap.BorderSizePixel = 0
+	Instance.new("UICorner", cap).CornerRadius = UDim.new(0, 4)
+	local outline = Instance.new("UIStroke", cap)
+	outline.Color = KEY_OUTLINE
+	outline.Thickness = 1
+	outline.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+
+	local face = Instance.new("TextLabel")
+	face.Name = "Face"
+	face.Size = UDim2.fromOffset(0, height - lip)
+	face.AutomaticSize = Enum.AutomaticSize.X
+	face.BackgroundColor3 = KEY_FACE
+	face.BorderSizePixel = 0
+	face.FontFace = fonts().BodyBold
+	face.TextSize = math.max(9, math.floor(height * .55))
+	face.TextColor3 = KEY_INK
+	face.Text = text
+	face.Parent = cap
+	Instance.new("UICorner", face).CornerRadius = UDim.new(0, 3)
+	local pad = Instance.new("UIPadding", face)
+	pad.PaddingLeft, pad.PaddingRight = UDim.new(0, 5), UDim.new(0, 5)
+	local minSize = Instance.new("UISizeConstraint", face)
+	minSize.MinSize = Vector2.new(height, 0)
+
+	cap.Parent = parent
+	return cap
+end
+
+-- A binding's (first) key as shown on a key cap: KeybindConfig.DisplayName ("Esc", "Del", "Ctrl").
+-- A string passes through, unless it names a rebindable action ("SkillsTab"): then that
+-- action's CURRENT key, so a tooltip follows a rebind.
+function QuickNav.KeyName(binding)
+	if type(binding) == "string" then
+		return Keys.IsRebindable(binding) and Keys.DisplayName(Keys[binding]) or binding
+	end
+	return Keys.DisplayName(binding)
 end
 
 -- Hover brightens the edge and pops the icon; pressing sinks it. Only the icon scales, never the
 -- button, so the row does not reflow under the cursor.
 local function wireStates(button, edge, iconScale)
 	button.MouseEnter:Connect(function()
-		TweenService:Create(edge, HOVER_TI, { Color = S.EdgeHover }):Play()
+		TweenService:Create(edge, HOVER_TI, hoverGoal(edge, true)):Play()
 		if iconScale then TweenService:Create(iconScale, HOVER_TI, { Scale = 1.14 }):Play() end
 	end)
 	button.MouseLeave:Connect(function()
-		TweenService:Create(edge, HOVER_TI, { Color = S.Edge }):Play()
+		TweenService:Create(edge, HOVER_TI, hoverGoal(edge, false)):Play()
 		if iconScale then TweenService:Create(iconScale, HOVER_TI, { Scale = 1 }):Play() end
 	end)
 	button.MouseButton1Down:Connect(function()
@@ -220,6 +325,16 @@ local function wireStates(button, edge, iconScale)
 	button.MouseButton1Up:Connect(function()
 		if iconScale then TweenService:Create(iconScale, HOVER_TI, { Scale = 1.14 }):Play() end
 	end)
+end
+
+-- The shared plate look (gradient, bronze edge, bevel) and key badge, for other HUD pieces that
+-- should match this row. PaintPlate returns what hover lights up (the plate image, or the
+-- fallback's edge UIStroke).
+function QuickNav.PaintPlate(frame)
+	return paintPlate(frame)
+end
+function QuickNav.KeyCap(parent, text, height)
+	return makeKeyCap(parent, text, height)
 end
 
 function QuickNav.Slot(name, order)
@@ -271,7 +386,6 @@ function QuickNav.Button(opts)
 	iconScale.Parent = icon
 	icon.Parent = button
 
-	if opts.key then makeKeyBadge(button, opts.key) end
 	wireStates(button, edge, iconScale)
 	if opts.tooltip then QuickNav.Tooltip(button, opts.tooltip, opts.key) end
 	if opts.onActivated then button.Activated:Connect(opts.onActivated) end
@@ -281,14 +395,12 @@ function QuickNav.Button(opts)
 end
 
 -- Restyles a button some other script put into a slot. Any short loose label next to or inside
--- it (an old "Tab" hint) is folded into the standard key badge so it matches the rest of the row.
+-- it (an old "Tab" hint) is removed: keys show in tooltips, not on the buttons.
 function QuickNav.Adopt(button)
 	if not button.Parent or button:GetAttribute("QuickNavStyled") then return end
 	button:SetAttribute("QuickNavStyled", true)
-	local keyText
 	local function absorb(label)
-		if label:IsA("TextLabel") and label.Name ~= "KeyBadge" and #label.Text > 0 and #label.Text <= 5 then
-			keyText = keyText or label.Text
+		if label:IsA("TextLabel") and #label.Text > 0 and #label.Text <= 5 then
 			label:Destroy()
 		end
 	end
@@ -308,10 +420,9 @@ function QuickNav.Adopt(button)
 		icon.Size = UDim2.fromOffset(ICON_SIZE, ICON_SIZE)
 		icon.BackgroundTransparency = 1
 		icon.ScaleType = Enum.ScaleType.Fit
-		icon.ZIndex = math.max(icon.ZIndex, 11)
+		icon.ZIndex = math.max(icon.ZIndex, 11, button.ZIndex + 1)
 		iconScale = icon:FindFirstChildOfClass("UIScale") or Instance.new("UIScale", icon)
 	end
-	if keyText then makeKeyBadge(button, keyText) end
 	wireStates(button, edge, iconScale)
 end
 
@@ -347,58 +458,119 @@ end
 -- One shared hover label for the whole row. It lives in this ScreenGui (not inside the button:
 -- slots size themselves to their content, so a child hanging below would reflow the row) and is
 -- placed from the hovered button's AbsolutePosition, which is screen space here (IgnoreGuiInset).
-local tip
-local hovered
+
+local tipText, tipKey
 
 local function ensureTip()
 	if tip and tip.Parent then return tip end
 	ensure()
-	tip = Instance.new("TextLabel")
+	tip = Instance.new("Frame")
 	tip.Name = "Tooltip"
 	tip.AnchorPoint = Vector2.new(0.5, 0)
-	tip.AutomaticSize = Enum.AutomaticSize.XY
-	tip.Size = UDim2.fromOffset(0, 0)
-	tip.BackgroundColor3 = Color3.fromRGB(14, 13, 16)
-	tip.BackgroundTransparency = 0.08
-	tip.BorderSizePixel = 0
-	tip.FontFace = fonts().BodyBold
-	tip.TextSize = math.round(13 * QuickNav.SCALE)
-	tip.TextColor3 = S.Text
-	tip.RichText = true
+	tip.AutomaticSize = Enum.AutomaticSize.X
+	tip.Size = UDim2.fromOffset(0, math.round(26 * QuickNav.SCALE))
+	tip.BackgroundTransparency = 1
 	tip.Visible = false
 	tip.ZIndex = 20
 	tip.Parent = gui
-	Instance.new("UICorner", tip).CornerRadius = UDim.new(0, 5)
-	local pad = Instance.new("UIPadding", tip)
-	pad.PaddingLeft, pad.PaddingRight = UDim.new(0, 8), UDim.new(0, 8)
-	pad.PaddingTop, pad.PaddingBottom = UDim.new(0, 4), UDim.new(0, 4)
-	local edge = Instance.new("UIStroke", tip)
-	edge.Color = S.Edge
-	edge.Transparency = 0.2
-	edge.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	-- The backing: the map's small dark panel (MapUI.PANEL, 9-slice), else a plain dark plate.
+	local panel = MapUI.PANEL
+	local back = Instance.new("ImageLabel")
+	back.Name = "Back"
+	back.Size = UDim2.fromScale(1, 1)
+	back.BackgroundTransparency = 1
+	back.ZIndex = 20
+	if panel and panel.Image ~= "" then
+		back.Image = panel.Image
+		back.ScaleType = Enum.ScaleType.Slice
+		back.SliceCenter = panel.SliceCenter
+		back.SliceScale = .1
+	else
+		back.BackgroundColor3 = Color3.fromRGB(14, 13, 16)
+		back.BackgroundTransparency = 0.08
+		Instance.new("UICorner", back).CornerRadius = UDim.new(0, 5)
+		local edge = Instance.new("UIStroke", back)
+		edge.Color = S.Edge
+	end
+	back.Parent = tip
+	-- The text and key in their own row, so the backing isn't laid out with them.
+	local row = Instance.new("Frame")
+	row.Name = "Row"
+	row.AutomaticSize = Enum.AutomaticSize.X
+	row.Size = UDim2.fromScale(0, 1)
+	row.BackgroundTransparency = 1
+	row.ZIndex = 21
+	row.Parent = tip
+	local layout = Instance.new("UIListLayout", row)
+	layout.FillDirection = Enum.FillDirection.Horizontal
+	layout.VerticalAlignment = Enum.VerticalAlignment.Center
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Padding = UDim.new(0, 7)
+	local pad = Instance.new("UIPadding", row)
+	pad.PaddingLeft, pad.PaddingRight = UDim.new(0, 11), UDim.new(0, 9)
+	tipText = Instance.new("TextLabel")
+	tipText.Name = "Text"
+	tipText.AutomaticSize = Enum.AutomaticSize.X
+	tipText.Size = UDim2.fromScale(0, 1)
+	tipText.BackgroundTransparency = 1
+	tipText.FontFace = fonts().BodyBold
+	tipText.TextSize = math.round(13 * QuickNav.SCALE)
+	tipText.TextColor3 = S.Text
+	tipText.LayoutOrder = 1
+	tipText.ZIndex = 22
+	tipText.Parent = row
+	tipKey = makeKeyCap(row, "", math.round(17 * QuickNav.SCALE))
+	tipKey.LayoutOrder = 2
+	tipKey.ZIndex = 22
+	tipKey.Face.ZIndex = 23
 	return tip
 end
 
+-- Shows the shared tooltip under (or, `above`, over) a screen rectangle. `key` = a keybind
+-- (EnumItem or list), an action id ("SkillsTab": its current key) or a ready name; nil = none.
+function QuickNav.ShowTip(text, key, absPos, absSize, above)
+	local label = ensureTip()
+	tipText.Text = text
+	tipKey.Visible = key ~= nil
+	if key ~= nil then
+		tipKey.Face.Text = QuickNav.KeyName(key)
+	end
+	local screenW = gui.AbsoluteSize.X
+	-- Centred on the rectangle, kept on screen at the right edge.
+	local x = math.min(absPos.X + absSize.X / 2, screenW - label.AbsoluteSize.X / 2 - QuickNav.MARGIN)
+	if above then
+		label.AnchorPoint = Vector2.new(0.5, 1)
+		label.Position = UDim2.fromOffset(x, absPos.Y - 8)
+	else
+		label.AnchorPoint = Vector2.new(0.5, 0)
+		label.Position = UDim2.fromOffset(x, absPos.Y + absSize.Y + 8)
+	end
+	label.Visible = true
+end
+
+function QuickNav.HideTip()
+	if tip then tip.Visible = false end
+end
+
+-- MouseLeave alone isn't enough: a click that opens a menu hides this row (HudHider) or covers
+-- it, and the button never sees the mouse leave, so the tip stayed on screen after the menu
+-- closed. A click, the row going hidden, or the button going away all drop it too.
 function QuickNav.Tooltip(button, text, key)
-	local shown = text
-	if key then shown = ('%s  <font color="#968A78">[%s]</font>'):format(text, key) end
-	button.MouseEnter:Connect(function()
-		local label = ensureTip()
-		hovered = button
-		label.Text = shown
-		local pos, size = button.AbsolutePosition, button.AbsoluteSize
-		local screenW = gui.AbsoluteSize.X
-		-- Centred under the button, kept on screen at the right edge.
-		local x = math.min(pos.X + size.X / 2, screenW - label.AbsoluteSize.X / 2 - QuickNav.MARGIN)
-		label.Position = UDim2.fromOffset(x, pos.Y + size.Y + 8)
-		label.Visible = true
-	end)
-	button.MouseLeave:Connect(function()
-		if hovered == button and tip then
+	local function drop()
+		if hovered == button then
 			hovered = nil
-			tip.Visible = false
+			QuickNav.HideTip()
 		end
+	end
+	button.MouseEnter:Connect(function()
+		if gui and not gui.Enabled then return end
+		hovered = button
+		QuickNav.ShowTip(text, key, button.AbsolutePosition, button.AbsoluteSize)
 	end)
+	button.MouseLeave:Connect(drop)
+	button.Activated:Connect(drop)
+	button:GetPropertyChangedSignal("Visible"):Connect(drop)
+	button.AncestryChanged:Connect(drop)
 end
 
 return QuickNav

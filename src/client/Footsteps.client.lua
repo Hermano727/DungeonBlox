@@ -23,9 +23,26 @@ local MOUNT_VOLUME_SCALE = 0.35
 local MOUNT_PITCH_SCALE = 0.78
 local MOUNT_GAP_SCALE = 1.35
 
+-- Synced footsteps (2026-10-12): the scripted walk / run / run-start clips carry a "Footstep" KeyframeMarker
+-- (value "L" / "R") on the exact frame each foot lands (author_locomotion.py). While one of them is the main
+-- locomotion track, every footstep comes from its marker, so the sound lands with the foot at any playback
+-- speed. The distance timer below only runs when no marked clip is playing (riding, NPCs).
+local MARKER_NAME = "Footstep"
+local MARKER_MIN_WEIGHT = 0.5 -- in a crossfade only the incoming clip steps, never both
+local MARKER_MIN_GAP = 0.1    -- seconds; a safety net against a double step
+
 local LocalPlayer = Players.LocalPlayer
 
 local AudioCategories = require(ReplicatedStorage:WaitForChild("AudioCategories"))
+local CharacterAnimProfiles = require(ReplicatedStorage:WaitForChild("CharacterAnimProfiles"))
+
+-- The clips that carry Footstep markers: every profile's Walk / RunStart / RunLoop / CrouchWalk.
+local MARKED_IDS = {}
+for _, profile in pairs(CharacterAnimProfiles.Profiles) do
+	for _, field in ipairs({ "Walk", "RunStart", "RunLoop", "CrouchWalk" }) do
+		if profile[field] and profile[field] ~= "" then MARKED_IDS[profile[field]] = true end
+	end
+end
 local Modules = ReplicatedStorage:WaitForChild("Modules")
 local FootstepModule = require(Modules:WaitForChild("FootstepModule"))
 
@@ -271,12 +288,54 @@ local function OnCharacterAdded(Character:Model)
 		end
 	end
 
+	local Animator = Humanoid:WaitForChild("Animator", 10)
+	local function IsMarked(track)
+		local animation = track.Animation
+		return animation ~= nil and MARKED_IDS[animation.AnimationId] == true
+	end
+
+	-- A marked clip is carrying the gait right now (the timer must stay out of its way).
+	local function MarkerDriven()
+		if not Animator or IsMounted() then return false end
+		for _, track in ipairs(Animator:GetPlayingAnimationTracks()) do
+			if track.WeightCurrent > 0.3 and IsMarked(track) then return true end
+		end
+		return false
+	end
+
+	local LastMarkerStep = 0
+	local function OnMarker(track, side)
+		if not IsWithinRange() or IsMounted() then return end
+		if track.WeightCurrent < MARKER_MIN_WEIGHT then return end
+		if time() - LastMarkerStep < MARKER_MIN_GAP then return end
+		if not Velocity then UpdateCommon() end
+		if not IsFooted() or Velocity.Magnitude < 0.5 then return end
+		LastMarkerStep = time()
+		Stride = side == "R" and "Right" or "Left"
+		Footstep()
+	end
+
+	local Hooked = setmetatable({}, { __mode = "k" })
+	local function HookTrack(track)
+		if Hooked[track] or not IsMarked(track) then return end
+		Hooked[track] = true
+		table.insert(Connections, track:GetMarkerReachedSignal(MARKER_NAME):Connect(function(side)
+			OnMarker(track, side)
+		end))
+	end
+
 	local function Initialize()
+		if Animator then
+			for _, track in ipairs(Animator:GetPlayingAnimationTracks()) do HookTrack(track) end
+			table.insert(Connections, Animator.AnimationPlayed:Connect(HookTrack))
+		end
 		table.insert(Connections,RunService.Heartbeat:Connect(function(dt)
 			if not IsWithinRange() then return end
 
 			UpdateCommon()
-			if CanFootstep() then
+			if MarkerDriven() then
+				ElapsedSinceLastFootstep = 0 -- the clip's markers are stepping; the timer restarts when they stop
+			elseif CanFootstep() then
 				UpdateTimestep(dt)
 				if ElapsedSinceLastFootstep >= FootstepTimer * (IsMounted() and MOUNT_GAP_SCALE or 1) then
 					Footstep()

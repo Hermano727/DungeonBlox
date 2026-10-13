@@ -385,6 +385,10 @@ rfCreateListing.OnServerInvoke = function(player, itemUuid, price, durationDays)
 	if item.untradeable == true or (type(item.itemId) == "string" and ItemDefinitions.IsUntradeable(item.itemId)) then
 		return { ok = false, err = "untradeable" }
 	end
+	-- Untradeable or profile-bound (RS/ItemBinding: training gear, tools, saddles).
+	if require(game:GetService("ReplicatedStorage"):WaitForChild("ItemBinding")).IsUntradeable(item) then
+		return { ok = false, err = "untradeable" }
+	end
 
 	-- Cap active listings per player
 	local all = getActiveCache()

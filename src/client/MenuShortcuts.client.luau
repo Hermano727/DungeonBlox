@@ -22,7 +22,7 @@ local DungeonMenuNet = require(script.Parent:WaitForChild("DungeonMenuNet"))
 local _ = Players.LocalPlayer
 
 local SHORTCUTS = {
-	{ id = "inventory", order = QuickNav.ORDER.Inventory, label = "Inventory", glyph = "nav_glyph_inventory", key = "Tab" },
+	{ id = "inventory", order = QuickNav.ORDER.Inventory, label = "Inventory", glyph = "nav_glyph_inventory", key = "SkillsTab" }, -- an action id: the tooltip shows its current key
 	{ id = "journal", order = QuickNav.ORDER.Journal, label = "Journal", glyph = "nav_glyph_journal" },
 	{ id = "hearthstone", order = QuickNav.ORDER.Hearthstone, label = "Hearthstone", glyph = "nav_glyph_hearthstone", unlockFlag = "hearthstoneUnlocked" },
 }

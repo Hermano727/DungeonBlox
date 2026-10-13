@@ -6,7 +6,9 @@
     in docs/named-elite-loot.md.
 
     Deliberately NOT the dungeon-boss Mythic path (DungeonBossLootService):
-      * per-KILLING-PLAYER, not every player in the server,
+      * for ONE player, not every player in the server: the one whose kill SUMMONED the elite
+        (`mob._summonerUserId`, set by MobManager), or the killing blow's player if the summoner
+        left (2026-10-12: someone else stealing the last hit doesn't take the drop),
       * drops on the ground as world loot like any other overworld gear, rather
         than granting straight to inventory (dungeon rewards surface in the run
         summary; an overworld elite's don't),
@@ -17,6 +19,7 @@
         otherwise each entry rolls its own chance.
 ]]
 
+local Players             = game:GetService("Players")
 local ReplicatedStorage   = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
@@ -115,9 +118,9 @@ function NamedEliteLootService.BuildItem(entry, tier, level)
     return item
 end
 
--- Builds one entry's piece and drops it on the ground for the killing player. Returns the new
--- scatterIndex (bumped only if something actually spawned).
-local function dropEntry(entry, mob, killingBlowPlayer, deathPos, scatterIndex, tier, level, denominator)
+-- Builds one entry's piece and drops it on the ground for its owner (see OnNamedEliteKilled).
+-- Returns the new scatterIndex (bumped only if something actually spawned).
+local function dropEntry(entry, mob, owner, deathPos, scatterIndex, tier, level, denominator)
     local item = NamedEliteLootService.BuildItem(entry, tier, level)
     if not item then return scatterIndex end
     local okTpl, template = pcall(function() return item:toGrantTemplate() end)
@@ -128,7 +131,7 @@ local function dropEntry(entry, mob, killingBlowPlayer, deathPos, scatterIndex, 
     -- `def` is what lets ItemStatRanges find this piece's AUTHORED substat window instead of
     -- the generic per-tier one; without the def key a rebalance clamp would gut it.
     ItemIdentity.Stamp(template, {
-        by = killingBlowPlayer,
+        by = owner,
         kind = ItemIdentity.SOURCE.NAMED_ELITE,
         src = mob.MobID,
         def = entry.Key,
@@ -139,18 +142,21 @@ local function dropEntry(entry, mob, killingBlowPlayer, deathPos, scatterIndex, 
         return scatterIndex
     end
     local okSpawn, lootId = pcall(function()
-        return WorldLoot.SpawnMobDrop(deathPos, killingBlowPlayer.UserId, {
+        return WorldLoot.SpawnMobDrop(deathPos, owner.UserId, {
             kind = "item_template", template = template,
+            -- A Mythic lies there for its owner for its whole lifetime (5 min): never evicted by
+            -- the mob-drop cap when a busy fight piles other drops on top of it.
+            protected = entry.Mythic ~= nil,
         }, scatterIndex)
     end)
     if okSpawn and lootId then
         print(string.format("[NamedEliteLootService] %s dropped %s (%s, 1/%d) for %s",
             tostring(mob.MobID), tostring(template.name),
-            entry.Mythic and "Mythic" or (tostring(entry.EquivalentRarity) .. " equivalent"), denominator, killingBlowPlayer.Name))
+            entry.Mythic and "Mythic" or (tostring(entry.EquivalentRarity) .. " equivalent"), denominator, owner.Name))
         -- Every Mythic is announced server-wide, the moment it hits the ground.
         if entry.Mythic then
             local MythicBroadcast = require(ServerScriptService:WaitForChild("MythicBroadcast"))
-            MythicBroadcast.Announce(killingBlowPlayer, template, mob.Stats and mob.Stats.Name or mob.MobID)
+            MythicBroadcast.Announce(owner, template, mob.Stats and mob.Stats.Name or mob.MobID)
         end
         return scatterIndex + 1
     end
@@ -170,9 +176,10 @@ local function pickWeighted(pool)
     return pool[#pool]
 end
 
--- Drops the elite's gear on the ground for the killing player. Two modes (see NamedEliteLootDefs):
---   * `OneDrop` set: ONE roll per kill at that chance; a hit drops exactly one piece, picked by
---     Weight. Never more than one piece per kill (Kane's Mythic set).
+-- Drops the elite's gear on the ground for its summoner (else the killer). Two modes (see NamedEliteLootDefs):
+--   * `OneDrop` set: ONE roll per kill (a flat 1/Denominator, or its EquivalentRarity's chance); a
+--     hit drops exactly one piece, picked by Weight. Never more than one piece per kill (Kane's
+--     Mythic set, 1/10).
 --   * otherwise every pool entry rolls its own chance independently.
 -- Returns the new scatterIndex so the caller can keep spacing pickups apart, same contract as
 -- LootService's other drop helpers.
@@ -181,6 +188,9 @@ function NamedEliteLootService.OnNamedEliteKilled(mob, killingBlowPlayer, deathP
     if not mob or not killingBlowPlayer or not killingBlowPlayer.Parent then
         return scatterIndex
     end
+    -- The drop belongs to whoever summoned the elite while they're on the server, else the killer.
+    local summoner = mob._summonerUserId and Players:GetPlayerByUserId(mob._summonerUserId)
+    local owner = summoner or killingBlowPlayer
     local defs = EliteLootDefs.GetDrops(mob.MobID)
     if not defs then return scatterIndex end
     if typeof(deathPos) ~= "Vector3" then return scatterIndex end
@@ -190,11 +200,17 @@ function NamedEliteLootService.OnNamedEliteKilled(mob, killingBlowPlayer, deathP
     local pool = defs.Pool or {}
 
     if defs.OneDrop then
-        local chance, denominator = EliteLootDefs.DropChance(tier, defs.OneDrop.EquivalentRarity)
+        local chance, denominator
+        local flat = tonumber(defs.OneDrop.Denominator)
+        if flat and flat >= 1 then
+            chance, denominator = 1 / flat, math.floor(flat)
+        else
+            chance, denominator = EliteLootDefs.DropChance(tier, defs.OneDrop.EquivalentRarity)
+        end
         if math.random() < chance then
             local entry = pickWeighted(pool)
             if entry then
-                scatterIndex = dropEntry(entry, mob, killingBlowPlayer, deathPos, scatterIndex, tier, level, denominator)
+                scatterIndex = dropEntry(entry, mob, owner, deathPos, scatterIndex, tier, level, denominator)
             end
         end
         return scatterIndex
@@ -203,7 +219,7 @@ function NamedEliteLootService.OnNamedEliteKilled(mob, killingBlowPlayer, deathP
     for _, entry in ipairs(pool) do
         local chance, denominator = EliteLootDefs.DropChance(tier, entry.EquivalentRarity)
         if math.random() < chance then
-            scatterIndex = dropEntry(entry, mob, killingBlowPlayer, deathPos, scatterIndex, tier, level, denominator)
+            scatterIndex = dropEntry(entry, mob, owner, deathPos, scatterIndex, tier, level, denominator)
         end
     end
     return scatterIndex

@@ -50,6 +50,7 @@ local RunService = game:GetService("RunService")
 local ContentProvider = game:GetService("ContentProvider")
 local camera = workspace.CurrentCamera
 local VideoSettings = require(ReplicatedStorage:WaitForChild("VideoSettings"))
+local Keys = require(ReplicatedStorage:WaitForChild("KeybindConfig"))
 local function defaultFOV()
 	return VideoSettings.fov
 end
@@ -68,13 +69,18 @@ local ActiveEquipment = require(ReplicatedStorage:WaitForChild("ActiveEquipment"
 local WALK_ANIM_SPEED = 1.0
 local WALK_SPEED_SCALE = 8.7
 local BACKWARDS_WALK_SPEED = 1.0
--- The authored RunLoop clip reads as sluggish at its native pace and its
--- stride no longer lines up with Footsteps.client.lua's velocity-driven
--- cadence (that system fires off actual root speed, not clip playback --
--- see FootstepTimer/UpdateTimestep there). Flat multiplier, not a
--- per-frame scale like Walk's -- RunLoop's authored pace only needs
--- uniformly quickening, not gait-speed-tracking.
-local RUN_LOOP_ANIM_SPEED = 1.5
+-- RunLoop (2026-10-12, author_locomotion.py) is authored for the sprint speed, so it plays at
+-- speed / sprint speed: 1.0 at a plain sprint, quicker with speed bonuses, and the planted foot
+-- keeps up with the ground. Clamped so a stall or a big buff never looks broken.
+local EnergyConfigShared = require(ReplicatedStorage:WaitForChild("EnergyConfig"))
+local RUN_NATIVE_SPEED = EnergyConfigShared.SPRINT_SPEED
+local function runLoopSpeed(speed)
+	return math.clamp(speed / RUN_NATIVE_SPEED, 0.8, 1.5)
+end
+-- CrouchEnter / CrouchExit (author_locomotion.py): their motion lasts this long and then holds the last
+-- pose, so the hand-off to the next state runs on this clock, never on the clip running out.
+local CROUCH_ENTER_LENGTH = 0.32
+local CROUCH_EXIT_LENGTH = 0.30
 
 local isRunning = false
 
@@ -149,6 +155,10 @@ local function getProfileTracks(profileName)
     for _, name in ipairs({"CrouchIdle", "CrouchWalk"}) do
         tracks[name] = loadTrack(cfg[name])
         if tracks[name] then tracks[name].Priority = Enum.AnimationPriority.Core; tracks[name].Looped = true end
+    end
+    for _, name in ipairs({"CrouchEnter", "CrouchExit"}) do
+        tracks[name] = loadTrack(cfg[name])
+        if tracks[name] then tracks[name].Priority = Enum.AnimationPriority.Core; tracks[name].Looped = false end
     end
 
 	if tracks.Idle then
@@ -234,7 +244,7 @@ local function playState(stateName, fadeTime, preservePhase)
 		end
 		-- Read the latest gait speed, including movement changes while loading.
 		local playbackSpeed = (stateName == "Walk" or stateName == "CrouchWalk") and walkPlaybackSpeed
-			or (stateName == "RunLoop" and RUN_LOOP_ANIM_SPEED) or 1
+			or (stateName == "RunLoop" and runLoopSpeed(locomotionSpeed)) or 1
 		if track.IsPlaying then
 			-- A quick toggle can return to a track that is still fading out.
 			-- Bring its existing weight back instead of restarting from zero.
@@ -257,6 +267,18 @@ local function playState(stateName, fadeTime, preservePhase)
 				if generation == trackGeneration and currentTrack == track
 					and currentState == "RunStart" and isRunning and locomotionSpeed > 0.01 then
 					playState("RunLoop", 0)
+				end
+			end)
+		end
+		if stateName == "CrouchEnter" or stateName == "CrouchExit" then
+			-- The enter ends exactly on CrouchIdle's first pose, the exit on standing: short blends onward.
+			local length = stateName == "CrouchEnter" and CROUCH_ENTER_LENGTH or CROUCH_EXIT_LENGTH
+			task.delay(math.max(0, length - track.TimePosition), function()
+				if generation ~= trackGeneration or currentState ~= stateName or currentTrack ~= track then return end
+				if stateName == "CrouchEnter" then
+					playState(locomotionSpeed > 0.01 and "CrouchWalk" or "CrouchIdle", 0.12)
+				else
+					playState("Idle", 0.15)
 				end
 			end)
 		end
@@ -338,22 +360,59 @@ local stopObservingEquipment = ActiveEquipment.Observe(Figure, refreshProfile)
 -- ============================================
 -- LOCOMOTION
 -- ============================================
+-- Crouch transitions (2026-10-12). Standing still, crouching plays CrouchEnter (it hands off to CrouchIdle,
+-- or to CrouchWalk if you start moving) and standing up plays CrouchExit (it hands off to Idle). On the
+-- move there is no clip to wait for: it blends straight between CrouchWalk and Walk / RunStart over these
+-- fades, long enough for the hips to sink and rise, short enough to stay responsive. A toggle in the
+-- middle of an enter or exit blends straight back instead of starting the opposite clip from its end.
+local CROUCH_ENTER_FADE = 0.25
+local CROUCH_EXIT_FADE = 0.25
+local function inCrouchState()
+	return currentState == "CrouchIdle" or currentState == "CrouchWalk" or currentState == "CrouchEnter"
+end
+local function standFade(default)
+	return (inCrouchState() or currentState == "CrouchExit") and CROUCH_EXIT_FADE or default
+end
+local function hasClip(stateName)
+	local tracks = getProfileTracks(currentProfileName)
+	return tracks ~= nil and tracks[stateName] ~= nil
+end
+
 local function onRunning(speed)
 	if Humanoid.Health <= 0 then return end
 	locomotionSpeed = speed
     isRunning = Figure:GetAttribute("IsSprinting") == true
     if IsCrouching() then
-        local state = speed > 0.01 and "CrouchWalk" or "CrouchIdle"
+        local moving = speed > 0.01
+        local state = moving and "CrouchWalk" or "CrouchIdle"
         local localVelocity = HumanoidRootPart.CFrame:VectorToObjectSpace(HumanoidRootPart.AssemblyLinearVelocity)
         walkPlaybackSpeed = (localVelocity.Z > 0.1 and -1 or 1) * speed / 4
-        if currentState ~= state then playState(state, 0.18) end
+        if currentState == "CrouchEnter" then
+            if moving then playState("CrouchWalk", 0.15) end -- walking during the enter: no waiting on it
+        elseif currentState == "CrouchExit" then
+            playState(state, 0.2) -- crouched again mid-exit: blend straight back down
+        elseif not inCrouchState() then
+            if moving or not hasClip("CrouchEnter") then
+                playState(state, CROUCH_ENTER_FADE)
+            else
+                playState("CrouchEnter", 0.08)
+            end
+        elseif currentState ~= state then
+            playState(state, 0.18)
+        end
         if currentTrack and playingState == "CrouchWalk" then currentTrack:AdjustSpeed(walkPlaybackSpeed) end
         tweenFOV(defaultFOV())
         return
     end
 	if speed <= 0.01 then
-		if currentState ~= "Idle" then
-			playState("Idle", 0.2)
+		if currentState == "CrouchExit" then
+			-- standing up: it hands off to Idle on its own
+		elseif currentState == "CrouchEnter" then
+			playState("Idle", 0.2) -- stood up again mid-enter: blend straight back up
+		elseif inCrouchState() and hasClip("CrouchExit") then
+			playState("CrouchExit", 0.08)
+		elseif currentState ~= "Idle" then
+			playState("Idle", standFade(0.2))
 		end
 		tweenFOV(defaultFOV())
 		return
@@ -362,8 +421,11 @@ local function onRunning(speed)
 	local backwards = false
 	local velocity = HumanoidRootPart.AssemblyLinearVelocity
 	local look = HumanoidRootPart.CFrame.LookVector
-	if velocity.Magnitude > 0.1 then
-		if velocity.Unit:Dot(look) < -0.1 then
+	local flat = Vector3.new(velocity.X, 0, velocity.Z)
+	local facing = Vector3.new(look.X, 0, look.Z)
+	-- The same rule the server uses for the backward speed / no-sprint (EnergyServer, EnergyConfig.BACKWARD_DOT).
+	if flat.Magnitude > 0.1 and facing.Magnitude > 1e-3 then
+		if flat.Unit:Dot(facing.Unit) < EnergyConfigShared.BACKWARD_DOT then
 			backwards = true
 		end
 	end
@@ -375,7 +437,7 @@ local function onRunning(speed)
 		local dirScale = backwards and -1 or 1
 		walkPlaybackSpeed = dirScale * (speed / WALK_SPEED_SCALE) * WALK_ANIM_SPEED * BACKWARDS_WALK_SPEED
 		if currentState ~= "Walk" then
-			playState("Walk", 0.2)
+			playState("Walk", standFade(0.2))
 		end
 		if currentTrack and playingState == "Walk" then
 			currentTrack:AdjustSpeed(walkPlaybackSpeed)
@@ -387,16 +449,20 @@ local function onRunning(speed)
 	if isRunning then
 		tweenFOV(defaultFOV() + RUN_FOV_BOOST)
 		if currentState ~= "RunStart" and currentState ~= "RunLoop" then
-			playState("RunStart", 0.15)
+			playState("RunStart", standFade(0.15))
 		end
-		-- else: already RunStart (let it finish -> auto-hands-off to
-		-- RunLoop) or already RunLoop (already playing at RUN_LOOP_ANIM_SPEED,
-		-- no per-frame speed scaling needed for a looped cycle).
+		-- else: already RunStart (let it finish -> auto-hands-off to RunLoop)
+		-- or already RunLoop: keep its pace on the real speed.
+		if currentTrack and playingState == "RunLoop" then
+			local pace = runLoopSpeed(speed)
+			currentTrack:AdjustSpeed(pace)
+			Figure:SetAttribute("LocomotionPlaybackSpeed", pace)
+		end
 	else
 		tweenFOV(defaultFOV())
 		walkPlaybackSpeed = (speed / WALK_SPEED_SCALE) * WALK_ANIM_SPEED
 		if currentState ~= "Walk" then
-			playState("Walk", 0.2)
+			playState("Walk", standFade(0.2))
 		end
 		if currentTrack and playingState == "Walk" then
 			currentTrack:AdjustSpeed(walkPlaybackSpeed)
@@ -422,8 +488,8 @@ end
 -- ============================================
 local inputConnections = {}
 local function sprintKey(input)
-    return input.KeyCode == Enum.KeyCode.LeftShift or input.KeyCode == Enum.KeyCode.RightShift
-        or input.KeyCode == Enum.KeyCode.ButtonL2
+    -- Keys.Sprint (Shift by default, rebindable on Settings > Controls), or a gamepad's L2.
+    return Keys.Matches(Keys.Sprint, input.KeyCode) or input.KeyCode == Enum.KeyCode.ButtonL2
 end
 UserInputService = game:GetService("UserInputService")
 inputConnections[1] = UserInputService.InputBegan:Connect(function(input, processed)

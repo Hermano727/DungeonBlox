@@ -5,7 +5,8 @@ through Open Cloud.
 
 Reads ASSET_API_KEY from the repo's .env (never printed or written anywhere). Creator is the
 experience owner, userId 706604079. Asset type comes from the extension: .fbx -> Model,
-.rbxm/.rbxmx -> Animation, .mp3/.ogg -> Audio. Prints one line: RESULT {"assetId": ..., "error": ...}, and writes
+.rbxm/.rbxmx -> Animation, .mp3/.ogg -> Audio, .png -> Decal
+(its image id: InsertService:LoadAsset(decalId) in Studio, then the Decal's Texture). Prints one line: RESULT {"assetId": ..., "error": ...}, and writes
 the same JSON next to the uploaded file as <file>.upload.json.
 """
 import json, os, re, sys, time, uuid, urllib.request, urllib.error
@@ -14,7 +15,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 USER_ID = "706604079"
 TYPES = {".fbx": ("Model", "model/fbx"), ".rbxm": ("Animation", "model/x-rbxm"), ".rbxmx": ("Animation", "model/x-rbxm"),
-         ".mp3": ("Audio", "audio/mpeg"), ".ogg": ("Audio", "audio/ogg")}
+         ".mp3": ("Audio", "audio/mpeg"), ".ogg": ("Audio", "audio/ogg"),
+         ".png": ("Decal", "image/png")}
 
 
 def api_key():

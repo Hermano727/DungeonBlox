@@ -12,7 +12,11 @@ return {
 	-- under assets/models/main character/male base model/). Falls back to
 	-- SWING_ANIM_ID when empty or while crouched -- no first-person crouch
 	-- variant exists yet.
-	FIRST_PERSON_SWING_ANIM_ID = "", -- Pending publication of Sword_Slash_FirstPerson.fbx.
+	-- Leave EMPTY: a track played here would replicate, so everyone would see the first-person version.
+	-- The first-person look (2026-10-12) is client/FirstPersonSwingOverlay instead: this client only, over
+	-- the normal swing (data: RS/Assets/Animations/FirstPersonSwing, posed in FP_Swing_Edit.blend,
+	-- written by export_fp_swing.py).
+	FIRST_PERSON_SWING_ANIM_ID = "",
 
 
 	-- Visual cadence only; damage and energy remain driven by attack input.

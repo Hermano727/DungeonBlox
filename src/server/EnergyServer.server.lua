@@ -41,6 +41,10 @@ local function ensureRemoteFunction(parent, name)
 	return rf
 end
 local RequestDash = ensureRemoteFunction(EE, "RequestDash")
+-- Everyone else nearby draws a dash (RS/DashFx via client/DashFxClient); the dasher already did.
+local RemoteUtils = require(RS:WaitForChild("RemoteUtils"))
+local DashFxRemote = RemoteUtils.EnsureRemoteEvent(RemoteUtils.EnsureFolder(RS, "GameEvents"), "DashFx")
+local DASH_FX_RADIUS = 250
 
 local SCB=RS:WaitForChild("StateChangedBindable")
 local TS=SSS:WaitForChild("TransitionPlayerState")
@@ -66,14 +70,17 @@ local function applyWalkSpeed(p)
     end
     local root=p.Character:FindFirstChild("HumanoidRootPart")
     local crouching=root and root:GetAttribute("IsCrouching") == true
-    p.Character:SetAttribute("IsSprinting", d.isSprintHeld == true and not d.isPanting and not crouching)
+    local backward = d.isBackward == true
+    p.Character:SetAttribute("IsSprinting", d.isSprintHeld == true and not d.isPanting and not crouching and not backward)
     if crouching then
         base = Config.CROUCH_SPEED
     elseif d.isPanting then
         base = Config.PANT_WALK_SPEED
-    elseif d.isSprintHeld then
+    elseif d.isSprintHeld and not backward then
         base = Config.SPRINT_SPEED
     end
+    -- Backward (2026-10-13): 60% slower than the same movement forward, and holding sprint does nothing.
+    if backward then base *= Config.BACKWARD_SPEED_MULT end
     local bonus = BuffService.GetSpeedBonusPct(p)
     -- Enchant slow is the last factor: it scales whatever the sprint/crouch/pant
     -- state and speed buffs already decided, rather than fighting them for
@@ -158,7 +165,7 @@ local function trackMovementExhaustion(p)
         cost = HungerConfig.EXHAUSTION.SWIM_PER_STUD
     else
         local d = EnergyData.get(p)
-        local sprinting = d and d.isSprintHeld and not d.isPanting
+        local sprinting = d and EnergyData.isSprinting(p)
         cost = (sprinting and HungerConfig.EXHAUSTION.SPRINT_PER_STUD) or HungerConfig.EXHAUSTION.WALK_PER_STUD
     end
     HungerData.addExhaustion(p, cost * studs)
@@ -169,6 +176,7 @@ end
 local function connectCharacter(p, character)
     if p.Character ~= character then return end
     EnergyData.setSprintHeld(p, false)
+    EnergyData.setBackward(p, false)
     character:SetAttribute("IsSprinting", false)
     freefallTime[p.UserId] = 0
     lastSpeedBonusByUid[p.UserId] = nil
@@ -239,8 +247,27 @@ RunService.Heartbeat:Connect(function(dt)
             applyWalkSpeed(p)
             crouching=false
         end
-        local expectedSprint=d.isSprintHeld == true and not d.isPanting and not crouching
-        if lastSpeedBonusByUid[p.UserId] ~= curBonus or lastSpeedHumanoidByUid[p.UserId] ~= hum
+        -- Backward or not, from the replicated root: horizontal velocity against the facing. Standing still
+        -- (or barely moving) keeps the last answer, so stopping never flickers the speed.
+        local backwardChanged = false
+        if root and hum and not p:GetAttribute("Mounted") then
+            local v = root.AssemblyLinearVelocity
+            local flat = Vector3.new(v.X, 0, v.Z)
+            if flat.Magnitude > 0.75 then
+                local look = root.CFrame.LookVector
+                local facing = Vector3.new(look.X, 0, look.Z)
+                local backward = facing.Magnitude > 1e-3 and flat.Unit:Dot(facing.Unit) < Config.BACKWARD_DOT
+                if backward ~= (d.isBackward == true) then
+                    EnergyData.setBackward(p, backward)
+                    backwardChanged = true
+                end
+            end
+        elseif d.isBackward then
+            EnergyData.setBackward(p, false)
+            backwardChanged = true
+        end
+        local expectedSprint=d.isSprintHeld == true and not d.isPanting and not crouching and not d.isBackward
+        if backwardChanged or lastSpeedBonusByUid[p.UserId] ~= curBonus or lastSpeedHumanoidByUid[p.UserId] ~= hum
             or (character and character:GetAttribute("IsSprinting") ~= expectedSprint) then
             applyWalkSpeed(p)
         end
@@ -278,7 +305,31 @@ RequestCrouch.OnServerEvent:Connect(function(p,wantCrouch)
     applyWalkSpeed(p)
 end)
 
-RequestDash.OnServerInvoke = function(p)
+-- The dasher's direction / air / length are only used to draw the dash for others, never trusted
+-- for anything else: a bad value becomes the character's facing and the default length.
+local function showDashToOthers(p, dir, inAir, duration)
+    local c = p.Character
+    local root = c and c:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    local flat = typeof(dir) == "Vector3" and Vector3.new(dir.X, 0, dir.Z) or Vector3.zero
+    if flat.Magnitude < 0.1 or flat.Magnitude ~= flat.Magnitude then
+        flat = Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z)
+    end
+    if flat.Magnitude < 1e-3 then return end
+    flat = flat.Unit
+    local length = tonumber(duration)
+    if not length or length ~= length then length = 0.16 end
+    length = math.clamp(length, 0.08, 0.3)
+    for _, other in ipairs(Players:GetPlayers()) do
+        local oc = other ~= p and other.Character
+        local oroot = oc and oc:FindFirstChild("HumanoidRootPart")
+        if oroot and (oroot.Position - root.Position).Magnitude <= DASH_FX_RADIUS then
+            DashFxRemote:FireClient(other, c, flat, inAir == true, length)
+        end
+    end
+end
+
+RequestDash.OnServerInvoke = function(p, dir, inAir, duration)
     if PotionAction.IsLocked(p.Character) then return false end
     if EnergyData.isBlocked(p) or EnergyData.isPanting(p) then
         return false
@@ -290,6 +341,7 @@ RequestDash.OnServerInvoke = function(p)
     if ok then
         local d = EnergyData.get(p)
         send(p, d and d.isPanting or false)
+        showDashToOthers(p, dir, inAir, duration)
     end
     return ok
 end

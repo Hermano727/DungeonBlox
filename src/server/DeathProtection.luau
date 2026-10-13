@@ -7,7 +7,8 @@
 	Bow, Pickaxe, FishingSpear) lives in profile.equipped now, one slot name each.
 
 	Protection rules, in precedence order:
-	  1. Profession items (Pickaxe/FishingSpear, or ItemDefinitions.IsProtectedOnDeath) — always.
+	  1. Profession items (Pickaxe/FishingSpear, or ItemDefinitions.IsProtectedOnDeath) and
+	     anything profile-bound (RS/ItemBinding: tools, saddles) — always.
 	  2. Anything currently equipped (any slot in profile.equipped) — always. This is the
 	     literal "can't ever lose the weapon in your weapon slot if you die" rule, generalized
 	     to every equip slot rather than special-cased per item type.
@@ -17,6 +18,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ItemDefinitions = require(ReplicatedStorage:WaitForChild("ItemDefinitions"))
 local Types = require(ReplicatedStorage:WaitForChild("ProfileTypes"))
+local ItemBinding = require(ReplicatedStorage:WaitForChild("ItemBinding"))
 
 local DeathProtection = {}
 
@@ -51,7 +53,7 @@ function DeathProtection.ShouldKeepOnDeath(uuid, item, equippedSlotByUuid)
 		return true
 	end
 
-	if isProfessionItem(item) then
+	if isProfessionItem(item) or ItemBinding.IsBound(item) then
 		return true
 	end
 

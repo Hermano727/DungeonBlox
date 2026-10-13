@@ -51,6 +51,7 @@ local HudVitals = require(ReplicatedStorage:WaitForChild("HudVitals"))
 local SfxService = require(ReplicatedStorage:WaitForChild("SfxService"))
 local DungeonMenuNet = require(script.Parent.Parent:WaitForChild("DungeonMenuNet"))
 local CenterFlashUI = require(script.Parent.Parent:WaitForChild("CenterFlashUI"))
+local ItemBinding = require(ReplicatedStorage:WaitForChild("ItemBinding"))
 
 -- Error -> on-screen text for the Drop/Trash context-menu actions. The server is the
 -- sole source of truth for whether either is allowed (ProfileService.DropItem/
@@ -64,6 +65,10 @@ local function dropTrashErrorText(err)
 		return "You don't have that item."
 	elseif err == "throttled" then
 		return "Too fast -- wait a moment."
+	elseif err == "bound" then
+		return "That's bound to you: it can't be dropped or trashed."
+	elseif err == "mount_seated" then
+		return "Change your horse at the Animal Trainer."
 	end
 	return "Couldn't do that."
 end
@@ -114,7 +119,7 @@ local FULL_HEIGHT = { journal = true } -- these panels get the whole content hei
 -- left of the content area at full height (STAGE_ASPECT = its DESIGN canvas, width / height;
 -- never more than STAGE_MAX_SHARE of the width), the bag (InvSlots) the rest, BAG_GAP after it.
 -- The HP / hunger cluster hangs over the character's head: PlayerPreview publishes that spot.
-local STAGE_ASPECT = 840 / 1170
+local STAGE_ASPECT = 1130 / 1170
 local STAGE_MAX_SHARE = 0.55
 local BAG_GAP = 40
 
@@ -292,8 +297,9 @@ local function InventoryMain()
 			return
 		end
 		local slotName = Types.GetAllowedEquipSlot(item)
-		local options = {}
-		if slotName then
+		local options: { any } = {} -- ContextMenu.MenuOption rows
+		-- Saddles aren't equipped by hand: the Mount socket always holds the fastest you own.
+		if slotName and slotName ~= "Mount" then
 			local currentUuid = equipped[slotName]
 			local currentItem = currentUuid and inventory[currentUuid]
 			local optionText
@@ -327,24 +333,42 @@ local function InventoryMain()
 		-- enforces "not in combat" (both) and "in a safe zone" (trash) -- see
 		-- ProfileService.DropItem/TrashItem. A denial just surfaces via the center
 		-- flash the RF error already drives (see CenterFlashUI below).
-		table.insert(options, {
-			text = "Drop " .. displayName(item),
-			onClick = function()
-				local ok, err = DungeonMenuNet.requestDropItem(item.uuid)
-				if not ok then
-					CenterFlashUI.Show(dropTrashErrorText(err))
-				end
-			end,
-		})
-		table.insert(options, {
-			text = "Trash " .. displayName(item),
-			onClick = function()
-				local ok, err = DungeonMenuNet.requestTrashItem(item.uuid)
-				if not ok then
-					CenterFlashUI.Show(dropTrashErrorText(err))
-				end
-			end,
-		})
+		-- A stack asks how many first (ContextMenu's quantity picker); a single item drops at once.
+		local function drop(count: number?)
+			local ok, err = DungeonMenuNet.requestDropItem(item.uuid, count)
+			if not ok then
+				CenterFlashUI.Show(dropTrashErrorText(err))
+			end
+		end
+		local stackCount = math.floor(tonumber(item.count) or 1)
+		-- Binding (RS/ItemBinding): profile-bound items (tools, saddles) can't be dropped or
+		-- trashed; untradeable ones (training gear) vanish when dropped, and the menu says so.
+		local binding = ItemBinding.Level(item)
+		local dropWord = binding == ItemBinding.UNTRADEABLE and "Drop (vanishes) " or "Drop "
+		if binding == ItemBinding.BOUND then
+			-- nothing: there's no way to lose it
+		elseif stackCount > 1 then
+			table.insert(options, {
+				text = dropWord .. displayName(item) .. "...",
+				quantity = { max = stackCount, verb = "Drop", name = displayName(item), onConfirm = drop },
+			})
+		else
+			table.insert(options, {
+				text = dropWord .. displayName(item),
+				onClick = function() drop(nil) end,
+			})
+		end
+		if binding ~= ItemBinding.BOUND then
+			table.insert(options, {
+				text = "Trash " .. displayName(item),
+				onClick = function()
+					local ok, err = DungeonMenuNet.requestTrashItem(item.uuid)
+					if not ok then
+						CenterFlashUI.Show(dropTrashErrorText(err))
+					end
+				end,
+			})
+		end
 		setContextMenu({
 			key = key,
 			position = Vector2.new(x, y),
@@ -363,35 +387,45 @@ local function InventoryMain()
 			return
 		end
 		local equippedItem = inventory[uuid]
+		-- The Mount slot changes only at the Animal Trainer: nothing to unequip, drop or trash.
+		if slotName == "Mount" then
+			return
+		end
+		local binding = ItemBinding.Level(equippedItem)
+		local options: { any } = {
+			{
+				text = "Unequip",
+				onClick = function()
+					DungeonMenuNet.requestUnequip(slotName)
+				end,
+			},
+		}
+		if binding ~= ItemBinding.BOUND then
+			table.insert(options, {
+				text = (binding == ItemBinding.UNTRADEABLE and "Drop (vanishes) " or "Drop ") .. displayName(equippedItem),
+				onClick = function()
+					local ok, err = DungeonMenuNet.requestDropItem(uuid)
+					if not ok then
+						CenterFlashUI.Show(dropTrashErrorText(err))
+					end
+				end,
+			})
+		end
+		if binding ~= ItemBinding.BOUND then
+			table.insert(options, {
+				text = "Trash " .. displayName(equippedItem),
+				onClick = function()
+					local ok, err = DungeonMenuNet.requestTrashItem(uuid)
+					if not ok then
+						CenterFlashUI.Show(dropTrashErrorText(err))
+					end
+				end,
+			})
+		end
 		setContextMenu({
 			key = key,
 			position = Vector2.new(x, y),
-			options = {
-				{
-					text = "Unequip",
-					onClick = function()
-						DungeonMenuNet.requestUnequip(slotName)
-					end,
-				},
-				{
-					text = "Drop " .. displayName(equippedItem),
-					onClick = function()
-						local ok, err = DungeonMenuNet.requestDropItem(uuid)
-						if not ok then
-							CenterFlashUI.Show(dropTrashErrorText(err))
-						end
-					end,
-				},
-				{
-					text = "Trash " .. displayName(equippedItem),
-					onClick = function()
-						local ok, err = DungeonMenuNet.requestTrashItem(uuid)
-						if not ok then
-							CenterFlashUI.Show(dropTrashErrorText(err))
-						end
-					end,
-				},
-			},
+			options = options,
 		})
 	end
 
@@ -523,7 +557,7 @@ local function InventoryMain()
 				if Types.GetAllowedEquipSlot(press.item) == target.slotName then
 					DungeonMenuNet.requestEquip(press.uuid)
 				end
-			elseif source.kind == "equip" and target.kind == "bag" then
+			elseif source.kind == "equip" and target.kind == "bag" and source.slotName ~= "Mount" then
 				DungeonMenuNet.requestUnequip(source.slotName)
 			end
 			-- equip -> equip: intentionally left as a no-op -- see the doc comment above.
@@ -632,7 +666,7 @@ local function InventoryMain()
 		-- function's doc comment) -- an exact "0 offset, opens right at the click" for
 		-- the menu, matching its previous behavior when there's room for it.
 		ContextMenuOverlay = contextMenu and e(ContextMenu.Component, {
-			position = clampedOverlayPosition(contextMenu.position, ContextMenu.EstimateSize(#contextMenu.options), 0),
+			position = clampedOverlayPosition(contextMenu.position, ContextMenu.EstimateSize(contextMenu.options), 0),
 			options = contextMenu.options,
 			onDismiss = dismissContextMenu,
 		}) or nil,

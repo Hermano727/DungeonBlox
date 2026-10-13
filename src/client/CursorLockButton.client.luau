@@ -21,7 +21,8 @@ local CursorManager = require(ReplicatedStorage:WaitForChild("CursorManager"))
 local InteractionLock = require(ReplicatedStorage:WaitForChild("InteractionLock"))
 local JournalUI = require(ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Images"):WaitForChild("JournalUI"))
 
--- The shared quick-nav button (plate, hover, tooltip), with the lock art from the journal set.
+-- The shared quick-nav button (plate, hover, tooltip), with the lock art from the journal set in
+-- its own bronze (it was tinted cream until 2026-10-11, which read white beside the other icons).
 local lockArt = JournalUI.lock_icon
 local button = QuickNav.Button({
 	name = "CursorLock",
@@ -29,7 +30,6 @@ local button = QuickNav.Button({
 	tooltip = "Lock Cursor",
 	image = (type(lockArt) == "table" and lockArt.Image) or "",
 	iconSize = 18,
-	tint = Color3.fromRGB(236, 226, 208),
 })
 
 button.Activated:Connect(function()

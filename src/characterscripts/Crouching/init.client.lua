@@ -8,6 +8,7 @@ local humanoid = character:WaitForChild("Humanoid")
 local request = RS:WaitForChild("EnergyEvents"):WaitForChild("RequestCrouch")
 local Profiles = require(RS:WaitForChild("CharacterAnimProfiles"))
 local CombatConfig = require(RS:WaitForChild("CombatAnimConfig"))
+local Keys = require(RS:WaitForChild("KeybindConfig"))
 local connections = {}
 local lastRequest = 0
 local assetsReady = false
@@ -15,7 +16,7 @@ if Profiles.CrouchReady() and CombatConfig.CROUCH_SWING_ANIM_ID ~= "" then
     task.spawn(function()
         local animations = {}
         for _, profile in pairs(Profiles.Profiles) do
-            for _, key in ipairs({"CrouchIdle", "CrouchWalk"}) do
+            for _, key in ipairs({"CrouchIdle", "CrouchWalk", "CrouchEnter", "CrouchExit"}) do
                 if profile[key] and profile[key] ~= "" then
                     local animation = Instance.new("Animation")
                     animation.AnimationId = profile[key]
@@ -43,7 +44,7 @@ end
 connections[1] = root:GetAttributeChangedSignal("IsCrouching"):Connect(syncJump)
 connections[2] = UIS.InputBegan:Connect(function(input, processed)
     if processed or UIS:GetFocusedTextBox() or Players.LocalPlayer.Character ~= character then return end
-    if input.KeyCode ~= Enum.KeyCode.C or os.clock()-lastRequest < 0.1 then return end
+    if not Keys.Matches(Keys.Crouch, input.KeyCode) or os.clock()-lastRequest < 0.1 then return end
     if not Profiles.CrouchReady() or CombatConfig.CROUCH_SWING_ANIM_ID == "" then
         warn("[Crouching] Waiting for published crouch animation IDs")
         return

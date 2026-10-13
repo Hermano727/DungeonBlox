@@ -3,7 +3,9 @@
 	SSS/MountService.
 
 	  - Keys.Mount (H) calls your horse / sends it away (GameEvents/MountToggle). A refusal (in
-	    combat, no saddle, cooldown, a dungeon) shakes the slot and flashes why.
+	    combat, no saddle, cooldown, a dungeon) shakes the slot and flashes why. Calling it is a
+	    3 s channel outside safe zones (instant in one); its cast bar is HearthstoneChannelClient's,
+	    and H again cancels it.
 	  - The HUD slot, in HealthClient's MountIconsMount at the end of the vitals row, the same
 	    shape as the dash (Q) slot: key chip, the horse icon, a fixed-width countdown. It only
 	    shows once you own a saddle. Riding: the icon glows gold. Cooldown after the horse leaves
@@ -67,13 +69,21 @@ local function toggle()
 	end)
 end
 
-ContextActionService:BindActionAtPriority("MountToggle", function(_, state)
+local function onMountKey(_, state)
 	if UserInputService:GetFocusedTextBox() ~= nil or GuiService.MenuIsOpen then return Enum.ContextActionResult.Pass end
 	if state == Enum.UserInputState.Begin and hasHorse then
 		toggle()
 	end
 	return hasHorse and Enum.ContextActionResult.Sink or Enum.ContextActionResult.Pass
-end, false, Enum.ContextActionPriority.High.Value, Keys.Mount)
+end
+-- Bound to the current key, and again whenever it's rebound (Settings > Controls).
+local function bindMount()
+	ContextActionService:BindActionAtPriority("MountToggle", onMountKey, false, Enum.ContextActionPriority.High.Value, Keys.Mount)
+end
+bindMount()
+Keys.Changed:Connect(function(id)
+	if id == nil or id == "Mount" then bindMount() end
+end)
 script.Destroying:Connect(function() ContextActionService:UnbindAction("MountToggle") end)
 
 ---------------------------------------------------------------------------
@@ -118,9 +128,18 @@ fill.BackgroundTransparency = 0.25
 fill.BorderSizePixel = 0
 fill.Parent = keyChip
 Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 3)
-local keyText = label(keyChip, Keys.Mount.Name, 11)
+local keyText = label(keyChip, Keys.DisplayName(Keys.Mount), 11)
 keyText.Size = UDim2.fromScale(1, 1)
 keyText.ZIndex = 2
+
+-- The key label follows a rebind (Settings > Controls).
+do
+	local conn
+	conn = Keys.Changed:Connect(function()
+		if not keyText.Parent then conn:Disconnect() return end
+		keyText.Text = Keys.DisplayName(Keys.Mount)
+	end)
+end
 
 local icon = Instance.new("ImageLabel")
 icon.Name = "HorseIcon"

@@ -54,6 +54,16 @@ MountConfig.RUN_START_PLAYBACK = 2.5
 -- bumping something keeps the gallop instead of replaying the wind-up.
 MountConfig.STOP_GRACE = 0.3
 
+-- Calling the horse (2026-10-12): a SUMMON_CHANNEL_SECONDS channel out of combat, instant inside a
+-- safe (Lawful) zone such as Oakhaven. Combat, death, H again, or drifting more than
+-- SUMMON_MOVE_TOLERANCE studs (horizontal) cancels it; math.huge would let you walk while calling.
+MountConfig.SUMMON_CHANNEL_SECONDS = 3.0
+MountConfig.SUMMON_MOVE_TOLERANCE = 1.5
+MountConfig.SUMMON_INTERRUPTED = {
+	combat = "Your call was interrupted!",
+	moved = "You moved. Your horse won't come.",
+}
+
 MountConfig.SUMMON_COOLDOWN = 2.0    -- seconds after the horse leaves before it can be called again
 MountConfig.THROWN_COOLDOWN = 5.0    -- after being thrown off (combat / shot)
 MountConfig.IDLE_SOUND_EVERY = NumberRange.new(7, 14)   -- seconds between the horse's idle sounds
@@ -82,14 +92,29 @@ MountConfig.THROWN_MESSAGES = {
 	shot = "Your horse was shot and bolts!",
 }
 
--- The fastest saddle `profile` owns: { itemId, name, tier, speed, item } or nil.
+-- The saddle the horse rides: { itemId, name, tier, speed, item, uuid } or nil. That is the one
+-- in the Mount slot (2026-10-12: mounts are unlocks, ProfileService keeps exactly one saddle
+-- there); with none seated (a save not yet normalized), the fastest one owned.
 function MountConfig.BestSaddle(profile)
 	local best
-	for _, item in pairs(type(profile) == "table" and profile.inventory or {}) do
+	local seated = type(profile) == "table" and type(profile.equipped) == "table" and profile.equipped.Mount or nil
+	local seatedItem = seated and profile.inventory and profile.inventory[seated] or nil
+	local seatedDef = type(seatedItem) == "table" and type(seatedItem.itemId) == "string" and ItemDefinitions.Get(seatedItem.itemId) or nil
+	if seatedDef and tonumber(seatedDef.MountSpeed) then
+		return {
+			itemId = seatedItem.itemId, name = seatedDef.DisplayName or seatedItem.itemId, tier = seatedDef.Tier,
+			speed = tonumber(seatedDef.MountSpeed), item = seatedItem, uuid = seated,
+		}
+	end
+	for uuid, item in pairs(type(profile) == "table" and profile.inventory or {}) do
 		local def = type(item) == "table" and type(item.itemId) == "string" and ItemDefinitions.Get(item.itemId) or nil
 		local speed = def and tonumber(def.MountSpeed)
-		if speed and speed > 0 and (not best or speed > best.speed) then
-			best = { itemId = item.itemId, name = def.DisplayName or item.itemId, tier = def.Tier, speed = speed, item = item }
+		if speed and speed > 0 then
+			local better = not best or speed > best.speed
+				or (speed == best.speed and best.uuid ~= seated and (uuid == seated or tostring(uuid) < tostring(best.uuid)))
+			if better then
+				best = { itemId = item.itemId, name = def.DisplayName or item.itemId, tier = def.Tier, speed = speed, item = item, uuid = uuid }
+			end
 		end
 	end
 	return best

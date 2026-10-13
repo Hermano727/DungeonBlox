@@ -19,6 +19,9 @@ local CombatSfxConfig  = require(ReplicatedStorage:WaitForChild("CombatSfxConfig
 local CombatAnimConfig = require(ReplicatedStorage:WaitForChild("CombatAnimConfig"))
 local SfxService       = require(ReplicatedStorage:WaitForChild("SfxService"))
 local SwordSlashSfx    = require(script.Parent:WaitForChild("SwordSlashSfx"))
+-- First person only, this client only: the swing as your own eyes should see it (no head in view, a
+-- readable top-right to bottom-left cut, the camera never moves). Others still see the third-person swing.
+local FirstPersonSwingOverlay = require(script.Parent:WaitForChild("FirstPersonSwingOverlay"))
 local AimRay           = require(ReplicatedStorage:WaitForChild("AimRay"))
 local PotionAction = require(ReplicatedStorage:WaitForChild("PotionAction"))
 
@@ -118,6 +121,7 @@ local function startSwing()
     local generation, track = swingGeneration, attackTrack
     queuedSwingAt = nil
     track:Play(CombatAnimConfig.SWING_FADE_IN, 1, swingPlaybackSpeed())
+    if track == standingAttackTrack then FirstPersonSwingOverlay.Begin(attackCharacter, track) end
     SwordSlashSfx.Play() -- client-side, instant, one per swing shown (queued follow-ups too)
     swingStoppedConnection = track.Stopped:Connect(function()
         if generation ~= swingGeneration or attackTrack ~= track or track.IsPlaying then return end

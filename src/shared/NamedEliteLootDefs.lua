@@ -54,10 +54,11 @@ end
 --[[
     Drops[MobID] = {
         Tier, Level          -- what the gear generates as (the elite's own level)
-        OneDrop              optional { EquivalentRarity }: ONE roll per kill at that DropChance,
-                             a hit drops exactly ONE entry picked by its Weight (default 1), so
-                             never two pieces from one kill. Without it each entry rolls its
-                             own DropChance independently.
+        OneDrop              optional { EquivalentRarity } or { Denominator }: ONE roll per kill,
+                             at that rarity's DropChance or at a flat 1/Denominator; a hit drops
+                             exactly ONE entry picked by its Weight (default 1), so never two
+                             pieces from one kill. Without it each entry rolls its own
+                             DropChance independently.
         Pool = { entry, ... }
 
     entry fields:
@@ -87,9 +88,10 @@ NamedEliteLootDefs.Drops = {
         -- Kane's Mythic set (2026-10-09), built from RS/MythicItemDefs: Rare base stats; the waraxe
         -- guarantees fire damage 4-6, critical 3-4, vs. Players 5-8; the armour and the shield
         -- guarantee str + vit + block (T1 3-4%).
-        -- ONE roll per kill at the Rare-equivalent chance (T1 1/32); a hit drops exactly one piece:
-        -- the waraxe 1/3 (weight 5 of 15), one of the five armour pieces 2/3 (weight 2 each).
-        OneDrop = { EquivalentRarity = "Rare" },
+        -- ONE roll per kill at a flat 1/10 (2026-10-12, user decision; was the T1 Rare-equivalent
+        -- 1/32); a hit drops exactly one piece: the waraxe 1/3 (weight 5 of 15), one of the five
+        -- armour pieces 2/3 (weight 2 each).
+        OneDrop = { Denominator = 10 },
         Pool = {
             { Key = "KaneForsakenWaraxe",    Mythic = "KaneForsakenWaraxe",    Weight = 5 },
             { Key = "KaneTatteredScarf",     Mythic = "KaneTatteredScarf",     Weight = 2 },
